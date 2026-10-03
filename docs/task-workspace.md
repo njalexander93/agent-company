@@ -1,6 +1,6 @@
 # Task-workspace contract
 
-**Status: Local implementation at `32b5f2d` passed 54 independent tests and bounded local Standards, Spec, Internal Security and Product Security reviews. Actual host/provider acceptance, exact-candidate human acceptance and runtime/Security certification remain open. [E3]**
+**Status: Local implementation and PR corrections are available. Exact-candidate local test and scoped review results are retained in E3/E4; earlier results do not validate changed code. Actual host/provider acceptance, exact-candidate human acceptance and runtime/Security certification remain open. [E3/E4]**
 
 AGENT-1 adds a local workflow guardrail: automatic issue workspace creation, attachment and readiness checks on supported Codex paths. Step 3 implements and tests this contract. It does not implement the Control Plane, authenticated Role authority, complete confidentiality, the paper reference checker or the full launcher.
 
@@ -264,7 +264,7 @@ Required behavior checks:
 
 Retain candidate SHA, platform/binary version, trusted hook hash, supported-tool matrix, fixture inputs, exact allowed packets, results, failures, repairs and limitations. Independent Test Developer/Code Reviewer and Internal Security coverage are required for executable behavior; add Product Security for shipped framework behavior. Exposed services remain excluded; introducing them changes coverage. These labels refer to required assurance subjects, not fabricated Role execution receipts. [SPEC, LM, V8–V11]
 
-Human-reviewed PR into main remains mandatory. Remote protections are unverified; inspect actual gates at publication. This contract, local tests, provider writes and later merge do not activate policy or replace exact-candidate human acceptance. [R23]
+Human-reviewed PR into main remains mandatory. [PR #1](https://github.com/njalexander93/agent-company/pull/1) is published. The active main ruleset was inspected; classic branch-protection visibility remains restricted. Recheck actual candidate-specific gates at publication and before merge. This contract, local tests, provider writes and later merge do not activate policy or replace exact-candidate human acceptance. [R23; shared-vault `Assurance/AGENT-1 Publication Evidence.md`]
 
 ## Evidence locators
 
@@ -272,6 +272,7 @@ Human-reviewed PR into main remains mandatory. Remote protections are unverified
 - **E1 (historical Step 2):** Shared-vault archive `Sources/Task Context/2026-10-03 - AGENT-1 Step 02 Evidence.zip`, SHA-256 `4ce113d1760d3d792e9d92e769eb572690c026be82ce82e127b961f821c6efbd`. Members `step-02.md`, `proxy.txt`, `protocol/` and `retention-manifest.json` retain the original contract handoff, failed proxy output and generated schemas. These are feasibility evidence for contract commit `7a9f8dc`, not final32 runtime acceptance. Archive retrieval and every retained member digest were verified after the temporary handoff was consumed.
 - **E2 (historical implementation/provider evidence):** Shared-vault note `Assurance/AGENT-1 Step 03 Implementation Evidence.md` and archive `Sources/Task Context/2026-10-03 - AGENT-1 Step 03 Evidence.zip`, SHA-256 `65a0ad53ce21a29eab36120f0bfb25ae4b5798152cc9f8a72524d6f932a58df3`. The source candidate is `119896b`; its retained real provider fixture predates the first frozen implementation. Neither is final32 provider acceptance.
 - **E3 (final32 local evidence):** Shared-vault note `Assurance/AGENT-1 Step 03 Rollover Evidence.md` and archive `Sources/Task Context/2026-10-03 - AGENT-1 Step 03 Rollover Evidence.zip`, SHA-256 `ac98dd347fbb36b546dc85c8ca3fe83387950d567a96f2ba54df630ceacafa16`. Members `candidate-hashes.json`, `independent-tests.txt`, `reviews.md` and `current-handoff.md` identify `32b5f2d5b637c9cd2edd18011306fa775b5c8ef8`, 54 passing tests and scoped review dispositions. The archive is retained and readable; consumed task handoffs are not required for retrieval.
+- **E4 (PR review corrections):** Shared-vault note `Assurance/AGENT-1 PR Review Corrections.md` retains the startup/compaction recovery, async completion and Finder metadata findings, exact repaired candidates, failed/passing regressions, independent review and integration results. It also records the documentation-only equivalence checks and the separate archive-fixture repair. These changed core/adapter bytes require fresh host validation; E3 and the earlier isolated host fixture do not establish it.
 - **L1/LM, SPEC, V0/V2/V6/V8–V11, RC-09:** [baseline source register](baseline.md), including retained Step 1 archive identities. Supporting sources remain in the shared vault; this document does not duplicate their authority.
 
 
