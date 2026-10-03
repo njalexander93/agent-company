@@ -1,6 +1,6 @@
 # Task-workspace contract
 
-**Status: Step 3 implementation candidate. Local behavior tests and foreground provider verification are in progress. Desktop trust/coverage and exact-candidate assurance remain acceptance gates.**
+**Status: Local implementation at `32b5f2d` passed 54 independent tests and bounded local Standards, Spec, Internal Security and Product Security reviews. Actual host/provider acceptance, exact-candidate human acceptance and runtime/Security certification remain open. [E3]**
 
 AGENT-1 adds a local workflow guardrail: automatic issue workspace creation, attachment and readiness checks on supported Codex paths. Step 3 implements and tests this contract. It does not implement the Control Plane, authenticated Role authority, complete confidentiality, the paper reference checker or the full launcher.
 
@@ -211,9 +211,9 @@ A sealed maintenance binding permits only the exact archive export/read-back/ver
 
 No general shell, file read/write, web search, MCP wildcard or “read-only command” exemption. A supported diagnostic path must explain the next action without recursively calling itself through the gate. PermissionRequest must not automatically grant permissions. Static hook control instructions may explain these routes but cannot promote arbitrary task data to instructions.
 
-### Verified facts, gaps and fallback
+### Historical Step 2 feasibility probes, gaps and fallback
 
-| Evidence as of 2026-10-03 | What it establishes / does not establish |
+| Step 2 evidence as of 2026-10-03 [E1] | What it established then / did not establish |
 |---|---|
 | Installed `codex-cli 0.155.0-alpha.16.3`; `features list` reports `hooks stable true` | Binary/feature availability. Not that this desktop task loaded or trusted project hooks. |
 | `app-server generate-ts --experimental` exposes lifecycle/tool events, command and `mcp_tool` handler types, trust status and `McpServerToolCallParams` | Protocol feasibility. Not runtime event delivery or connector access from a hook. |
@@ -269,7 +269,9 @@ Human-reviewed PR into main remains mandatory. Remote protections are unverified
 ## Evidence locators
 
 - **H1:** [Official OpenAI Hooks documentation](https://learn.chatgpt.com/docs/hooks), fetched 2026-10-03: trust/configuration, tool coverage, common/event inputs/outputs, MCP hooks and failure limitations.
-- **E1:** Step 2 handoff in canonical `.task/AGENT-1/context/step-02.md`: exact branch/commit, installed-host probe outputs/digests, connector observations and unresolved acceptance checks. This temporary evidence is not a durable final issue archive.
+- **E1 (historical Step 2):** Shared-vault archive `Sources/Task Context/2026-10-03 - AGENT-1 Step 02 Evidence.zip`, SHA-256 `4ce113d1760d3d792e9d92e769eb572690c026be82ce82e127b961f821c6efbd`. Members `step-02.md`, `proxy.txt`, `protocol/` and `retention-manifest.json` retain the original contract handoff, failed proxy output and generated schemas. These are feasibility evidence for contract commit `7a9f8dc`, not final32 runtime acceptance. Archive retrieval and every retained member digest were verified after the temporary handoff was consumed.
+- **E2 (historical implementation/provider evidence):** Shared-vault note `Assurance/AGENT-1 Step 03 Implementation Evidence.md` and archive `Sources/Task Context/2026-10-03 - AGENT-1 Step 03 Evidence.zip`, SHA-256 `65a0ad53ce21a29eab36120f0bfb25ae4b5798152cc9f8a72524d6f932a58df3`. The source candidate is `119896b`; its retained real provider fixture predates the first frozen implementation. Neither is final32 provider acceptance.
+- **E3 (final32 local evidence):** Shared-vault note `Assurance/AGENT-1 Step 03 Rollover Evidence.md` and archive `Sources/Task Context/2026-10-03 - AGENT-1 Step 03 Rollover Evidence.zip`, SHA-256 `ac98dd347fbb36b546dc85c8ca3fe83387950d567a96f2ba54df630ceacafa16`. Members `candidate-hashes.json`, `independent-tests.txt`, `reviews.md` and `current-handoff.md` identify `32b5f2d5b637c9cd2edd18011306fa775b5c8ef8`, 54 passing tests and scoped review dispositions. The archive is retained and readable; consumed task handoffs are not required for retrieval.
 - **L1/LM, SPEC, V0/V2/V6/V8–V11, RC-09:** [baseline source register](baseline.md), including retained Step 1 archive identities. Supporting sources remain in the shared vault; this document does not duplicate their authority.
 
 
@@ -478,7 +480,7 @@ The selected subset excludes broad installer, shortcut, backup and hidden-file
 patterns. Tests confirm root/nested metadata ignores and product/config eligibility.
 
 
-### Review and provider evidence at the first candidate
+### Historical implementation and provider evidence [E2]
 
 The first frozen candidate was `cea8b17b0dc53f6b68aec7090ded5e11dc766bca`.
 Independent test work added 11 tests and found two defects: interrupted recovery
@@ -491,7 +493,7 @@ reconciliation, lifecycle observations, shell options and cleaned-archive reads.
 Author regression tests cover the repairs; final independent disposition belongs
 with the exact final candidate, not this initial report.
 
-A real foreground Linear fixture used an isolated temporary repository, issue
+A pre-first-commit development encoder used a real foreground Linear fixture in an isolated temporary repository, issue
 parent `AGENT-1` resolved by `linear_get_issue` to its immutable UUID, two numbered
 parts and a root index. Independent `linear_get_document` calls returned the same
 structured bytes despite Markdown heading normalization and removal of a trailing
@@ -527,10 +529,22 @@ for those cases. A Product Security review of `cea8b17` confirmed a 278-part exp
 was refused by the old 258-observation verifier limit; the limit now matches the
 32 MiB export bound. Export idempotency retains a reference to immutable snapshot-addressed local
 export bytes, not repeated response bodies in state; transactions are size-checked
-before publication. Product Security's complete final assessment remains pending.
+before publication. These intermediate reviews are historical; final32's bounded
+local Product Security assessment is complete with no unresolved concrete finding.
+The final32 evidence records Standards, scoped Spec and Internal Security reviews
+alongside 54 passing independent tests. This local review completion does not
+establish live host/provider acceptance, human acceptance or runtime/Security
+certification. [E3]
 
 A second disposable provider upload using readable-history fragments was rejected
 by automatic approval review. It produced no provider document. The earlier links
 above therefore validate the earlier encoder and compatible reconstruction, not
 the final encoder's provider round trip. No retry or indirect upload was attempted.
 Approval for the exact stable synthetic export must precede that remaining test.
+
+
+The unchanged pending `119896b` unsegmented export was regenerated and parsed
+locally by final32 with exact snapshot/part/file digests. That compatibility check
+uses synthetic observations and is not a provider round trip. Final32's segmented
+archives add retained event files and receipt lineage; that live provider case
+remains separately unverified. [E3]
