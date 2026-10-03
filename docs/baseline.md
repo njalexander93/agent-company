@@ -1,6 +1,40 @@
 # Starter baseline
 
-**Status:** Initial source register only. Step 4 completes the baseline. This record does not establish implementation, acceptance, publication or policy activation.
+**Identity:** AGENT-1 starter baseline. **Status:** Authoring draft; integrated validation and acceptance pending.
+
+## Purpose and revision
+
+This pack helps a framework contributor find governing rules and author a compatible Role/Profile definition. A reviewer should be able to trace responsibility, authority, inputs, outputs and evidence from documented sources. It supplies a common starting point for AGENT-2–7; it does not complete their definitions. Start with the [authoring route](README.md). [SPEC R01/R02/R21; L1/LM]
+
+Identify each review candidate by its **full Git commit SHA and exact repository file set** in the review record. The current candidate identity is the commit being reviewed, not a hash embedded in this file that would change itself. A branch name is a navigation aid, not an immutable revision. Record source identities separately using the register below; retain changed inputs before renewed review. [SPEC §6, Reference contract]
+
+## Selected paper fixtures and exclusions
+
+| Fixture | Bounded purpose | Expected trace, not performed actions |
+| --- | --- | --- |
+| [Governance change](fixtures/governance-change.md) — pending Step 8 | Revise required Role evidence or permitted context using an existing supported policy mechanism. The fixture must state its exact hypothetical delta. | Planning and delivery coordination; Agent Governance Officer candidate authorship; independent artifact/security review; exact human decision; publication and distinct activation handoff; recorded outcome and retrospective input. |
+| [Tooling change](fixtures/tooling-change.md) — pending Step 8 | Specify a small read-only Role/Profile reference checker. Do not implement it. | Tooling Engineer ownership; independent tests and scoped review; applicable security; exact-candidate publication/release handoff; recorded outcome and retrospective input. |
+
+Both fixtures stay **internal, local and on paper**. Their inputs and expectations must allow correction and authority-conflict cases, including missing/stale-input stops. AGENT-8 owns the later integrated four-case review. Paper expectations supply no execution receipts, approvals, runtime proof or policy activation. [SPEC R13–R16/R19; §6, Fixture requirements]
+
+Exclude a new hierarchy, a full Role catalog, implemented Skills, the fixture checker, final machine schemas, loaders, distribution packaging, a full launcher, cross-machine services and general runtime authority enforcement. The amended scope separately includes implemented local task-workspace behavior and supported Codex integration; its tests and actual host/provider evidence remain pending Step 3. Expansion of fixture scope requires revised coverage and estimates. [SPEC R19; workspace amendment; task-workspace contract]
+
+## Working locations and ownership
+
+- **Product:** This repository owns versioned starter documents under `docs/`, with one canonical example later authored at `docs/roles/agent-governance-officer.md`. AGENT-5 must reuse that same artifact/revision. No example is supplied by this baseline.
+- **Governing knowledge:** Framework contributors open the shared vault available to them and resolve the register's paths relative to its root. Confirm stable ID, section and retained version. Never interpret a vault path as repo-relative or copy a contributor's absolute checkout path into a definition.
+- **Working context:** The registered main worktree owns `.task/<issue-id>/`; participating local worktrees expose issue-specific views. `roadmap.md` holds the issue plan, `context/` holds scoped notes, and `events.jsonl` holds bounded diagnostic events. The coordinator owns the roadmap/shared summary; participants own distinct notes. The [task-workspace contract](task-workspace.md) owns lifecycle, permissions, context and archival rules. A link grants no filesystem permission. This description does not establish automatic operation.
+- **Research and evidence:** Keep supporting research, private source snapshots and conversational history in the vault, outside tracked product files. Preserve delivery evidence in the vault or PR record; ignored working notes must not be its only durable home.
+
+These are documentation and task-data boundaries, not a final runtime package or grants of Role authority. [SPEC §6; workspace amendment; task-workspace contract]
+
+## Confirmed authoring and publication decisions
+
+1. **D01 — Separate audiences.** Framework authors currently need accessible shared-vault design sources. Company authors use accessible framework guidance and company-owned governing sources. The private vault is not a universal prerequisite. Complete company-only onboarding, distribution and its acceptance check remain downstream; the responsible issue/owner still needs identification. Do not invent that owner or claim the framework trial proves company readiness.
+2. **D02 — Fresh author and separate review.** A fresh agent must author the one Agent Governance Officer example from a frozen documented packet and permitted sources, without this conversation, author reasoning or a prewritten example. A separate reviewer checks the exact output. Repair guide/input defects and repeat affected trials. These checks remain pending Steps 9–10.
+3. **D03 — Human-reviewed publication.** A GitHub PR into `main`, exact-candidate human review/acceptance and an actual human-controlled merge are mandatory. An agent review, open PR or earlier requirements decision is not acceptance. Publication does not activate policy.
+
+Source: SPEC, Interview decisions D01–D03 and R21–R23. The [acceptance record](#acceptance-evidence-and-readiness) tracks remaining evidence.
 
 ## Source authority and retrieval
 
@@ -74,6 +108,21 @@ The hashes below identify **current file bytes at capture**, or the exact retain
 - **Remote checks:** Remote `main` was verified at `6b920594721b110faf930ee27f65323b9515160c`. No workflow files exist at that base. GitHub connector queries returned no commit statuses and no PR-triggered workflow runs for that SHA. These results do not prove that required checks or branch protections are absent. The installed tools provide no protection/ruleset reader and `gh` is unavailable. Step 12 must inspect the actual PR gates before publication/merge readiness.
 - **Vault maintenance:** The eight pre-existing duplicate-ID/legacy-link errors prevent a clean global index build. Listed sources remain readable by direct path. Do not use a stale generated index as proof of current source identity. Unrelated vault repair is outside this step.
 - **Licensing:** WALKTHROUGH leaves license selection open; the verified base now contains a PolyForm Noncommercial LICENSE. That file is preserved. Its presence does not resolve the recorded distribution decision. License/distribution conclusions remain outside this baseline; route any required resolution to Human Leadership.
-- **Host acceptance:** SPEC records feasibility probes, not verified desktop startup enforcement. Step 2/3 must verify supported integration and failure behavior. No governing-input access blocker prevents their bounded contract work.
+- **Host acceptance:** SPEC records feasibility probes, not verified desktop startup enforcement. The Step 2 contract is available in [task-workspace.md](task-workspace.md). Step 3 must verify supported integration and failure behavior; this baseline does not assert runtime readiness.
 
-Step 4 must add purpose, walkthrough scope, working-location guidance and acceptance links. Later steps must provide actual product, trial, review and publication evidence.
+## Acceptance evidence and readiness
+
+**Not ready for final acceptance.** The register is retained and the workspace contract exists. Planned sibling artifacts and all trial, runtime, review and publication results still need integration evidence. These pending paths are navigation targets, not validated artifacts. [SPEC R17–R23; workspace amendment]
+
+| Evidence | Location / accountable delivery step | Current disposition |
+| --- | --- | --- |
+| Candidate SHA/file set; content completeness; references and source-version checks; semantic findings | Exact-candidate PR record and concise links added here by Step 11 | Pending integrated validation; keep these results separate. |
+| Team boundaries and single coverage/gap record | [Team map](team-map.md), Step 5; [coverage](role-coverage.md), Step 6 | Planned; resolve before authoring trial. Known later drafting stays with L2–L7; unknown authority affecting a path blocks it. |
+| Shared fields and both fixture inputs/expectations | [Format](definition-format.md), Step 7; fixture links above, Step 8 | Planned; verify links, sources and consistency before trial. |
+| Frozen permitted trial packet; output; questions; failures/repairs/retests; independent reviewer scope/findings | Vault or PR evidence linked here by Steps 9–11; [canonical example](roles/agent-governance-officer.md) | Pending fresh author and separate reviewer. Keep author reasoning out of initial review context. |
+| AGENT-5 reuse of the exact example | L5 owning-issue linkage, recorded by Step 10 and linked here | Pending; no second maintained definition. |
+| Workspace lifecycle, concurrency, cleanup, actual host/provider checks and applicable independent/security review | [Task-workspace contract](task-workspace.md), Step 3 evidence; Step 11 reconciliation | Pending; contract expectations and feasibility probes do not count as passed runtime tests. |
+| PR URL, required checks/failures and repairs, reviewer decision, exact human-accepted SHA, actual merge revision | GitHub PR linked here by Step 12, with L1 delivery record | Pending; remote protection configuration remains unverified. No acceptance or merge claimed. |
+| Complete company-only authoring and distribution acceptance | Downstream owner/issue identification still required | Outside this framework trial; no completion claim. |
+
+Step 11 replaces pending evidence slots with accessible durable locators and reconciles sibling links against the actual candidate. Step 12 records publication facts only after they occur. AGENT-8's later integrated review cannot substitute for AGENT-1's own acceptance. Missing or contradictory required authority must remain a visible blocker; known downstream drafting is an assigned gap. [SPEC R11/R12/R17–R23]
