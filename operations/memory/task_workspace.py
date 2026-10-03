@@ -2169,44 +2169,59 @@ def operate(store, issue, request):
         require(participant["ack"] == sha(canonical(participant["packet"])) and participant["status"] == "ready", "NOT_READY")
         tool = token(request["tool_id"])
         require(tool not in participant["pending"], "REQUEST_CONFLICT")
-        # Stage the participant's pending-operation state for the next transaction.
-        participant["pending"][tool] = {"status": "pending"}
+        # Associate an observed polling transport without borrowing another participant's work.
+        pending = {"status": "pending"}
+        if request.get("poll_handle") is not None:
+            handle = token(request["poll_handle"])
+            matches = [identifier for identifier, entry in participant["pending"].items()
+                       if entry.get("handle") == handle]
+            require(len(matches) == 1, "UNKNOWN_OPERATION")
+            pending.update(poll_parent=matches[0], poll_handle=handle)
+        # Reserve and persist the transport independently from its original process.
+        participant["pending"][tool] = pending
     # Validate observation identity before settling or retaining asynchronous work.
     elif operation == "tool-complete":
-        # Validate the observed tool-call identifier before accessing pending state.
-        tool = token(request["tool_id"])
+        # Resolve the observed call ID and validate optional handle metadata first.
+        observed_tool = token(request["tool_id"])
+        tool = observed_tool
         handle = token(request["async_handle"]) if request.get("async_handle") is not None else None
-        # Resolve exactly one original operation in this participant's pending set.
+        transport = None
         if request.get("poll"):
-            # Enforce UNKNOWN_OPERATION boundaries.
+            # A poll must identify one original process, or its recorded completed parent.
             require(handle is not None, "UNKNOWN_OPERATION")
-            # Find all same-participant operations carrying the observed poll handle.
-            matches = [identifier for identifier, pending in participant["pending"].items()
-                       if pending.get("handle") == handle]
-            # Enforce UNKNOWN_OPERATION boundaries.
-            require(len(matches) == 1, "UNKNOWN_OPERATION")
-            # Prepare the operate values for the next contract boundary.
-            tool = matches[0]
-        # Enforce UNKNOWN_OPERATION boundaries.
-        require(tool in participant["pending"], "UNKNOWN_OPERATION")
-        # Inspect the uniquely identified operation before changing its status.
-        pending = participant["pending"][tool]
-        # Preserve asynchronous handle identity across observations.
-        if handle is not None and pending.get("handle") is not None:
-            require(pending["handle"] == handle, "REQUEST_CONFLICT")
-        # Settle explicit completion only after the handle checks above.
-        if request.get("completed") is True:
-            del participant["pending"][tool]
-        # Retain asynchronous work when a valid handle is observed without completion.
-        elif handle is not None:
-            # Make repeated identical async transitions consume no additional event capacity.
-            if pending["status"] == "unknown":
-                event_type = None  # Duplicate transition cannot consume completion reserve.
-            # Stage the participant's pending-operation state for the next transaction.
-            participant["pending"][tool] = {"status": "unknown", "handle": handle}
-        else:
-            # Stop with the original failure rather than continue with incomplete state.
-            raise WorkspaceError("UNKNOWN_OPERATION")
+            matches = [identifier for identifier, entry in participant["pending"].items()
+                       if entry.get("handle") == handle]
+            transport = participant["pending"].get(observed_tool)
+            if transport is not None:
+                # Validate the pre-hook's explicit relationship, including concurrent final polls.
+                require(transport.get("poll_handle") == handle and transport.get("poll_parent"),
+                        "REQUEST_CONFLICT")
+                tool = transport["poll_parent"]
+                expected_matches = [tool] if tool in participant["pending"] else []
+                require(matches == expected_matches, "UNKNOWN_OPERATION")
+            else:
+                # Hosts that omit polling pre-hooks still require unique participant-local correlation.
+                require(len(matches) == 1, "UNKNOWN_OPERATION")
+                tool = matches[0]
+        # An already settled parent is allowed only through its still-recorded poll transport.
+        require(tool in participant["pending"] or transport is not None, "UNKNOWN_OPERATION")
+        if tool in participant["pending"]:
+            pending = participant["pending"][tool]
+            if handle is not None and pending.get("handle") is not None:
+                require(pending["handle"] == handle, "REQUEST_CONFLICT")
+            # Explicit process completion wins only after the handle and relationship checks.
+            if request.get("completed") is True:
+                del participant["pending"][tool]
+            elif handle is not None:
+                # A repeated process observation is event-free only when no transport is retiring.
+                if pending["status"] == "unknown" and transport is None:
+                    event_type = None
+                participant["pending"][tool] = {"status": "unknown", "handle": handle}
+            else:
+                raise WorkspaceError("UNKNOWN_OPERATION")
+        # The returned polling call is finished even when its original process is still running.
+        if transport is not None:
+            del participant["pending"][observed_tool]
     # Enforce the shared lifecycle policy for this operation group.
     elif operation in {"detach", "reconcile-participant"}:
         # Stage the verified lifecycle changes in the issue state.

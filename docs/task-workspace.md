@@ -181,7 +181,7 @@ Use finite adapter deadlines shorter than host deadlines: ordinary hooks at most
 
 | Event / inputs | Adapter action and output |
 |---|---|
-| `SessionStart`: `session_id`, `cwd`, `source` (`startup/resume/clear/compact`) | Restore a known binding and validate scope; initial unknown session stays unbound. Return fixed setup/status text only. For stale bound state use supported `continue:false` plus bounded reason; pre-tool denial remains required. Never delete/create a guessed issue. |
+| `SessionStart`: `session_id`, `cwd`, `source` (`startup/resume/clear/compact`) | Restore a known binding and validate scope; initial unknown session stays unbound. Return fixed setup/status text only. For unready or stale state, preserve its precise diagnostic and permit only the documented bootstrap recovery path; ordinary pre-tool denial remains required. Do not stop the lifecycle solely because acknowledgment or resume is needed. Never delete/create a guessed issue. |
 | `UserPromptSubmit`: above plus `turn_id`, `prompt` | For an unbound root, parse exactly one standalone `Task: <ID>` line or use pre-established explicit binding. No match stays unbound; multiple distinct/malformed declarations block. Bound sessions need no repeated declaration; a differing declaration requires explicit rebind. Do not search incidental issue mentions or retain the prompt. Return `decision:block`/`reason` on conflicts. |
 | `SubagentStart`: parent `session_id`, `agent_id`, `agent_type`, `turn_id` | Inherit issue; attach separate preassigned scope and generation. Missing child mapping/scope marks not-ready. `continue:false` does not stop this event; gate the spawn path beforehand and child tool path afterward only where identity is verified. |
 | `PreToolUse`: `session_id`, `cwd`, `turn_id`, `tool_name`, `tool_use_id`, `tool_input` | Resolve verified participant; run `ready` before every covered tool. Deny unknown/stale/mismatched bindings, failed setup, required-source/evidence failure, lock timeout or ambiguous child identity. Record pending supported operation before allow; do not record raw input. |
@@ -564,7 +564,11 @@ async handle. Null/string metadata does not establish completion; a successful
 shell wrapper with an async handle remains pending. A final response may retain
 its session handle: completion then takes precedence only after handle validation.
 `write_stdin` observations associate through a unique handle within the same
-participant. Missing, conflicting or ambiguous associations retain work. Distinct
+participant. Missing, malformed, conflicting or ambiguous associations retain work. If the host
+emits a polling PreToolUse, its transport is recorded separately with a validated
+parent relationship. PostToolUse retires that observed transport, while only
+explicit completion retires the original process; nonfinal and concurrent polls
+cannot strand transport records or settle an unrelated process. Distinct
 observations use distinct idempotency keys, while exact repeats remain idempotent.
 Pending-operation event reservations remain in force.
 

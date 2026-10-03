@@ -359,3 +359,116 @@ class PRReviewRegressions(Fixture):
         (quarantine / '.DS_Store').unlink()
         # Assert the expected safety result and preserved fixture state.
         self.require_ok(w.execute(request))
+
+    def test_B2_full_poll_lifecycle_retires_transport_and_original(self):
+        """Settle every observed polling call without prematurely settling its process.
+
+        Raises:
+            AssertionError: If polling strands work or retires the process too early.
+        """
+        # Admit the original process and observe its still-running handle.
+        self.create(); self.ready(); self.start_tool()
+        self.post_tool({'session_id': 123})
+        # Exercise nonfinal and final polls through both actual hook boundaries.
+        for identifier, response in [('poll-one', {'session_id': 123}),
+                                     ('poll-two', {'session_id': 123, 'exit_code': 0})]:
+            admitted = hook.handle(self.event('PreToolUse', tool_name='write_stdin',
+                                             tool_use_id=identifier, tool_input={'session_id': 123}))
+            self.assertEqual(admitted, {})
+            self.post_tool(response, identifier=identifier, tool_name='write_stdin',
+                           tool_input={'session_id': 123})
+            pending = self.state()['participants'][self.base['coordinator']]['pending']
+            self.assertNotIn(identifier, pending)
+            # A nonfinal poll is finished transport, while the original process remains live.
+            if 'exit_code' not in response:
+                self.assertIn('original', pending)
+        # Terminal disposition and retirement must now be reachable without manual edits.
+        self.assertEqual(pending, {})
+        self.call('outcome', expected_revision=self.state()['revision'], disposition='cancelled', evidence=self.evidence())
+        self.call('detach', evidence=self.evidence())
+
+    def test_B2_malformed_explicit_handles_cannot_retire_work(self):
+        """Reject malformed handle metadata instead of converting it to an absent handle.
+
+        Raises:
+            AssertionError: If invalid response or poll handles permit settlement.
+        """
+        # Establish a known running process whose retirement must remain blocked.
+        self.create(); self.ready(); self.start_tool()
+        self.post_tool({'session_id': 123})
+        before = self.state()
+        # Exercise invalid JSON types and empty tokens at both correlation boundaries.
+        for malformed in ([], {}, True, False, '', ' ', 1.5):
+            with self.subTest(handle=malformed):
+                self.post_tool({'session_id': malformed, 'exit_code': 0})
+                self.assertEqual(self.state(), before)
+                self.post_tool({'exit_code': 0}, identifier='bad-poll', tool_name='write_stdin',
+                               tool_input={'session_id': malformed})
+                self.assertEqual(self.state(), before)
+                self.post_tool({'session_id': malformed, 'exit_code': 0}, identifier='bad-response',
+                               tool_name='write_stdin', tool_input={'session_id': 123})
+                self.assertEqual(self.state(), before)
+        # Missing metadata remains valid when the original call ID supplies correlation.
+        self.assertEqual(w.execute(self.req('detach', evidence=self.evidence()))['code'], 'PENDING_OPERATION')
+        self.post_tool({'exit_code': 0})
+        self.call('detach', evidence=self.evidence())
+
+    def test_B2_concurrent_polls_retire_after_one_settles_parent(self):
+        """Retire independently admitted transports after a sibling settles their parent.
+
+        Raises:
+            AssertionError: If concurrent polls strand transport state or duplicate events.
+        """
+        # Establish one asynchronous parent and two distinctly observed polling calls.
+        self.create(); self.ready(); self.start_tool()
+        self.post_tool({'session_id': 123})
+        for identifier in ('poll-a', 'poll-b'):
+            self.assertEqual(hook.handle(self.event('PreToolUse', tool_name='write_stdin',
+                                                   tool_use_id=identifier, tool_input={'session_id': 123})), {})
+        # The first final response settles only its own transport and the parent.
+        self.post_tool({'exit_code': 0}, identifier='poll-a', tool_name='write_stdin',
+                       tool_input={'session_id': 123})
+        pending = self.state()['participants'][self.base['coordinator']]['pending']
+        self.assertEqual(set(pending), {'poll-b'})
+        # A later response can retire its recorded transport without recreating the parent.
+        self.post_tool({'session_id': 123}, identifier='poll-b', tool_name='write_stdin',
+                       tool_input={'session_id': 123})
+        settled = self.state()
+        self.assertEqual(settled['participants'][self.base['coordinator']]['pending'], {})
+        self.post_tool({'session_id': 123}, identifier='poll-b', tool_name='write_stdin',
+                       tool_input={'session_id': 123})
+        self.assertEqual(self.state(), settled)
+
+    def test_B2_poll_completion_preserves_capacity_and_rejects_bad_admission(self):
+        """Reserve settlement capacity for polling while rejecting malformed admission.
+
+        Raises:
+            AssertionError: If a denied poll changes state or admitted work cannot settle.
+        """
+        # Reject invalid handles before a polling tool can create pending state.
+        self.create(); self.ready(); self.start_tool()
+        self.post_tool({'session_id': 123})
+        before = self.state()
+        for malformed in ([], True, '', None):
+            result = hook.handle(self.event('PreToolUse', tool_name='write_stdin',
+                                            tool_use_id='invalid-poll', tool_input={'session_id': malformed}))
+            self.assertEqual(result['hookSpecificOutput']['permissionDecision'], 'deny')
+            self.assertEqual(self.state(), before)
+        # Admit a valid polling transport with enough space for both settlement records.
+        active = self.root / '.task/TEST-1/events.jsonl'
+        with mock.patch.object(w, 'MAX_EVENTS', active.stat().st_size + 4 * 8192 + 2000):
+            self.assertEqual(hook.handle(self.event('PreToolUse', tool_name='write_stdin',
+                                                   tool_use_id='bounded-poll', tool_input={'session_id': 123})), {})
+            # Exhaust ordinary capacity without consuming the reserved completion space.
+            for _ in range(100):
+                result = w.execute(self.req('event', event_type='check', event={'code': 'OK'}))
+                if not result['ok']:
+                    self.assertEqual(result['code'], 'ARCHIVE_PENDING')
+                    break
+            else:
+                self.fail('The patched event capacity was not exhausted')
+            # One explicit final response settles parent and transport, leaving an archivable issue.
+            self.post_tool({'session_id': 123, 'exit_code': 0}, identifier='bounded-poll',
+                           tool_name='write_stdin', tool_input={'session_id': 123})
+            self.assertEqual(self.state()['participants'][self.base['coordinator']]['pending'], {})
+            self.call('archive-prepare', expected_revision=self.state()['revision'])

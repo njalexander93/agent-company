@@ -47,6 +47,26 @@ def denial(code):
             ". Use the exact lifecycle --request-json command for the assigned session."}}
 
 
+def async_handle(value):
+    """Normalize optional host handles without disguising malformed metadata.
+
+    Args:
+        value: An absent/null handle, or a nonempty string or integer identifier.
+
+    Returns:
+        The validated string handle, or None only for absent/null metadata.
+
+    Raises:
+        core.WorkspaceError: If an explicitly supplied handle has an invalid type or token.
+    """
+    # Preserve absence, but do not equate malformed supplied metadata with absence.
+    if value is None:
+        return None
+    # Booleans are not integer process identities despite Python's subtype relation.
+    core.require(type(value) in {str, int}, "ASYNC_HANDLE_CONFLICT")
+    return core.token(str(value))
+
+
 def request_for(event, operation):
     """Resolve an actual hook session to its registered repository and binding.
 
@@ -375,9 +395,18 @@ def handle(event):
         # Avoid counting the lifecycle transaction itself as pending external work.
         if bootstrap(event, ready=True):
             return {}  # Local lifecycle owns its transaction; don't count itself as pending external work.
-        # Invoke the core boundary and retain its structured result.
+        # Bind an observed polling transport to its unique original operation.
+        polling = tool == "write_stdin"
+        poll_handle = None
+        if polling:
+            try:
+                poll_handle = async_handle(event.get("tool_input", {}).get("session_id"))
+                core.require(poll_handle is not None, "ASYNC_HANDLE_CONFLICT")
+            except core.WorkspaceError as error:
+                return denial(error.code)
+        # Reserve and record the transport separately when the host emits its pre-hook.
         result = core.execute({**request, "operation": "tool-start", "request_id": "pre:" + event["tool_use_id"],
-                               "tool_id": event["tool_use_id"]})
+                               "tool_id": event["tool_use_id"], "poll_handle": poll_handle})
         return {} if result["ok"] else denial(result["code"])
     # Handle the PostToolUse hook event.
     if name == "PostToolUse":
@@ -398,16 +427,16 @@ def handle(event):
         # Unknown response shapes keep the operation pending; never infer completion.
         tool_name = event.get("tool_name", "")
         polling = tool_name == "write_stdin"
-        handle_id = response.get("session_id")
-        # Associate the polling response with its requested session handle.
-        if polling:
-            # Read the handle named by the polling call, not a guessed prior tool.
-            input_handle = event.get("tool_input", {}).get("session_id")
-            # Preserve asynchronous handle identity across observations.
-            if input_handle is None or (handle_id is not None and str(handle_id) != str(input_handle)):
-                return {"systemMessage": "TASK_WORKSPACE_NOT_READY: ASYNC_HANDLE_CONFLICT"}
-            # Use the checked poll-input handle to locate the original pending operation.
-            handle_id = input_handle
+        # Validate supplied handle types before any completion or correlation decision.
+        try:
+            handle = async_handle(response.get("session_id"))
+            if polling:
+                input_handle = async_handle(event.get("tool_input", {}).get("session_id"))
+                core.require(input_handle is not None and (handle is None or handle == input_handle),
+                             "ASYNC_HANDLE_CONFLICT")
+                handle = input_handle
+        except core.WorkspaceError as error:
+            return {"systemMessage": "TASK_WORKSPACE_NOT_READY: " + error.code}
         # Normalize response metadata without inferring completion from missing values.
         exit_code = response.get("exit_code")
         completed = type(exit_code) is int
@@ -415,10 +444,8 @@ def handle(event):
         if tool_name not in {"Bash", "exec_command", "write_stdin"}:
             completed = completed or type(response.get("isError")) is bool
         # Treat an explicit handle-free shell error as a finished failed call.
-        elif response.get("isError") is True and handle_id is None:
+        elif response.get("isError") is True and handle is None:
             completed = True
-        # Normalize only nonempty string or integer session handles.
-        handle = str(handle_id) if type(handle_id) in {str, int} and str(handle_id) else None
         # Retain work when the response proves neither completion nor a valid handle.
         if not completed and handle is None:
             return {}
