@@ -498,7 +498,7 @@ class Issue:
         stored_result = result
         if "parts" in result and "snapshot" in result and request["operation"] == "archive-prepare":
             stored_result = {k: v for k, v in result.items() if k != "parts"}
-            stored_result["result_ref"] = "export.json"
+            stored_result["result_ref"] = "export-" + result["snapshot"] + ".json"
         state["requests"][sha(request["request_id"].encode())] = {
             "digest": sha(canonical(request)), "result": stored_result}
         require(len(canonical(state)) <= 8 * 1024 * 1024, "ARCHIVE_PENDING")
@@ -766,8 +766,10 @@ def finish_cleanup(issue):
     state.pop("checkpoint_history", None)
     state.pop("outcome_history", None)
     state.pop("provenance", None)
-    if control.exists("export.json"):
-        control.unlink("export.json")
+    for name in os.listdir(control.fd):
+        if re.fullmatch(r"export-[0-9a-f]{64}\.json", name):
+            control.read(name)  # Refuse substituted links/special files before pruning.
+            control.unlink(name)
     state["tombstone"] = {"snapshot": state["export"]["snapshot"], "at": now(),
                           "generation": state["generation"], "cleanup_request": intent["request_id"]}
     control.put("state.json", state)
@@ -791,8 +793,9 @@ def operate(store, issue, request):
                 store.view(issue.id)
                 store.save_binding(state, key)
             result = previous["result"].copy()
-            if result.pop("result_ref", None):
-                result.update(issue.control.json("export.json"))
+            reference = result.pop("result_ref", None)
+            if reference:
+                result.update(issue.control.json(reference))
             return result
     if operation == "diagnose":
         return {"ok": True, "code": "PRESENT" if state else "ABSENT", "repo_id": store.registration["repo_id"],
@@ -1033,10 +1036,10 @@ def operate(store, issue, request):
         export = export_documents(snapshot)
         state["export"] = {"snapshot": export["snapshot"], "revision": state["revision"],
                            "files": manifest(files), "request_id": request["request_id"]}
-        issue.control.put("export.json", export)
+        issue.control.put("export-" + export["snapshot"] + ".json", export)
         return issue.commit(state, files, request, export)
     elif operation == "archive-index":
-        export = issue.control.json("export.json")
+        export = issue.control.json("export-" + state["export"]["snapshot"] + ".json")
         observations = request["observations"]
         require(len(observations) == len(export["parts"]), "ARCHIVE_PENDING")
         descriptors = []
@@ -1054,7 +1057,7 @@ def operate(store, issue, request):
         state["index_request"] = result.copy()
         event_type = None
     elif operation in {"archive-save-start", "archive-observe-save"}:
-        export = issue.control.json("export.json")
+        export = issue.control.json("export-" + state["export"]["snapshot"] + ".json")
         documents = export["parts"] + ([state["index_request"]] if state.get("index_request") else [])
         digest = request["content_digest"]
         require(digest in {sha(doc["content"].encode()) for doc in documents}, "ARCHIVE_PENDING")
@@ -1168,6 +1171,10 @@ def collect_candidates(store, request):
 
 def permission_paths(request):
     root = Path(request.get("worktree", "/"))
+    try:
+        root = repository(root)[0]
+    except (OSError, WorkspaceError, subprocess.SubprocessError):
+        pass
     main = request.get("main_worktree")
     if main is None:
         try:

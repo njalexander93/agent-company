@@ -504,7 +504,7 @@ reviews then reproduced unfinished startup packet recovery, terminal reconciliat
 and unreachable recovery commands. Later repairs add direct adapter regressions
 for those cases. A Product Security review of `cea8b17` confirmed a 278-part export
 was refused by the old 258-observation verifier limit; the limit now matches the
-32 MiB export bound. Export idempotency retains a reference to immutable local
+32 MiB export bound. Export idempotency retains a reference to immutable snapshot-addressed local
 export bytes, not repeated response bodies in state; transactions are size-checked
 before publication. Product Security's complete final assessment remains pending.
 

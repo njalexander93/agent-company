@@ -192,3 +192,18 @@ class ReviewRegressions(Fixture):
         self.call('archive-verify', observations=observations)
         stored = self.state()['requests']
         self.assertFalse(any('parts' in item['result'] and 'snapshot' in item['result'] for item in stored.values()))
+
+    def test_old_archive_prepare_retry_returns_its_immutable_export(self):
+        self.create()
+        first_request = self.req('archive-prepare', expected_revision=self.state()['revision'])
+        first = self.require_ok(w.execute(first_request))
+        second = self.call('archive-prepare', expected_revision=self.state()['revision'])
+        self.assertNotEqual(first['snapshot'], second['snapshot'])
+        self.assertEqual(first, w.execute(first_request))
+        self.assertEqual(self.state()['export']['snapshot'], second['snapshot'])
+
+    def test_permission_paths_resolve_subdirectory_worktree(self):
+        nested = self.root / 'nested'; nested.mkdir()
+        paths = w.permission_paths(self.req('resume', worktree=str(nested)))
+        self.assertIn(str(self.root / '.task/.bindings'), paths)
+        self.assertNotIn(str(nested / '.task/.bindings'), paths)

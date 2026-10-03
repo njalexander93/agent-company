@@ -122,7 +122,7 @@ def provider_gate(event):
             return set(args) == {"id"} and args["id"] in identifiers
         if state["storage"] == "cleaned":
             return False
-        export = control.json("export.json")
+        export = control.json("export-" + state["export"]["snapshot"] + ".json")
         documents = export["parts"] + ([state["index_request"]] if state.get("index_request") else [])
         if args not in documents:
             return False
