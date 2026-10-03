@@ -339,7 +339,11 @@ The pre-readiness command allowlist is operation-specific. It includes the
 original `diagnose/register/bind/adopt/resume/restore` routes plus scoped `read` and
 exact-digest `acknowledge`, needed to establish readiness without a general tool
 exemption. A maintenance binding permits the specified archive/index/read-back and
-cleanup operations. `create` and `scope` are not unready-session exceptions; the
+cleanup operations. Narrow schemas also permit terminal `archive-prepare`,
+coordinator `reconcile-files`, and explicit `rebind`: requiring ordinary readiness
+for those repair operations would deadlock recovery. Core ownership, generation,
+revision and pending-operation checks still apply. `create` and `scope` are not
+unready-session exceptions; the
 explicit startup assignment supplies them automatically. Ready sessions can call
 the reviewed lifecycle CLI without registering that same local transaction as a
 pending external tool. Unknown bootstrap fields are rejected.
@@ -492,3 +496,20 @@ A read-only `codex app-server --stdio` hooks-list probe failed before initializa
 `failed to initialize sqlite state runtime under .../.codex`. The sandbox did not
 grant global state writes. No hook trust was changed, no daemon started, and no
 host callback was observed. This failed probe establishes no desktop gate coverage.
+
+
+The subsequent frozen candidate `3d1f8fac3a7d44c0b3e635ed14a5f1935cdf4cb8`
+passed 35 tests independently in the Spec and Internal Security reviews. Those
+reviews then reproduced unfinished startup packet recovery, terminal reconciliation
+and unreachable recovery commands. Later repairs add direct adapter regressions
+for those cases. A Product Security review of `cea8b17` confirmed a 278-part export
+was refused by the old 258-observation verifier limit; the limit now matches the
+32 MiB export bound. Export idempotency retains a reference to immutable local
+export bytes, not repeated response bodies in state; transactions are size-checked
+before publication. Product Security's complete final assessment remains pending.
+
+A second disposable provider upload using readable-history fragments was rejected
+by automatic approval review. It produced no provider document. The earlier links
+above therefore validate the earlier encoder and compatible reconstruction, not
+the final encoder's provider round trip. No retry or indirect upload was attempted.
+Approval for the exact stable synthetic export must precede that remaining test.

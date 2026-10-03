@@ -133,3 +133,62 @@ class ReviewRegressions(Fixture):
         view.symlink_to(outside)
         self.assertFalse(w.execute(self.req('ready', worktree=str(self.other)))['ok'])
         self.assertEqual((outside / 'keep').read_text(), 'sentinel')
+
+    def test_interrupted_automatic_packet_setup_retries_without_overwrite(self):
+        self.call('register', repo_id=None, main_worktree=str(self.root), startup={
+            'issue_id': 'TEST-1', 'issue_uuid': self.base['issue_uuid'],
+            'coordinator': self.base['coordinator'], 'packet': []})
+        event = {'hook_event_name': 'UserPromptSubmit', 'cwd': str(self.root),
+                 'session_id': 'coordinator', 'prompt': 'Task: TEST-1'}
+        execute = w.execute
+        def fail_scope(request):
+            return {'ok': False, 'code': 'BUSY'} if request['operation'] == 'scope' else execute(request)
+        with mock.patch.object(w, 'execute', fail_scope):
+            with self.assertRaises(w.WorkspaceError):
+                hook.handle(event)
+        self.assertIsNone(self.state()['participants'][self.base['coordinator']]['packet'])
+        hook.handle(event)
+        self.assertEqual(self.state()['participants'][self.base['coordinator']]['packet'], [])
+        before = self.state()['revision']
+        hook.handle(event)
+        self.assertEqual(self.state()['revision'], before)
+
+    def test_terminal_reconciliation_requires_explicit_reopen(self):
+        self.create()
+        self.call('outcome', expected_revision=self.state()['revision'], disposition='cancelled', evidence=self.evidence())
+        path = self.root / '.task/TEST-1/roadmap.md'; path.write_text('# changed after terminal')
+        inventory = {p: w.sha((self.root / '.task/TEST-1' / p).read_bytes()) for p in self.state()['files']}
+        result = w.execute(self.req('reconcile-files', expected_revision=self.state()['revision'], inventory=inventory, evidence=self.evidence()))
+        self.assertEqual(result['code'], 'TERMINAL')
+        self.assertEqual(path.read_text(), '# changed after terminal')
+
+    def test_narrow_recovery_commands_pass_actual_adapter_gate(self):
+        self.create()
+        hook.handle({'hook_event_name': 'UserPromptSubmit', 'cwd': str(self.root),
+                     'session_id': 'coordinator', 'prompt': 'Task: TEST-1'})
+        for operation, fields in [('archive-prepare', {'seal': True}),
+                                  ('reconcile-files', {'inventory': {}, 'evidence': self.evidence()}),
+                                  ('rebind', {'new_issue_id': 'TEST-2', 'evidence': self.evidence()})]:
+            request = self.req(operation, coordinator=None, expected_revision=self.state()['revision'], **fields)
+            command = shlex.join([hook.PYTHON, str(hook.LIFECYCLE), '--request-json', json.dumps(request)])
+            event = {'hook_event_name': 'PreToolUse', 'cwd': str(self.root), 'session_id': 'coordinator',
+                     'tool_name': 'Bash', 'tool_use_id': operation, 'tool_input': {'command': command, 'login': False, 'shell': '/bin/sh'}}
+            self.assertEqual(hook.handle(event), {})
+            request['unknown_field'] = 'no'
+            event['tool_input']['command'] = shlex.join([hook.PYTHON, str(hook.LIFECYCLE), '--request-json', json.dumps(request)])
+            self.assertFalse(hook.bootstrap(event))
+
+    def test_multipart_more_than_old_verifier_limit_reconstructs(self):
+        self.create()
+        with mock.patch.object(w, 'ARCHIVE_CHUNK', 12):
+            export = self.seal()
+        self.assertGreater(len(export['parts']), 257)
+        self.assertLessEqual(len(export['parts']), 513)
+        observations = self.observations(export)
+        index = self.call('archive-index', observations=observations)
+        observations.append({'id': 'index', 'url': 'https://linear.app/test/document/index',
+                             'issue': self.base['issue_uuid'], 'updatedAt': '2026-10-03T00:00:00Z',
+                             'origin': 'linear_get_document', 'request_id': 'fixture-get', 'content': index['content']})
+        self.call('archive-verify', observations=observations)
+        stored = self.state()['requests']
+        self.assertFalse(any('parts' in item['result'] and 'snapshot' in item['result'] for item in stored.values()))

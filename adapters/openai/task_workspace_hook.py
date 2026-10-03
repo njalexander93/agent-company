@@ -23,6 +23,9 @@ BOOTSTRAP_FIELDS = {
     "archive-observe-save": {"document_id", "content_digest"},
     "cleanup-plan": set(), "cleanup-commit": {"observations", "cleanup_challenge"},
     "reopen": {"evidence"},
+    "archive-prepare": {"seal"},
+    "reconcile-files": {"inventory", "evidence"},
+    "rebind": {"new_issue_id", "new_binding_generation", "evidence"},
 }
 COMMON_FIELDS = {"schema_version", "operation", "request_id", "worktree", "host", "session_id",
                  "repo_id", "issue_id", "issue_uuid", "binding_generation", "expected_revision"}
@@ -140,21 +143,30 @@ def automatic_attach(event, identifier):
         binding = store.binding()
         if binding:
             core.require(binding["issue_id"] == identifier, "BINDING_CONFLICT")
-            return
         key = core.participant_key(base)
         filename = key + ".startup.json"
         setup = store.bindings.json(filename) if store.bindings.exists(filename) else None
+        if binding:
+            with store.issues.child(identifier) as control, control.lock():
+                issue = core.Issue(store, control, identifier)
+                issue.recover()
+                member = issue.state["participants"].get(key, {})
+                if member.get("packet") is not None:
+                    return
     if setup:
         core.require(setup["issue_id"] == identifier, "BINDING_CONFLICT")
         result = core.execute({**base, "operation": "create", "coordinator": setup["coordinator"],
                                "issue_uuid": setup["issue_uuid"]})
         core.require(result["ok"], result["code"])
+        # A previous scope failure may follow successful creation. Read current revision
+        # and retry only the still-missing assignment, never replace a later packet.
+        diagnostic = core.execute({**base, "operation": "diagnose", "request_id": base["request_id"] + ":diagnose"})
         result = core.execute({**base, "operation": "scope", "request_id": base["request_id"] + ":scope",
                                "binding_generation": result["binding_generation"],
-                               "expected_revision": result["revision"], "target_participant": key,
+                               "expected_revision": diagnostic["revision"], "target_participant": key,
                                "packet": setup["packet"]})
         core.require(result["ok"], result["code"])
-    else:
+    elif not binding:
         # Existing coordinator assignment in shared state is required for a new join.
         result = core.execute({**base, "operation": "attach"})
         if not result["ok"] and result["code"] not in {"BINDING_MISSING", "SCOPE_MISSING"}:

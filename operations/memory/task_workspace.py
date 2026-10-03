@@ -615,7 +615,8 @@ def archive_payload(state, files):
             "issue_uuid": state["issue_uuid"], "revision": state["revision"],
             "disposition": state["disposition"], "outcome": state.get("outcome"),
             "checkpoint": state.get("checkpoint"), "provenance": state.get("provenance", {}),
-            "adoption": state.get("adoption"),
+            "adoption": state.get("adoption"), "checkpoint_history": state.get("checkpoint_history", []),
+            "outcome_history": state.get("outcome_history", []),
             "seq": state["seq"], "head": state["head"],
             "files": [{"path": p, "size": len(b), "sha256": sha(b), "scope": "coordinator-archive",
                        "data": encode(b)} for p, b in sorted(files.items())]}
@@ -673,7 +674,8 @@ def verify_provider(state, observations):
     root_observed, root = roots[0]
     require(root.get("schema_version") == 1 and root["snapshot"] == state["export"]["snapshot"], "ARCHIVE_PENDING")
     parts = {o["id"]: (o, p) for o, p in zip(observations, parsed) if p.get("kind") == "part"}
-    require(len(parts) == len(observations) - 1 == len(root["parts"]), "ARCHIVE_PENDING")
+    require(len(parts) == len(observations) - 1 == len(root["parts"]) and
+            root_observed["id"] not in parts, "ARCHIVE_PENDING")
     raw = b""
     for i, descriptor in enumerate(root["parts"]):
         require(descriptor["id"] in parts, "ARCHIVE_PENDING")
@@ -761,6 +763,8 @@ def finish_cleanup(issue):
                          if k == sha(intent["request_id"].encode())}
     state.pop("index_request", None)
     state.pop("checkpoint", None)
+    state.pop("checkpoint_history", None)
+    state.pop("outcome_history", None)
     state.pop("provenance", None)
     if control.exists("export.json"):
         control.unlink("export.json")
@@ -835,6 +839,8 @@ def operate(store, issue, request):
         state["provenance"] = snapshot.get("provenance", {})
         state["checkpoint"] = snapshot.get("checkpoint")
         state["adoption"] = snapshot.get("adoption")
+        state["checkpoint_history"] = snapshot.get("checkpoint_history", [])
+        state["outcome_history"] = snapshot.get("outcome_history", [])
         state["generation"] += 1
         for participant in state["participants"].values():
             participant.update(status="detached", ack=None, generation=participant["generation"] + 1)
@@ -853,6 +859,9 @@ def operate(store, issue, request):
         store.save_binding(issue.state, key)
         return result
     if operation == "reconcile-files":
+        require(state["disposition"] not in TERMINAL, "TERMINAL")
+        require(binding and binding["issue_id"] == issue.id and
+                binding["binding_generation"] == request.get("binding_generation"), "BINDING_MISSING")
         authorize(state, request, coordinator=True)
         expected(state, request)
         evidence(request.get("evidence"))
@@ -937,6 +946,7 @@ def operate(store, issue, request):
                 "EVIDENCE_REQUIRED")
         require(len(canonical(checkpoint)) <= 16384, "SIZE_LIMIT")
         evidence(checkpoint["sources"])
+        state.setdefault("checkpoint_history", []).append(checkpoint)
         state["checkpoint"] = checkpoint
         if request.get("submitted_pr"):
             require(str(request["submitted_pr"]).startswith("https://"), "EVIDENCE_REQUIRED")
@@ -966,6 +976,7 @@ def operate(store, issue, request):
         state["disposition"] = disposition
         state["outcome"] = {"disposition": disposition, "evidence": request["evidence"],
                             "completion": request.get("completion"), "at": now()}
+        state.setdefault("outcome_history", []).append(state["outcome"])
     elif operation == "event":
         require(request.get("event_type") in {"check", "tool-start", "tool-complete", "observation"})
         require(set(request.get("event", {})) <= {"code"}, "INVALID_REQUEST")
