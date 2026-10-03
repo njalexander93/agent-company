@@ -548,3 +548,34 @@ locally by final32 with exact snapshot/part/file digests. That compatibility che
 uses synthetic observations and is not a provider round trip. Final32's segmented
 archives add retained event files and receipt lineage; that live provider case
 remains separately unverified. [E3]
+
+
+### PR review recovery and metadata corrections
+
+SessionStart, PreCompact and PostCompact retain precise readiness/error codes in
+bounded recovery context. They do not terminate the session merely because it
+needs registration, resume, scope repair or acknowledgment. No readiness is granted:
+ordinary PreToolUse calls remain denied, and the existing exact bootstrap and
+provider exceptions still apply.
+
+PostToolUse settles pending work only from typed completion evidence: an integer
+exit code, a boolean MCP/local-tool `isError` result, or a shell error without an
+async handle. Null/string metadata does not establish completion; a successful
+shell wrapper with an async handle remains pending. A final response may retain
+its session handle: completion then takes precedence only after handle validation.
+`write_stdin` observations associate through a unique handle within the same
+participant. Missing, conflicting or ambiguous associations retain work. Distinct
+observations use distinct idempotency keys, while exact repeats remain idempotent.
+Pending-operation event reservations remain in force.
+
+At the issue root and directly inside `context/`, inventory excludes only regular,
+owned, no-follow validated `.DS_Store` and `._*` files with a nonempty suffix.
+These files remain subject to ordinary file safety/size checks; links, hard links,
+directories and other dotfiles are not exempt. They are not task archive content.
+Verified issue cleanup validates the entire remaining tree before unlinking those
+narrow metadata entries alongside the verified payload. It never recursively
+removes a metadata directory or follows a metadata link.
+
+These repairs change core/adapter bytes. The earlier final32 test count and host
+fixture identity do not establish acceptance of the new candidate. Actual host,
+provider, native-child and human acceptance remain open.

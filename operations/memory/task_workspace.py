@@ -367,12 +367,22 @@ def participant_key(request):
     return sha(canonical([token(request.get("host", "codex")), token(request["session_id"])]))
 
 
+def os_metadata(name):
+    return name == ".DS_Store" or (name.startswith("._") and len(name) > 2)
+
+
 def inventory(directory, require_roadmap=True):
     result = {}
     for name in os.listdir(directory.fd):
+        if os_metadata(name):
+            directory.read(name, MAX_FILE)
+            continue
         if name == "context":
             with directory.child(name, private=False) as context:
                 for note in os.listdir(context.fd):
+                    if os_metadata(note):
+                        context.read(note, MAX_FILE)
+                        continue
                     path = payload_path("context/" + note)
                     result[path] = context.read(note, MAX_FILE)
         else:
@@ -755,7 +765,7 @@ def finish_cleanup(issue):
         with control.child(name, private=False) as payload:
             require(payload.identity == intent["directory_identity"], "UNSAFE_PATH")
             names = os.listdir(payload.fd)
-            require(all(n in {"roadmap.md", "events.jsonl", "context"} or SEGMENT.fullmatch(n) for n in names), "UNSAFE_PATH")
+            require(all(n in {"roadmap.md", "events.jsonl", "context"} or SEGMENT.fullmatch(n) or os_metadata(n) for n in names), "UNSAFE_PATH")
             # Verify the ENTIRE remaining tree before deleting any more of it.
             remaining = {}
             for entry in names:
@@ -765,7 +775,8 @@ def finish_cleanup(issue):
                             remaining["context/" + note] = context.read(note, MAX_FILE)
                 else:
                     remaining[entry] = payload.read(entry, MAX_FILE)
-            require(all(intent["files"].get(p) == sha(b) for p, b in remaining.items()), "UNTRACKED_CHANGE")
+            require(all(os_metadata(p.rsplit("/", 1)[-1]) or intent["files"].get(p) == sha(b)
+                        for p, b in remaining.items()), "UNTRACKED_CHANGE")
             for path in sorted(remaining):
                 if path.startswith("context/"):
                     with payload.child("context", private=False) as context:
@@ -1021,16 +1032,25 @@ def operate(store, issue, request):
         participant["pending"][tool] = {"status": "pending"}
     elif operation == "tool-complete":
         tool = token(request["tool_id"])
+        handle = token(request["async_handle"]) if request.get("async_handle") is not None else None
+        if request.get("poll"):
+            require(handle is not None, "UNKNOWN_OPERATION")
+            matches = [identifier for identifier, pending in participant["pending"].items()
+                       if pending.get("handle") == handle]
+            require(len(matches) == 1, "UNKNOWN_OPERATION")
+            tool = matches[0]
         require(tool in participant["pending"], "UNKNOWN_OPERATION")
-        if request.get("async_handle"):
-            handle = token(request["async_handle"])
-            if participant["pending"][tool]["status"] == "unknown":
-                require(participant["pending"][tool]["handle"] == handle, "REQUEST_CONFLICT")
+        pending = participant["pending"][tool]
+        if handle is not None and pending.get("handle") is not None:
+            require(pending["handle"] == handle, "REQUEST_CONFLICT")
+        if request.get("completed") is True:
+            del participant["pending"][tool]
+        elif handle is not None:
+            if pending["status"] == "unknown":
                 event_type = None  # Duplicate transition cannot consume completion reserve.
             participant["pending"][tool] = {"status": "unknown", "handle": handle}
         else:
-            require(request.get("completed") is True, "UNKNOWN_OPERATION")
-            del participant["pending"][tool]
+            raise WorkspaceError("UNKNOWN_OPERATION")
     elif operation in {"detach", "reconcile-participant"}:
         target = key if operation == "detach" else request["target_participant"]
         member = state["participants"][target]

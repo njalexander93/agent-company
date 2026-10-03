@@ -233,29 +233,47 @@ def handle(event):
         if not isinstance(response, dict):
             response = {}
         # Unknown response shapes keep the operation pending; never infer completion.
+        tool_name = event.get("tool_name", "")
+        polling = tool_name == "write_stdin"
         handle_id = response.get("session_id")
-        completed = response.get("exit_code") is not None or response.get("isError") is not None
-        if not completed and not handle_id:
+        if polling:
+            input_handle = event.get("tool_input", {}).get("session_id")
+            if input_handle is None or (handle_id is not None and str(handle_id) != str(input_handle)):
+                return {"systemMessage": "TASK_WORKSPACE_NOT_READY: ASYNC_HANDLE_CONFLICT"}
+            handle_id = input_handle
+        exit_code = response.get("exit_code")
+        completed = type(exit_code) is int
+        if tool_name not in {"Bash", "exec_command", "write_stdin"}:
+            completed = completed or type(response.get("isError")) is bool
+        elif response.get("isError") is True and handle_id is None:
+            completed = True
+        handle = str(handle_id) if type(handle_id) in {str, int} and str(handle_id) else None
+        if not completed and handle is None:
             return {}
-        core.execute({**request, "request_id": "post:" + event["tool_use_id"], "tool_id": event["tool_use_id"],
-                      "completed": completed, "async_handle": str(handle_id) if handle_id else None})
+        observation = [event["tool_use_id"], completed, handle, polling]
+        result = core.execute({**request, "request_id": "post:" + core.sha(core.canonical(observation)),
+                               "tool_id": event["tool_use_id"], "poll": polling,
+                               "completed": completed, "async_handle": handle})
+        if not result["ok"]:
+            return {"systemMessage": "TASK_WORKSPACE_NOT_READY: " + result["code"]}
         return {}
     if name == "SubagentStart":
         return {"systemMessage": "HOST_UNSUPPORTED: Native child-to-tool identity is not verified. No child readiness is established."}
     if name in {"SessionStart", "PreCompact", "PostCompact"}:
         try:
             result = core.execute(request_for(event, "ready"))
-        except core.WorkspaceError:
-            result = {"ok": False, "code": "BINDING_MISSING"}
+        except core.WorkspaceError as error:
+            result = {"ok": False, "code": error.code}
         if result["ok"] and name in {"PreCompact", "PostCompact"}:
             return {}
         if result["ok"]:
             return {"hookSpecificOutput": {"hookEventName": name, "additionalContext":
                     "Task binding checked. Retrieve the permitted packet through the lifecycle read operation."}}
-        if name == "SessionStart" and result["code"] == "BINDING_MISSING":
-            return {"hookSpecificOutput": {"hookEventName": name, "additionalContext":
-                    "Task workspace is unbound. Supply one Task: ISSUE-ID line and use the lifecycle bootstrap route."}}
-        return {"continue": False, "stopReason": "TASK_WORKSPACE_NOT_READY: " + result["code"]}
+        return {"hookSpecificOutput": {"hookEventName": name, "additionalContext":
+                "TASK_WORKSPACE_NOT_READY: " + result["code"] +
+                ". Ordinary task tools remain denied. Use only the assigned lifecycle "
+                "diagnostic/bootstrap routes to register, resume, read and acknowledge "
+                "the permitted packet, or repair the reported condition. Readiness was not granted."}}
     if name in {"Stop", "Interrupt", "SessionEnd", "SubagentStop"}:
         try:
             request = request_for(event, "event")
