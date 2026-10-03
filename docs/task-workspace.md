@@ -303,10 +303,15 @@ file descriptors); Windows ignore rules do not imply a Windows runtime port.
 5. Updates require the returned `binding_generation`, current `expected_revision`,
    `path`, `old_digest`, UTF-8 `content`, and `provenance` containing `sources`,
    `applicability`, and `status`. Evidence lists use `id`, `locator`, `sha256`.
-   No source path or digest is treated as human approval by itself.
+   No source path or digest is treated as human approval by itself. A `completed`
+   outcome additionally verifies local evidence-file bytes for human acceptance,
+   merge and obligations, and requires an attributable `linear_get_issue` status
+   observation with the matching issue UUID, completed state and completion time.
+   This checks supplied evidence; it does not independently authenticate a human
+   decision or provider response. Cancellation records an explicit separate outcome.
 
 For a bootstrap command, construct the exact argument vector below with
-`shlex.join`; pass it directly to Bash/unified exec with login mode disabled.
+`shlex.join`; pass it directly to Bash/unified exec with explicit `login:false` and `shell:"/bin/sh"`. Omitted login or another shell is denied.
 The adapter compares that canonical shell spelling and checks the embedded
 worktree, session and issue. Shell wrappers, redirection, additional commands,
 substitution and alternate interpreters are rejected.
@@ -319,12 +324,25 @@ command = shlex.join(argv)
 The startup prompt accepts exactly one standalone `Task: ISSUE-ID` line. It
 records only that identity. A packet/coordinator assignment is still explicit;
 no startup callback infers one from a chat title or grants coordinator ownership.
-The candidate direct hook path therefore has **manual explicit first setup**;
-automatic first creation/assignment and verified desktop reattachment are not
-accepted merely because this command route works. The foreground-session fallback
+One-time registration can include an explicit `startup` assignment with exactly
+`issue_id`, `issue_uuid`, `coordinator` and `packet`. The next matching Task prompt
+automatically creates the workspace and installs that preassigned packet. A new
+session joining an existing issue automatically attaches only when the coordinator
+already assigned it a packet. No hidden packet or coordinator role is inferred.
+Automatic setup is tested through direct adapter calls; desktop delivery remains
+an acceptance gate. The foreground-session fallback
 uses the same explicit bindings and packet checks; no full launcher is shipped.
 Native child scope is not accepted. Covered native spawning is denied by the
 adapter until an unambiguous child-to-tool identity is demonstrated.
+
+The pre-readiness command allowlist is operation-specific. It includes the
+original `diagnose/register/bind/adopt/resume/restore` routes plus scoped `read` and
+exact-digest `acknowledge`, needed to establish readiness without a general tool
+exemption. A maintenance binding permits the specified archive/index/read-back and
+cleanup operations. `create` and `scope` are not unready-session exceptions; the
+explicit startup assignment supplies them automatically. Ready sessions can call
+the reviewed lifecycle CLI without registering that same local transaction as a
+pending external tool. Unknown bootstrap fields are rejected.
 
 `rebind` takes the old issue/generation, `new_issue_id`, optional
 `new_binding_generation`, and evidence. The target must already exist with an
@@ -337,8 +355,10 @@ new assignment or transfer coordinator ownership implicitly.
 The candidate uses one recoverable intent per payload mutation. It flushes intent,
 rolls forward only files matching an old or intended digest, publishes state, and
 removes the intent. A retry with the same request ID and identical request returns
-the committed result. A changed request with the same ID conflicts. Unknown
-changes stop recovery. Initial creation is not ready until its complete state and
+the committed result. A changed request with the same ID conflicts, including rebind retries. Unknown
+changes stop recovery. `reconcile-files` requires coordinator ownership, expected
+revision, exact inspected inventory and evidence. It imports changed Markdown at a
+new revision; it cannot remove files or rewrite event history. Initial creation is not ready until its complete state and
 required event have committed, even if a crash leaves partial files visible.
 
 Event bodies are fixed lifecycle facts. The `event` operation accepts only
@@ -420,7 +440,7 @@ exact project candidate before a real desktop side-effect test.
 | Async exec / `write_stdin` | Pending handles retain participation; unknown completion stays pending. Official docs say later stdin does not get a fresh pre-hook. |
 | Disabled/untrusted/modified hooks | Official docs say hooks are skipped; no fail-closed claim. |
 | Missing interpreter, timeout, malformed output, thrown process error | Host can fail open. Python cannot deny when it never runs. Direct adapter catches expected failures, which is a narrower fact. |
-| Stop/Interrupt/SessionEnd | No inferred terminal state or participant retirement; no provider work or deletion. |
+| Stop/Interrupt/SessionEnd | Bounded optional observations; no inferred terminal state or participant retirement, provider work or deletion. |
 
 T12/T13 require actual desktop evidence, not simulated event objects. T15 requires
 real save/get/reconstruction evidence in addition to provider fixtures. Independent
@@ -431,3 +451,44 @@ OS ignore references: GitHub's maintained [macOS](https://github.com/github/giti
 [Linux](https://github.com/github/gitignore/blob/main/Global/Linux.gitignore) templates.
 The selected subset excludes broad installer, shortcut, backup and hidden-file
 patterns. Tests confirm root/nested metadata ignores and product/config eligibility.
+
+
+### Review and provider evidence at the first candidate
+
+The first frozen candidate was `cea8b17b0dc53f6b68aec7090ded5e11dc766bca`.
+Independent test work added 11 tests and found two defects: interrupted recovery
+could overwrite changed bytes when the roadmap disappeared, and optional event
+loss was not counted at the size cap. Both were reproduced and repaired before
+the first commit. Later Standards, Spec and Internal Security reviews found
+checkpoint/provenance archive loss, rebind idempotency, permission diagnostics,
+automatic entry, completion validation, overly broad bootstrap, external-edit
+reconciliation, lifecycle observations, shell options and cleaned-archive reads.
+Author regression tests cover the repairs; final independent disposition belongs
+with the exact final candidate, not this initial report.
+
+A real foreground Linear fixture used an isolated temporary repository, issue
+parent `AGENT-1` resolved by `linear_get_issue` to its immutable UUID, two numbered
+parts and a root index. Independent `linear_get_document` calls returned the same
+structured bytes despite Markdown heading normalization and removal of a trailing
+newline. Save responses were truncated and therefore were not used as read-back.
+The provider returned an issue identifier, not its UUID; the foreground bridge
+retained the explicit get-issue mapping. `updatedAt` differed between save and get,
+so the index used the independent get versions. Fresh reads before cleanup matched.
+Local cleanup and restore preserved the original roadmap SHA-256.
+
+Retained disposable test documents (not the live roadmap or issue completion):
+
+- [Part 1](https://linear.app/ne3ko93/document/disposable-test-evidence-agent-1-snapshot-e2724ca69d3c)
+- [Part 2](https://linear.app/ne3ko93/document/disposable-test-evidence-agent-1-snapshot-eed143b35bd5)
+- [Index](https://linear.app/ne3ko93/document/disposable-test-evidence-agent-1-snapshot-460c0d944e2c)
+
+That fixture deliberately used a 4 KiB raw chunk to exercise multipart save/get;
+it does not measure Linear's maximum document size. The production default is
+64 KiB and the document cap is local. No uncertain-save response or provider
+size rejection was induced on the real service; those retention cases use local
+fixtures and remain explicitly distinct from provider behavior.
+
+A read-only `codex app-server --stdio` hooks-list probe failed before initialization:
+`failed to initialize sqlite state runtime under .../.codex`. The sandbox did not
+grant global state writes. No hook trust was changed, no daemon started, and no
+host callback was observed. This failed probe establishes no desktop gate coverage.

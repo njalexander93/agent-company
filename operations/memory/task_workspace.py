@@ -24,7 +24,7 @@ import sys
 import time
 import uuid
 
-MAX_REQUEST = 48 * 1024 * 1024
+MAX_REQUEST = 96 * 1024 * 1024
 MAX_FILE = 16 * 1024 * 1024
 MAX_EVENTS = 16 * 1024 * 1024
 MAX_ARCHIVE = 32 * 1024 * 1024
@@ -280,6 +280,20 @@ def register(request):
             if local.exists(".repository.json"):
                 require(local.json(".repository.json") == identity, "REPOSITORY_MISMATCH")
             local.put(".repository.json", identity)
+            if request.get("startup") is not None:
+                setup = request["startup"]
+                require(isinstance(setup, dict) and set(setup) == {"issue_id", "issue_uuid", "packet", "coordinator"})
+                issue_id(setup["issue_id"])
+                token(setup["issue_uuid"])
+                key = participant_key(request)
+                require(setup["coordinator"] == key, "NOT_OWNER")
+                validate_packet(setup["packet"])
+                require(all(ref["reader"] == key for ref in setup["packet"]), "SCOPE_MISSING")
+                with local.child(".bindings", True) as bindings:
+                    name = key + ".startup.json"
+                    if bindings.exists(name):
+                        require(bindings.json(name) == setup, "BINDING_CONFLICT")
+                    bindings.put(name, setup)
     return {"ok": True, "code": "REGISTERED", **identity}
 
 
@@ -481,11 +495,17 @@ class Issue:
         state["files"] = manifest(files)
         result.update(ok=True, code=result.get("code", "OK"), revision=state["revision"],
                       repo_id=state["repo_id"], issue_id=self.id)
+        stored_result = result
+        if "parts" in result and "snapshot" in result and request["operation"] == "archive-prepare":
+            stored_result = {k: v for k, v in result.items() if k != "parts"}
+            stored_result["result_ref"] = "export.json"
         state["requests"][sha(request["request_id"].encode())] = {
-            "digest": sha(canonical(request)), "result": result}
+            "digest": sha(canonical(request)), "result": stored_result}
+        require(len(canonical(state)) <= 8 * 1024 * 1024, "ARCHIVE_PENDING")
         tx = {"base": self.state["files"] if self.state else None,
               "directory_identity": self.state.get("directory_identity") if self.state else None,
               "state": state, "writes": {p: encode(b) for p, b in files.items() if old_files.get(p) != b}}
+        require(len(canonical(tx)) <= MAX_REQUEST, "SIZE_LIMIT")
         fault("before-intent")
         self.control.put("transaction.json", tx)
         fault("intent")
@@ -594,6 +614,8 @@ def archive_payload(state, files):
     return {"schema_version": 1, "repo_id": state["repo_id"], "issue_id": state["issue_id"],
             "issue_uuid": state["issue_uuid"], "revision": state["revision"],
             "disposition": state["disposition"], "outcome": state.get("outcome"),
+            "checkpoint": state.get("checkpoint"), "provenance": state.get("provenance", {}),
+            "adoption": state.get("adoption"),
             "seq": state["seq"], "head": state["head"],
             "files": [{"path": p, "size": len(b), "sha256": sha(b), "scope": "coordinator-archive",
                        "data": encode(b)} for p, b in sorted(files.items())]}
@@ -644,7 +666,7 @@ def provider_observation(item, issue_uuid):
 
 
 def verify_provider(state, observations):
-    require(isinstance(observations, list) and 2 <= len(observations) <= 258, "ARCHIVE_PENDING")
+    require(isinstance(observations, list) and 2 <= len(observations) <= 514, "ARCHIVE_PENDING")
     parsed = [provider_observation(x, state["issue_uuid"]) for x in observations]
     roots = [(o, p) for o, p in zip(observations, parsed) if p.get("kind") == "index"]
     require(len(roots) == 1, "ARCHIVE_PENDING")
@@ -764,7 +786,10 @@ def operate(store, issue, request):
             if operation in {"create", "adopt", "attach", "resume", "bind", "restore"} and state["storage"] != "cleaned":
                 store.view(issue.id)
                 store.save_binding(state, key)
-            return previous["result"]
+            result = previous["result"].copy()
+            if result.pop("result_ref", None):
+                result.update(issue.control.json("export.json"))
+            return result
     if operation == "diagnose":
         return {"ok": True, "code": "PRESENT" if state else "ABSENT", "repo_id": store.registration["repo_id"],
                 "issue_id": issue.id, "revision": state["revision"] if state else None,
@@ -807,7 +832,9 @@ def operate(store, issue, request):
         require(not store.task.exists(issue.id), "RECOVERY_REQUIRED")
         state["history"] = state.get("history", []) + [state["tombstone"]]
         state["storage"], state["disposition"] = "present", "active"
-        state["provenance"] = {}
+        state["provenance"] = snapshot.get("provenance", {})
+        state["checkpoint"] = snapshot.get("checkpoint")
+        state["adoption"] = snapshot.get("adoption")
         state["generation"] += 1
         for participant in state["participants"].values():
             participant.update(status="detached", ack=None, generation=participant["generation"] + 1)
@@ -825,7 +852,23 @@ def operate(store, issue, request):
         store.view(issue.id)
         store.save_binding(issue.state, key)
         return result
+    if operation == "reconcile-files":
+        authorize(state, request, coordinator=True)
+        expected(state, request)
+        evidence(request.get("evidence"))
+        with store.task.child(issue.id, private=False) as payload:
+            require(payload.identity == state["directory_identity"], "UNSAFE_PATH")
+            observed = inventory(payload)
+        require(manifest(observed) == request.get("inventory"), "UNTRACKED_CHANGE")
+        require(set(observed) == set(state["files"]) and
+                sha(observed["events.jsonl"]) == state["files"]["events.jsonl"], "INTEGRITY_ERROR")
+        # Explicit reconciliation imports inspected Markdown only, never arbitrary events.
+        issue.state = copy.deepcopy(state)
+        issue.state["files"] = manifest(observed)
+        state["reconciliation"] = {"previous": state["files"], "evidence": request["evidence"]}
+        return issue.commit(state, observed, request, {}, "reconciliation")
     files = issue.files()
+    store.view(issue.id)
     if operation in {"create", "attach", "resume", "bind"}:
         result = attach(state, request)
         result = issue.commit(state, files, request, result, "attach")
@@ -907,6 +950,17 @@ def operate(store, issue, request):
             require(set(request.get("completion", {})) == {"human_acceptance", "merge", "obligations"}, "EVIDENCE_REQUIRED")
             for refs in request["completion"].values():
                 evidence(refs)
+                for ref in refs:
+                    path = Path(ref["locator"])
+                    require(path.is_absolute(), "EVIDENCE_REQUIRED")
+                    with Directory.absolute(path.parent) as source:
+                        require(sha(source.read(path.name, MAX_FILE)) == ref["sha256"], "SOURCE_STALE")
+            provider = request.get("provider_status", {})
+            require(set(provider) == {"origin", "issue_uuid", "status_type", "completed_at", "request_id"}, "EVIDENCE_REQUIRED")
+            require(provider["origin"] == "linear_get_issue" and provider["issue_uuid"] == state["issue_uuid"]
+                    and provider["status_type"] == "completed" and provider["completed_at"], "EVIDENCE_REQUIRED")
+            token(provider["request_id"])
+            state["provider_completion"] = provider
         if disposition == "failed":
             require(request.get("abandoned") is True, "EVIDENCE_REQUIRED")
         state["disposition"] = disposition
@@ -1062,8 +1116,14 @@ def rebind(store, request):
         require(not member["pending"], "PENDING_OPERATION")
         require(key != old_state["coordinator"] or all(k == key or p["status"] == "detached"
                 for k, p in old_state["participants"].items()), "PENDING_OPERATION")
-        target_request = {**request, "operation": "attach", "issue_id": new_id,
+        target_request = {**request, "operation": "rebind", "issue_id": new_id, "old_issue_id": old_id,
                           "binding_generation": request.get("new_binding_generation")}
+        previous = new_state_value["requests"].get(sha(request["request_id"].encode()))
+        if previous:
+            require(previous["digest"] == sha(canonical(target_request)), "REQUEST_CONFLICT")
+            store.view(new_id)
+            store.save_binding(new.state, key)
+            return previous["result"]
         result = attach(new_state_value, target_request)
         member.update(status="detached", ack=None)
         if member != old.state["participants"][key]:
@@ -1092,6 +1152,28 @@ def collect_candidates(store, request):
         require(cleanup.get("session_id") != request["session_id"], "BINDING_CONFLICT")
         results.append({"issue_id": identifier, **execute(cleanup)})
     return results
+
+
+
+def permission_paths(request):
+    root = Path(request.get("worktree", "/"))
+    main = request.get("main_worktree")
+    if main is None:
+        try:
+            with Directory.absolute(root) as directory, directory.child(".task") as local:
+                main = local.json(".repository.json")["main"]
+        except (OSError, WorkspaceError, KeyError):
+            pass
+    paths = [str(root / ".task/.repository.json"), str(root / ".task/.bindings")]
+    if main:
+        store = Path(main) / ".task"
+        paths.append(str(store / ".control/repository.json"))
+        identifier = request.get("issue_id")
+        if isinstance(identifier, str) and ISSUE.fullmatch(identifier):
+            paths.extend([str(store / identifier), str(store / ".control/issues" / identifier)])
+        elif request.get("operation") == "register":
+            paths.extend([str(store), str(store / ".control")])
+    return paths
 
 
 def execute(request):
@@ -1127,8 +1209,11 @@ def execute(request):
             return result
     except WorkspaceError as error:
         return {"ok": False, "code": error.code, "action": error.action}
-    except PermissionError:
-        return {"ok": False, "code": "PERMISSION_REQUIRED", "action": "Grant narrow access to the registered issue/control directories and local binding paths."}
+    except PermissionError as error:
+        paths = permission_paths(request)
+        return {"ok": False, "code": "PERMISSION_REQUIRED", "paths": paths,
+                "operation": request.get("operation"),
+                "action": "Grant only the listed issue/control and binding paths, then retry this operation."}
     except (OSError, subprocess.SubprocessError):
         return {"ok": False, "code": "RECOVERY_REQUIRED", "action": "Inspect filesystem identity and unfinished transactions; retain all data."}
     except (KeyError, TypeError, ValueError, UnicodeError, AttributeError):

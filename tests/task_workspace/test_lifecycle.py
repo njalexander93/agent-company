@@ -261,16 +261,19 @@ class LifecycleTests(Fixture):
     def test_T14_real_adapter_bootstrap_argument_gate(self):
         event = {'hook_event_name': 'UserPromptSubmit', 'cwd': str(self.root), 'session_id': 'coordinator', 'prompt': 'Task: TEST-1'}
         hook.handle(event)
-        request = self.req('create')
+        request = self.req('diagnose', repo_id=None, issue_id=None, issue_uuid=None, coordinator=None)
         command = shlex.join([hook.PYTHON, str(hook.LIFECYCLE), '--request-json', json.dumps(request)])
-        event.update(hook_event_name='PreToolUse', tool_name='Bash', tool_use_id='test', tool_input={'command': command, 'login': False})
+        event.update(hook_event_name='PreToolUse', tool_name='Bash', tool_use_id='test', tool_input={'command': command, 'login': False, 'shell': '/bin/sh'})
         self.assertEqual(hook.handle(event), {})
         result = subprocess.run(command, shell=True, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         for bad in [command + '; touch sentinel', 'env ' + command, command + ' > output', command + ' && true', command.replace('/usr/bin/python3', 'python3', 1)]:
             event['tool_input']['command'] = bad
             self.assertFalse(hook.bootstrap(event))
-        self.assertNotIn('permissionDecision":"allow', json.dumps(hook.handle(event)))
+        denied = subprocess.run([sys.executable, str(ROOT / 'adapters/openai/task_workspace_hook.py')],
+                                input=json.dumps(event), capture_output=True, text=True)
+        self.assertEqual(denied.returncode, 0)
+        self.assertEqual(json.loads(denied.stdout)['hookSpecificOutput']['permissionDecision'], 'deny')
 
     def test_T16_ignore_patterns_keep_products(self):
         (self.root / '.gitignore').write_bytes((ROOT / '.gitignore').read_bytes())

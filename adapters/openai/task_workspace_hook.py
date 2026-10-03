@@ -14,9 +14,18 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 from operations.memory import task_workspace as core
 
-BOOTSTRAP = {"diagnose", "register", "create", "adopt", "bind", "attach", "resume", "scope",
-             "read", "acknowledge", "restore", "archive-prepare", "archive-index", "archive-verify",
-             "cleanup-plan", "cleanup-commit", "reopen", "detach", "rebind", "archive-observe-save"}
+BOOTSTRAP_FIELDS = {
+    "diagnose": set(), "register": {"main_worktree", "startup"},
+    "bind": set(), "adopt": {"coordinator", "inventory", "owners", "evidence"},
+    "resume": set(), "restore": {"observations"},
+    "read": set(), "acknowledge": {"packet_digest"},
+    "archive-index": {"observations"}, "archive-verify": {"observations"},
+    "archive-observe-save": {"document_id", "content_digest"},
+    "cleanup-plan": set(), "cleanup-commit": {"observations", "cleanup_challenge"},
+    "reopen": {"evidence"},
+}
+COMMON_FIELDS = {"schema_version", "operation", "request_id", "worktree", "host", "session_id",
+                 "repo_id", "issue_id", "issue_uuid", "binding_generation", "expected_revision"}
 LIFECYCLE = ROOT / "operations/memory/task_workspace.py"
 PYTHON = "/usr/bin/python3"
 
@@ -42,7 +51,7 @@ def request_for(event, operation):
     return request
 
 
-def bootstrap(event):
+def bootstrap(event, ready=False):
     """Require the exact shell spelling produced by shlex.join: no wrappers/redirection.
 
     JSON is a single shell-quoted argument. Matching the canonical serialization
@@ -52,7 +61,10 @@ def bootstrap(event):
     if event.get("tool_name") not in {"Bash", "exec_command"}:
         return False
     args = event.get("tool_input", {})
-    if not isinstance(args, dict) or args.get("tty") or args.get("login") is True:
+    if (not isinstance(args, dict) or args.get("tty") or args.get("login") is not False
+            or args.get("shell") != "/bin/sh" or not set(args) <= {
+                "command", "cmd", "login", "shell", "workdir", "yield_time_ms", "max_output_tokens",
+                "sandbox_permissions", "justification", "prefix_rule"}):
         return False
     command = args.get("command", args.get("cmd"))
     if not isinstance(command, str) or len(command.encode()) > 65536:
@@ -64,7 +76,11 @@ def bootstrap(event):
         if command != shlex.join(argv):
             return False
         request = core.strict_json(argv[3])
-        if not isinstance(request, dict) or request.get("operation") not in BOOTSTRAP:
+        if not isinstance(request, dict):
+            return False
+        operation = request.get("operation")
+        if not ready and (operation not in BOOTSTRAP_FIELDS or
+                          not set(request) <= COMMON_FIELDS | BOOTSTRAP_FIELDS[operation]):
             return False
         if request.get("session_id") != event["session_id"] or request.get("host", "codex") != "codex":
             return False
@@ -72,7 +88,7 @@ def bootstrap(event):
             return False
         if request["operation"] in {"register", "diagnose"}:
             return set(request) <= {"schema_version", "operation", "request_id", "worktree", "host",
-                                    "session_id", "main_worktree"}
+                                    "session_id", "main_worktree", "startup"}
         with core.Directory.absolute(core.repository(event["cwd"])[0]) as root, root.child(".task") as local:
             with local.child(".bindings") as bindings:
                 assignment = bindings.json(core.participant_key(request) + ".assignment.json")
@@ -92,7 +108,8 @@ def provider_gate(event):
         issue.recover()
         state = issue.state
         core.authorize(state, request, coordinator=True, maintenance=True)
-        issue.files()
+        if state["storage"] != "cleaned":
+            issue.files()
         args = event.get("tool_input", {})
         if tool.endswith("linear_get_document"):
             identifiers = {x["id"] for x in state.get("provider_saves", {}).values() if x.get("id")}
@@ -100,6 +117,8 @@ def provider_gate(event):
                 identifiers.add(state["archive"]["root"]["id"])
                 identifiers.update(x["id"] for x in state["archive"]["parts"])
             return set(args) == {"id"} and args["id"] in identifiers
+        if state["storage"] == "cleaned":
+            return False
         export = control.json("export.json")
         documents = export["parts"] + ([state["index_request"]] if state.get("index_request") else [])
         if args not in documents:
@@ -107,6 +126,39 @@ def provider_gate(event):
         digest = core.sha(args["content"].encode())
     result = core.execute({**request, "operation": "archive-save-start", "content_digest": digest})
     return result["ok"]
+
+
+
+def automatic_attach(event, identifier):
+    base = {"schema_version": 1, "request_id": "startup:" + event["session_id"],
+            "operation": "diagnose", "worktree": event["cwd"], "host": "codex", "session_id": event["session_id"]}
+    diagnosis = core.execute(base)
+    if diagnosis.get("code") != "REGISTERED":
+        return
+    base.update(repo_id=diagnosis["repo_id"], issue_id=identifier)
+    with core.Store(base) as store:
+        binding = store.binding()
+        if binding:
+            core.require(binding["issue_id"] == identifier, "BINDING_CONFLICT")
+            return
+        key = core.participant_key(base)
+        filename = key + ".startup.json"
+        setup = store.bindings.json(filename) if store.bindings.exists(filename) else None
+    if setup:
+        core.require(setup["issue_id"] == identifier, "BINDING_CONFLICT")
+        result = core.execute({**base, "operation": "create", "coordinator": setup["coordinator"],
+                               "issue_uuid": setup["issue_uuid"]})
+        core.require(result["ok"], result["code"])
+        result = core.execute({**base, "operation": "scope", "request_id": base["request_id"] + ":scope",
+                               "binding_generation": result["binding_generation"],
+                               "expected_revision": result["revision"], "target_participant": key,
+                               "packet": setup["packet"]})
+        core.require(result["ok"], result["code"])
+    else:
+        # Existing coordinator assignment in shared state is required for a new join.
+        result = core.execute({**base, "operation": "attach"})
+        if not result["ok"] and result["code"] not in {"BINDING_MISSING", "SCOPE_MISSING"}:
+            raise core.WorkspaceError(result["code"])
 
 
 def prompt(event):
@@ -125,8 +177,9 @@ def prompt(event):
             if bindings.exists(name) and bindings.json(name)["issue_id"] != identifier:
                 return {"decision": "block", "reason": "BINDING_CONFLICT: Explicit rebind is required."}
         bindings.put(key + ".assignment.json", {"issue_id": identifier})
+    automatic_attach(event, identifier)
     return {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext":
-            "Task identity recorded. Use the reviewed lifecycle command to register, attach, read and acknowledge the assigned packet before task tools."}}
+            "Task identity recorded. Explicitly assigned workspace setup was attempted. Read and acknowledge the permitted packet before task tools; use the lifecycle diagnostic route if setup is missing."}}
 
 
 def handle(event):
@@ -152,6 +205,8 @@ def handle(event):
         result = core.execute(request)
         if not result["ok"]:
             return denial(result["code"])
+        if bootstrap(event, ready=True):
+            return {}  # Local lifecycle owns its transaction; don't count itself as pending external work.
         result = core.execute({**request, "operation": "tool-start", "request_id": "pre:" + event["tool_use_id"],
                                "tool_id": event["tool_use_id"]})
         return {} if result["ok"] else denial(result["code"])
@@ -189,7 +244,13 @@ def handle(event):
             return {"hookSpecificOutput": {"hookEventName": name, "additionalContext":
                     "Task workspace is unbound. Supply one Task: ISSUE-ID line and use the lifecycle bootstrap route."}}
         return {"continue": False, "stopReason": "TASK_WORKSPACE_NOT_READY: " + result["code"]}
-    # Stop/Interrupt/SessionEnd do not imply completion, retirement, or cleanup.
+    if name in {"Stop", "Interrupt", "SessionEnd", "SubagentStop"}:
+        try:
+            request = request_for(event, "event")
+            core.execute({**request, "event_type": "observation", "event": {
+                "code": "INTERRUPTED" if name == "Interrupt" else "UNKNOWN"}})
+        except (core.WorkspaceError, OSError):
+            pass  # Optional observations cannot establish completion or retirement.
     return {}
 
 
