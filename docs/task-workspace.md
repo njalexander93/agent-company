@@ -1,6 +1,6 @@
 # Task-workspace contract
 
-**Status: Step 2 implementation contract; no implementation or desktop enforcement claim.**
+**Status: Step 3 implementation candidate. Local behavior tests and foreground provider verification are in progress. Desktop trust/coverage and exact-candidate assurance remain acceptance gates.**
 
 AGENT-1 adds a local workflow guardrail: automatic issue workspace creation, attachment and readiness checks on supported Codex paths. Step 3 implements and tests this contract. It does not implement the Control Plane, authenticated Role authority, complete confidentiality, the paper reference checker or the full launcher.
 
@@ -54,9 +54,9 @@ Existing manually shared workspaces, including AGENT-1, require `adopt`, not `cr
 
 ## Core interface and state
 
-Implement `operations/memory/task_workspace.py` with a Python standard-library API and matching command interface. The reusable entry point is `execute(request: dict) -> dict`; CLI reads one bounded UTF-8 JSON object from stdin and emits one JSON object to stdout. Host-specific input never enters the core unchanged. Command names below are operations in the request, not shell fragments.
+Implement `operations/memory/task_workspace.py` with a Python standard-library API and matching command interface. The reusable entry point is `execute(request: dict) -> dict`; CLI reads one bounded UTF-8 JSON object from stdin, or accepts exactly one `--request-json` argument, and emits one JSON object to stdout. The argument route makes bootstrap callable without shell redirection. Host-specific input never enters the core unchanged. Command names below are operations in the request, not shell fragments.
 
-Every request has `schema_version: 1`, `operation`, `request_id`, `repo_id`, and applicable `issue_id`, `participant_id`, `binding_generation`, `expected_revision` and operation arguments. IDs are opaque bounded strings except validated issue IDs; filesystem names derived from session IDs use SHA-256, never raw host identifiers. Persist idempotency by request ID plus canonical request digest. Same ID/same request returns the prior result; same ID/different request is rejected. Do not record arbitrary raw request bodies.
+Every request has `schema_version: 1`, `operation`, `request_id` and explicit `worktree`. **Bootstrap exception:** `register` takes `main_worktree` and no `repo_id`; it creates or validates registration and returns the acquired `repo_id`. A pre-registration `diagnose` omits `repo_id` and returns `REGISTRATION_REQUIRED` or the stored identity. Every issue operation then supplies `repo_id`, `host`, `session_id`, and applicable `issue_id`, `participant_id`, `binding_generation`, `expected_revision` and operation arguments. IDs are opaque bounded strings except validated issue IDs; filesystem names derived from session IDs use SHA-256, never raw host identifiers. Persist idempotency by request ID plus canonical request digest. Same ID/same request returns the prior result; same ID/different request is rejected. Do not record arbitrary raw request bodies.
 
 Responses contain `ok`, `code`, identifiers, current `revision`, `binding_generation`, allowed reference descriptors and a bounded diagnostic/recovery action. No private note body is returned by status/diagnostic operations. Suggested CLI exits: `0` success, `2` invalid input, `3` conflict/not-ready, `4` I/O/provider/recovery failure. These exits are **not** the Codex hook wire protocol.
 
@@ -270,3 +270,164 @@ Human-reviewed PR into main remains mandatory. Remote protections are unverified
 - **H1:** [Official OpenAI Hooks documentation](https://learn.chatgpt.com/docs/hooks), fetched 2026-10-03: trust/configuration, tool coverage, common/event inputs/outputs, MCP hooks and failure limitations.
 - **E1:** Step 2 handoff in canonical `.task/AGENT-1/context/step-02.md`: exact branch/commit, installed-host probe outputs/digests, connector observations and unresolved acceptance checks. This temporary evidence is not a durable final issue archive.
 - **L1/LM, SPEC, V0/V2/V6/V8–V11, RC-09:** [baseline source register](baseline.md), including retained Step 1 archive identities. Supporting sources remain in the shared vault; this document does not duplicate their authority.
+
+
+## Candidate usage and measured capabilities
+
+Run `python3 -m unittest discover -s tests/task_workspace -v` from the repository
+root. Tests create temporary non-bare repositories and linked worktrees. They do
+not clean or adopt this active issue. Python's standard library is the only
+runtime dependency. The first platform remains macOS/POSIX (`fcntl` and directory
+file descriptors); Windows ignore rules do not imply a Windows runtime port.
+
+### Explicit setup and bootstrap
+
+1. Call `register` with the caller `worktree` and its explicit Git main worktree.
+   Use its returned repository UUID on subsequent requests. Registration checks
+   common-Git identity and worktree membership. A copied registration in a foreign
+   clone is rejected. Registration never scans or adopts task notes.
+2. Name the foreground `host` and `session_id`. The participant key is SHA-256 of
+   canonical JSON `[host, session_id]`; `participant_key(request)` computes it.
+   `create` explicitly sets `coordinator` to this key and supplies `issue_uuid`.
+   Existing manual data requires `adopt`, exact `inventory` hashes, an `owners`
+   map for every Markdown file and `evidence`. It preserves existing bytes and
+   records only the actual adoption event.
+3. A coordinator installs a packet using `scope`, `target_participant`, `packet`
+   and optional `owned_paths`. Each packet entry has `id`, `locator`, `sha256`,
+   `required`, `authority`, `reason`, `stage`, and `reader`. `reader` is the exact
+   participant key. A locator is a safe payload path or an explicit absolute
+   source path. Every required file is checked again by `ready`.
+4. Use `read`, then `acknowledge` with its exact `packet_digest`. This establishes
+   delivery facts only. The next covered tool checks readiness. Scope replacement
+   invalidates acknowledgment even if the packet text happens to be unchanged.
+5. Updates require the returned `binding_generation`, current `expected_revision`,
+   `path`, `old_digest`, UTF-8 `content`, and `provenance` containing `sources`,
+   `applicability`, and `status`. Evidence lists use `id`, `locator`, `sha256`.
+   No source path or digest is treated as human approval by itself.
+
+For a bootstrap command, construct the exact argument vector below with
+`shlex.join`; pass it directly to Bash/unified exec with login mode disabled.
+The adapter compares that canonical shell spelling and checks the embedded
+worktree, session and issue. Shell wrappers, redirection, additional commands,
+substitution and alternate interpreters are rejected.
+
+```python
+argv = ["/usr/bin/python3", absolute_core_path, "--request-json", json.dumps(request)]
+command = shlex.join(argv)
+```
+
+The startup prompt accepts exactly one standalone `Task: ISSUE-ID` line. It
+records only that identity. A packet/coordinator assignment is still explicit;
+no startup callback infers one from a chat title or grants coordinator ownership.
+The candidate direct hook path therefore has **manual explicit first setup**;
+automatic first creation/assignment and verified desktop reattachment are not
+accepted merely because this command route works. The foreground-session fallback
+uses the same explicit bindings and packet checks; no full launcher is shipped.
+Native child scope is not accepted. Covered native spawning is denied by the
+adapter until an unambiguous child-to-tool identity is demonstrated.
+
+`rebind` takes the old issue/generation, `new_issue_id`, optional
+`new_binding_generation`, and evidence. The target must already exist with an
+explicit assignment. It locks both issues in lexical order, fences old work and
+preserves the old payload. Pending operations block it. It does not create a
+new assignment or transfer coordinator ownership implicitly.
+
+### Transactions, events and collection
+
+The candidate uses one recoverable intent per payload mutation. It flushes intent,
+rolls forward only files matching an old or intended digest, publishes state, and
+removes the intent. A retry with the same request ID and identical request returns
+the committed result. A changed request with the same ID conflicts. Unknown
+changes stop recovery. Initial creation is not ready until its complete state and
+required event have committed, even if a crash leaves partial files visible.
+
+Event bodies are fixed lifecycle facts. The `event` operation accepts only
+`check`, `tool-start`, `tool-complete`, or `observation`, and an optional typed
+`code` (`OK`, `FAILED`, `UNKNOWN`, `INTERRUPTED`); it rejects free-form summaries.
+Only `observation` is optional. Near the 16 MiB cap it is suppressed with an
+aggregate counter. Required writes return `ARCHIVE_PENDING` when the cap would
+be exceeded. Archived-segment rollover is **not implemented**; preserve the store
+and resolve this capacity gate before further required writes.
+
+An interrupted tail can be quarantined only when removing it reproduces the
+exact committed manifest; a changed committed prefix is never truncated.
+Supported API writes atomically replace the complete event file under the issue
+lock, so required-event recovery uses the same transaction as payload changes.
+The stream and archive remain coordinator-only unless explicitly in a packet.
+Same-user physical file access remains outside this cooperative scope boundary.
+
+`cleanup_candidates` on a new `create` is an explicit list of complete cleanup
+requests for separately bound maintenance sessions. Each requires fresh provider
+observations for its own cleanup challenge. No directory scan, age cutoff, global
+sweep or automatic network request occurs. Inaccessible/ineligible candidates
+return retention diagnostics while the new issue remains created.
+
+### Foreground archive bridge
+
+`archive-prepare` freezes the post-event snapshot. `seal:true` retires payload
+participation only for an evidenced terminal issue with no other live participants
+or pending operations. It returns immutable numbered `parts` with exact `issue`,
+`title` and `content` arguments for the foreground Linear connector. Each part has
+a readable history fragment plus reconstructable bytes. The default raw chunk is
+64 KiB. The 256 KiB document and 32 MiB structured archive caps are **local bounds**,
+not measured Linear service limits.
+
+1. Save each exact part through the foreground connector. The covered adapter
+   records a save attempt before allowing it. An uncertain save cannot be blindly
+   retried. Locate/read the matching issue document through the foreground recovery
+   route; ambiguous duplicates retain data.
+2. Register the returned ID with `archive-observe-save` using `document_id` and
+   `content_digest` (SHA-256 of the exact requested Markdown). This enables only
+   that document's direct `linear_get_document` through the maintenance gate.
+3. Pass independent get results to `archive-index` as `observations`. Each contains
+   `id`, `url`, immutable parent `issue` UUID, `updatedAt`, `content`,
+   `origin: linear_get_document`, and the bridge's `request_id`. When Linear returns
+   only an issue identifier, resolve it through an actual issue read and retain
+   that mapping as evidence. Do not fabricate a UUID from the identifier.
+4. Save/get the returned index, then pass the index and every part to
+   `archive-verify`. Decoded bytes, ordered part identities, versions, event chain,
+   repository/issue and current local revision must all match. Normalized Markdown
+   outside the structured JSON is permitted. Imported foreground observations are
+   attributable local evidence, not cryptographically authenticated provider facts.
+5. `cleanup-plan` returns a new `cleanup_challenge`. Perform new get calls for the
+   index and all parts. Set those observations' `request_id` to that challenge.
+   `cleanup-commit` requires them, unchanged provider versions and local bytes,
+   terminal evidence, and no live/unknown participant or operation.
+6. After cleanup, get the same verified documents and use `restore`. The matching
+   tombstone is mandatory. Restore preserves historical outcome evidence, appends
+   a new generation and reopens explicitly. Missing or corrupt archives never
+   produce an empty successful workspace.
+
+Cleanup prunes export bodies and old idempotency response bodies from control
+state. The manifest, archive locator/version, ownership, participant fencing and
+tombstone survive. Cleanup recovery resumes only the exact verified quarantine
+intent. It never recursively removes the task root.
+
+### Host acceptance status
+
+The adapter's direct subprocess tests exercise the actual JSON wire entry point
+and strict CLI gate. They do **not** establish that the desktop loaded or trusted
+these hooks. `.codex/hooks.json` is a synchronous project candidate; no global hook
+settings or hook-trust bypass is used. Review/trust is still required for the
+exact project candidate before a real desktop side-effect test.
+
+| Surface | Current evidence / limitation |
+| --- | --- |
+| Core and direct adapter | Temporary-repository tests cover sharing, fencing, source scopes, recovery, provider fixtures, retention and bootstrap denial. |
+| Bash/patch/MCP/local functions | Adapter emits documented explicit PreToolUse denial. Installed desktop callback delivery remains unverified. |
+| Native children/task tools | No verified child-to-tool identity; covered spawning is denied. This does not prove uncovered paths are stopped. |
+| Nested code-mode tools | No installed desktop trace. Concealed provider arguments do not receive archive exceptions. |
+| Async exec / `write_stdin` | Pending handles retain participation; unknown completion stays pending. Official docs say later stdin does not get a fresh pre-hook. |
+| Disabled/untrusted/modified hooks | Official docs say hooks are skipped; no fail-closed claim. |
+| Missing interpreter, timeout, malformed output, thrown process error | Host can fail open. Python cannot deny when it never runs. Direct adapter catches expected failures, which is a narrower fact. |
+| Stop/Interrupt/SessionEnd | No inferred terminal state or participant retirement; no provider work or deletion. |
+
+T12/T13 require actual desktop evidence, not simulated event objects. T15 requires
+real save/get/reconstruction evidence in addition to provider fixtures. Independent
+security review and exact-candidate human acceptance remain separate gates.
+
+OS ignore references: GitHub's maintained [macOS](https://github.com/github/gitignore/blob/main/Global/macOS.gitignore),
+[Windows](https://github.com/github/gitignore/blob/main/Global/Windows.gitignore), and
+[Linux](https://github.com/github/gitignore/blob/main/Global/Linux.gitignore) templates.
+The selected subset excludes broad installer, shortcut, backup and hidden-file
+patterns. Tests confirm root/nested metadata ignores and product/config eligibility.

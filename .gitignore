@@ -1,0 +1,24 @@
+# Local issue data; reusable assets live outside this directory.
+/.task/
+
+# Narrow OS metadata patterns from github/gitignore Global templates.
+.DS_Store
+.localized
+.AppleDouble
+.LSOverride
+._*
+__MACOSX/
+.Spotlight-V100/
+.Trashes/
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+[Dd]esktop.ini
+$RECYCLE.BIN/
+.Trash-*/
+.nfs*
+
+# Python runtime cache.
+__pycache__/
+*.py[cod]
