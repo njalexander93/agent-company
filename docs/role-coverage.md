@@ -4,15 +4,25 @@
 
 ## Reading the record
 
-- **G — governance change:** internal/local paper revision to one Role's evidence or permitted context through an existing supported mechanism. Fixture path `docs/fixtures/governance-change.md` is pending Step 8.
-- **T — tooling change:** internal/local paper specification of a read-only missing/broken Role/Profile reference check in an agent-loading workflow. Fixture path `docs/fixtures/tooling-change.md` is pending Step 8. No checker is implemented by this fixture.
-- **Required:** the selected path must account for this responsibility or its required input/output. This does not claim an agent has executed it. Existing accepted Initiative/Epic context can supply parent planning inputs without reopening those plans.
+- **G — governance change, G-1:** [internal Company Issue Delivery Manager completion-evidence table](fixtures/governance-change.md#selected-hypothetical-delta), using existing candidate-contract authorship. Prose-only: no technical change or runtime-behavior claim.
+- **T — tooling change, T-1:** [local internal-use read-only reference-check specification](fixtures/tooling-change.md#hypothetical-baseline-and-candidate-identities). Independent behavioral-test specification, Platform Artifact review and Internal Security are required; no checker or tests are implemented/run by this fixture.
+- **Required:** the selected path must account for this responsibility or its required input/output. This does not claim an agent has executed it. LM supplies retained milestone/parent context; separately approved execution-plan and decision records remain missing as detailed below. A new parent planning lane is conditional on a material amendment.
 - **Conditional:** participation is required if the stated trigger occurs. A pending applicability decision is not a pass. Resolve it before taking the affected route; if an applicable specialist/input is unavailable, stop that route.
 - **Outside:** no action is selected for this fixture's stated scope. This does not remove a POC obligation. Scope expansion requires revised coverage and estimates before claiming coverage.
 
 The two fixtures share correction, authority-conflict and missing/stale-input variations; they are not additional fixtures. **Workspace automation is separate implemented scope** with its own applicable tooling, test, code and security coverage in [the task-workspace contract](task-workspace.md). It is not a third paper fixture or proof of runtime Role execution. Shipped framework behavior still triggers Product Security, and exposed surfaces trigger External Security. [LM, Four paper cases; L1, Context and Readiness; L5, Supporting participation.](#sources)
 
 **Entry convention:** Each numbered entry records kind/parent, source, separate G/T participation, bounded responsibility, artifact → next destination, and definition gap/owner/action. Team links give organizational placement; they confer no line or approval authority. All entries inherit the stop and readiness rules below. “Draft pending” means the current starter pack has no completed definition; it does not mean the accepted Role contract is missing.
+
+## Selected context and applicability
+
+**Parent context actually retrieved:** LM / `53a7ef20-3c03-4192-a8f3-8eee893d159c`, “Milestone 1 — Usable organization and governance draft,” updated `2026-10-03T13:52:28.908Z`, retained SHA-256 `656396181424a4739d9ea863068b01908685c89210ac0995a6e0286750f0356a`. Its opening parent links identify Organization and Governance Foundation within Agent Company POC; its Four paper cases govern these selected fixtures. This is context at LM's retained revision, not a separately approved product Project/Epic contract. See each fixture's [G starting inputs](fixtures/governance-change.md#real-governing-context-and-starting-inputs) / [T starting inputs](fixtures/tooling-change.md#real-governing-context-and-starting-inputs) and the [baseline retrieval route](baseline.md#source-authority-and-retrieval).
+
+**Execution inputs not supplied:** separately versioned approved Initiative roadmap/Epic plan, their exact human authorization decisions and a Wave Admission Record. Product Planning must retrieve applicable exact records and Human Leadership decisions before actual plan authorization/admission; stop that transition until supplied. No execution-plan approval, human start or Wave admission is inferred from LM. This gap does not block bounded paper drafting or the fresh-author trial.
+
+Selected supporting dispositions are in [G-1 applicability](fixtures/governance-change.md#applicability-and-owned-open-work) and [T-1 applicability](fixtures/tooling-change.md#applicability-and-owned-open-work). Entries below adopt those **paper expectations**, not AGENT-5 acceptance. Neither fixture selects Leadership Advisor advice, Triager diagnostic triage or Software Architect proposals. Both exclude setup/migration, a research Spike, product implementation, infrastructure and deployment. AGENT-5 still owns confirming supporting participation and resolving bounded inputs/destinations before any triggered use.
+
+Use the [shared format](definition-format.md#completeness-and-gaps) to distinguish untriggered conditions from missing required inputs. “Conditional — not triggered” below preserves the expansion rule while recording why it does not apply to G-1/T-1. It is not a completed specialist assignment.
 
 ## Canonical Role inventory
 
@@ -30,14 +40,14 @@ Staff placement is directly beneath Human Leadership, not a Department or Team. 
 #### 02. Leadership Advisor
 
 - **Kind/parent:** Role; Company-level staff. **Source:** [V1, Accepted POC hierarchy; L5, Supporting participation.](#sources)
-- **Participation:** G: Conditional — human-requested staff advice; exact involvement pending AGENT-5. T: Conditional — same pending involvement.
+- **Participation:** G: Conditional — not triggered; no human-requested staff advice selected. T: Conditional — same untriggered condition. Human-requested advice triggers an AGENT-5-resolved bounded assignment; see selected supporting dispositions above.
 - **Responsibility / handoff:** Staff advice without line or final decision authority; detailed assignment is not settled by the high-level map. If requested, bounded advice → Human Leadership; exact input/output contract must be resolved before use.
 - **Definition / gap / next action:** Supporting reference only. AGENT-5 resolves applicability from governing staff contract; missing required authority goes to Human Leadership, not an invented advisory mandate.
 
 #### 03. Agent Governance Officer
 
 - **Kind/parent:** Role; Company-level staff. **Source:** [V7, Human Leadership requirement and correction; Accepted placement and operating relationship; Tooling Engineer boundary; L5, Governance boundary.](#sources)
-- **Participation:** G: Required — candidate governance authorship. T: Conditional — checker proposal also needs a declarative governance change; none presumed.
+- **Participation:** G: Required — candidate governance authorship. T: Conditional — not triggered in T-1; no declarative Role/Profile, permission or context change. Such a change triggers separately scoped AGO authorship; synthetic reference stubs are test data, not governance candidates.
 - **Responsibility / handoff:** Author scoped candidate governance from human-set requirements; cannot edit active authority governing its lane, self-approve or activate. Versioned candidate → independent Code Reviewer (Agent Capability Artifact) and applicable Security review, then exact human decision/publication and separate trusted activation boundary. New technical behavior → separately scoped Tooling Engineer.
 - **Definition / gap / next action:** AGENT-1 Steps 9–10 produce/review the one example; AGENT-5 reuses it. Canonical path and revision status below. No prewritten example or duplicate definition.
 
@@ -48,16 +58,16 @@ Parent: [Product Management Department → Product Planning Team](team-map.md#pr
 #### 04. Initiative Planner
 
 - **Kind/parent:** Role; Product Planning Team. **Source:** [V1, Product Planning Team; L2, Scope and Acceptance Evidence; LM, Four paper cases.](#sources)
-- **Participation:** G: Required input — accepted Initiative context; new lane conditional on material Initiative amendment. T: Required input — same rule.
+- **Participation:** G: Required input — LM parent context above; separately approved Initiative roadmap/decisions not supplied. T: Required input — same gap. A new Initiative planning lane is conditional on a material parent amendment.
 - **Responsibility / handoff:** Coordinate Initiative proposal across Epics in one product Project; no self-authorization. Identified parent outcome/roadmap or amendment → independent Plan Reviewer and Human Leadership; approved context → Epic/Issue planning.
-- **Definition / gap / next action:** Draft pending, AGENT-2. Define planning inputs, outputs and correction/escalation routes; Step 8 identifies existing parent revision. No new Initiative is invented.
+- **Definition / gap / next action:** Draft pending, AGENT-2. Define planning inputs, outputs and correction/escalation routes. Use LM's exact retained context above; Product Planning/Human Leadership must supply missing exact execution-plan/decision/admission records before their transition. No new Initiative is invented.
 
 #### 05. Epic Planner
 
 - **Kind/parent:** Role; Product Planning Team. **Source:** [V0, Current interpretation; V1, Product Planning Team; L2, Scope.](#sources)
-- **Participation:** G: Required input — accepted Epic/Milestone context; new lane conditional on material amendment. T: Required input — same rule.
+- **Participation:** G: Required input — LM milestone/parent context above; separately approved Epic plan/decisions not supplied. T: Required input — same gap. A new Epic planning lane is conditional on a material parent amendment.
 - **Responsibility / handoff:** Decompose Epic into Milestones; current canonical name replaces Project Planner. Wave proposal selection belongs to deterministic Controller. Epic/Milestone proposal or amendment → independent Plan Reviewer and Human Leadership; approved context → Issue Planner.
-- **Definition / gap / next action:** Draft pending, AGENT-2; Step 8 pins parent revision. No Project Planner or Wave Planner added.
+- **Definition / gap / next action:** Draft pending, AGENT-2; LM's retained revision supplies context, not an approved Epic contract. Retrieve missing exact execution-plan/decision/admission records through Product Planning/Human Leadership before that transition. No Project Planner or Wave Planner added.
 
 #### 06. Issue Planner
 
@@ -76,7 +86,7 @@ Parent: [Product Management Department → Product Planning Team](team-map.md#pr
 #### 08. Triager
 
 - **Kind/parent:** Role; Product Planning Team. **Source:** [V1, Product Planning Team; L5, Supporting participation.](#sources)
-- **Participation:** G: Conditional — incoming issue or diagnostic needs triage; applicability pending AGENT-5. T: Conditional — same rule.
+- **Participation:** G: Conditional — not triggered; no incoming diagnostic-triage lane selected. T: Conditional — same untriggered condition. Incoming issue/diagnostic triage triggers AGENT-5 applicability and bounded-handoff resolution; see selected supporting dispositions above.
 - **Responsibility / handoff:** Scoped triage recommendation; operational audit specialization produces event-cited non-authoritative diagnostics, no state/evidence authorization. Triage/diagnostic recommendation → planning or required decision authority; exact selected receiving route pending AGENT-5.
 - **Definition / gap / next action:** Supporting reference only; AGENT-5 settles trigger/input/destination for selected use. No extra Profile definition added.
 
@@ -119,7 +129,7 @@ Parent: [Engineering Department → Product Engineering Team](team-map.md#produc
 #### 13. Software Architect
 
 - **Kind/parent:** Role; Product Engineering Team. **Source:** [V1, Product Engineering Team; L5, Supporting participation.](#sources)
-- **Participation:** G: Conditional — material product architecture proposal needed; not assumed. T: Conditional — same trigger; AGENT-5 to confirm scope.
+- **Participation:** G: Conditional — not triggered; no material architecture proposal selected. T: Conditional — same untriggered condition. A material product architecture proposal triggers AGENT-5 applicability and bounded-handoff resolution; see selected supporting dispositions above.
 - **Responsibility / handoff:** Separate architecture proposal Role; proposal does not authorize implementation. Scoped architecture proposal → applicable planning/review and Human Leadership decision route; exact handoff pending AGENT-5 if triggered.
 - **Definition / gap / next action:** Supporting reference only; AGENT-5 resolves need and source-bounded assignment before use. Unknown required architecture authority blocks affected work.
 
@@ -130,9 +140,9 @@ Parent: [Engineering Department → Engineering Assurance Team](team-map.md#engi
 #### 14. Test Developer
 
 - **Kind/parent:** Role; Engineering Assurance Team. **Source:** [V8, Decision and Container or runtime-behavior Test paragraph; L4, Scope and Acceptance Evidence; LM, Four paper cases.](#sources)
-- **Participation:** G: Conditional — selected governance delta requires independent behavioral-test evidence; Step 8/AGENT-4 assess. T: Required — independent behavioral test specification.
+- **Participation:** G: Conditional — not triggered in G-1; prose completion-evidence delta makes no runtime-behavior/enforcement claim. Actual behavioral/enforcement verification would trigger this lane. T: Required — independent behavioral test specification, not execution.
 - **Responsibility / handoff:** Own assigned test paths, fixtures and test-only helpers; no production/platform edits or implementer reasoning as initial test input. Independent test specification/evidence expectation → scoped review/delivery; valid failure → Tooling Engineer; test defect → Test Developer.
-- **Definition / gap / next action:** Draft pending, AGENT-4. G applicability must be stated at fixture definition; T Profile below is required. No actual tests or results claimed for paper fixtures.
+- **Definition / gap / next action:** Draft pending, AGENT-4. G-1 applicability is resolved as untriggered; any behavioral-claim expansion needs this lane before claiming that outcome. T Profile below is required. No actual tests or results claimed for paper fixtures.
 
 #### 15. Code Reviewer
 
@@ -155,16 +165,16 @@ Parent: [Engineering Department → Security Engineering Team](team-map.md#secur
 #### 17. External Security Reviewer
 
 - **Kind/parent:** Role; Security Engineering Team. **Source:** [V10, Role boundaries and Overlap and aggregation; L5, Supporting participation; LM, Four paper cases.](#sources)
-- **Participation:** G: Conditional — required if exposed surfaces introduced; current internal/local scope has none. T: Conditional — same exposed-surface trigger.
+- **Participation:** G: Conditional — not triggered in G-1; no exposed perimeter/entry point/integration. T: Conditional — not triggered in T-1; no network/exposed surface. Introducing either protected exposed subject requires External Security and rescoping.
 - **Responsibility / handoff:** Protect exposed perimeter, external entry points/integrations and network boundaries; does not replace Product or Internal Security. Independent perimeter findings → authorized remediation owner and Human Leadership for material risk; evidence → applicable delivery gate.
 - **Definition / gap / next action:** Supporting reference only; AGENT-5 confirms absence or applicability and bounded assignment. Trigger means rescope coverage/estimate before work; missing required definition/authority blocks that expanded path.
 
 #### 18. Product Security Reviewer
 
 - **Kind/parent:** Role; Security Engineering Team. **Source:** [V10, Role boundaries and Overlap and aggregation; L5, Supporting participation; L1, Context and Readiness.](#sources)
-- **Participation:** G: Conditional — required if shipped framework/product behavior included. T: Conditional — same shipped-behavior trigger.
+- **Participation:** G: Conditional — not triggered in G-1; internal Company-only contract paper delta. T: Conditional — not triggered in T-1; local internal-use specification. Reusable shipped framework/product behavior or design requires Product Security even if execution stays local; revise coverage/estimates before proceeding.
 - **Responsibility / handoff:** Protect product designs/shipped artifacts and customer/environment risk, including embedded dependencies; Internal Security is insufficient. Independent product findings → authorized remediation owner; material risk → Human Leadership; evidence → applicable delivery gate.
-- **Definition / gap / next action:** Supporting reference only; AGENT-5 settles fixture applicability and bounded assignment. Do not classify shipped framework work as internal-only to evade this trigger. Workspace implementation coverage is separately applicable; required missing authority blocks affected work.
+- **Definition / gap / next action:** Supporting reference only. Selected fixture applicability is recorded above; AGENT-5 retains confirmation and any triggered bounded assignment. Do not classify shipped framework work as internal-only to evade this trigger. Workspace implementation coverage is separately applicable; required missing authority blocks affected work.
 
 ### Platform Engineering Team — 4 Roles
 
@@ -173,7 +183,7 @@ Parent: [Engineering Department → Platform Engineering Team](team-map.md#platf
 #### 19. Tooling Engineer
 
 - **Kind/parent:** Role; Platform Engineering Team. **Source:** [V7, Tooling Engineer boundary; V1, Platform Engineering Team; L4, Scope.](#sources)
-- **Participation:** G: Conditional — new technical enforcement/delivery behavior required; existing supported mechanism alone does not trigger. T: Required — owns reference-check technical candidate specification.
+- **Participation:** G: Conditional — not triggered in G-1; no technical/platform artifact changes. Unsupported evidence transport or new enforcement/validation/delivery behavior triggers a separately scoped technical lane and applicable tests/review. T: Required — owns reference-check technical candidate specification.
 - **Responsibility / handoff:** Own technical loading/delivery/validation mechanisms; cannot decide governance authority granted by those mechanisms. Scoped technical candidate → independent Test Developer, Code Reviewer and applicable Security; implementation defect returns here.
 - **Definition / gap / next action:** Draft pending, AGENT-4, with Agent Tooling and Runtime Integration Profile. Governance-only G has no automatic implementation lane; triggered expansion needs separate authorized handoff.
 
@@ -204,10 +214,10 @@ All four are **draft pending under AGENT-4**, not new Roles. Each narrows its pa
 
 | Canonical Profile / parent | G participation | T participation | Bounded responsibility, artifact → destination | Source / next action |
 | --- | --- | --- | --- | --- |
-| Agent Tooling and Runtime Integration / Tooling Engineer | Conditional: new technical mechanism required | Required | Scoped agent-loading/validation technical candidate → independent test, Platform Artifact review and applicable Security; no governance authority selection | V7, Tooling Engineer boundary; L4, Scope. AGENT-4 defines inputs/write scope; AGENT-5 coordinates any governance handoff. |
-| Container or runtime-behavior Test / Test Developer | Conditional: selected delta requires behavioral-test evidence | Required | Independent test specification, fixtures and test-only helpers → review/delivery; platform or implementation defect → Tooling Engineer; defective test → Test Developer | V8, Decision and Container paragraph; L4, Acceptance Evidence. AGENT-4 defines scoped context/paths; Step 8 resolves G applicability. |
-| Platform Artifact / Code Reviewer | Conditional: platform artifacts change | Required | Read-only review of platform candidate/test scope → findings to authorized author and scoped review evidence to delivery; no remediation edits | V9, Decision and Multi-domain aggregation rule; L4, Scope. AGENT-4 explicitly assigns all applicable artifact domains. |
-| Agent Capability Artifact / Code Reviewer | Required | Conditional: declarative agent-capability artifacts change, not merely technical loading code | Read-only governance candidate review → AGO correction or exact-candidate decision/publication route; no self-approval/activation | V9, Decision and Multi-domain aggregation rule; V7, candidate boundary; L4, Scope. AGENT-4 defines scope; AGENT-5 reconciles governance assignment. |
+| Agent Tooling and Runtime Integration / Tooling Engineer | Conditional — not triggered in G-1: no technical change; unsupported evidence transport/new technical mechanism triggers | Required for T-1 technical specification | Scoped agent-loading/validation technical candidate → independent test, Platform Artifact review and applicable Security; no governance authority selection | V7, Tooling Engineer boundary; L4, Scope. AGENT-4 defines inputs/write scope; AGENT-5 coordinates any governance handoff. |
+| Container or runtime-behavior Test / Test Developer | Conditional — not triggered in G-1: prose-only evidence delta, no runtime-behavior claim; behavioral/enforcement verification triggers | Required for T-1 independent behavioral-test specification | Independent test specification, fixtures and test-only helpers → review/delivery; platform or implementation defect → Tooling Engineer; defective test → Test Developer | V8, Decision and Container paragraph; L4, Acceptance Evidence. AGENT-4 defines scoped context/paths; G-1 does not trigger this Profile; rescope before adding a behavioral claim. |
+| Platform Artifact / Code Reviewer | Conditional — not triggered in G-1: no platform artifacts change; technical/platform changes trigger | Required for T-1 technical/test/interface scope | Read-only review of platform candidate/test scope → findings to authorized author and scoped review evidence to delivery; no remediation edits | V9, Decision and Multi-domain aggregation rule; L4, Scope. AGENT-4 explicitly assigns all applicable artifact domains. |
+| Agent Capability Artifact / Code Reviewer | Required for G-1 contract delta | Conditional — not triggered in T-1: no declarative change; Role/Profile, permission or context-rule change triggers | Read-only governance candidate review → AGO correction or exact-candidate decision/publication route; no self-approval/activation | V9, Decision and Multi-domain aggregation rule; V7, candidate boundary; L4, Scope. AGENT-4 defines scope; AGENT-5 reconciles governance assignment. |
 
 ## Definition backlog and readiness
 
@@ -225,7 +235,7 @@ Known pending drafts above do not block AGENT-1 from seeding this record. They d
 
 ### Shared downstream handoffs
 
-1. **AGENT-1 Step 8:** pin both fixture inputs and revisions; reconcile G behavioral-test applicability and every conditional trigger against the actual delta. Add expected actor/artifact/decision/stop routes, including correction and authority conflict. Format/fixture files are pending at this seed revision.
+1. **AGENT-1 fixture reconciliation:** G-1/T-1 now supply selected deltas, paper identities, expected routes/stops and correction/conflict variations. This record matches their applicability sections and the shared format. Freeze the exact containing commit/file set for the trial; fixture expectations do not supply actual execution inputs or observations.
 2. **AGENT-5:** finish the supporting entries' applicability, bounded inputs, destinations and dispositions here. If another full definition proves necessary, identify and rescope that work; do not silently enlarge AGENT-1 or AGENT-5.
 3. **AGENT-6:** reconcile shared permissions and exact-revision decisions with AGENT-2–5. Human Leadership supplies required governing decisions; this issue documents them, not grants authority itself.
 4. **AGENT-7:** bind handoff/context/outcome fields to current artifact revisions; preserve reviewer context boundaries, correction routes and missing/stale-input stops. Publication needing semantic changes returns to the authorized author.
@@ -235,7 +245,7 @@ These owners and handoffs come from L1–L8, Scope/Acceptance Evidence/Context a
 
 ### Stops and decision destinations
 
-- **No currently identified unknown governing decision blocks this bounded coverage seed.** Unfinished supporting applicability is explicitly assigned to AGENT-5; exact fixture construction remains with Step 8. Neither is evidence that a conditional route is approved.
+- **No currently identified unknown governing decision blocks bounded paper drafting.** The precise missing execution-plan/human-decision/admission records above block actual plan authorization/admission, not the trial. Selected G-1/T-1 applicability is recorded; AGENT-5 still owns supporting confirmation and bounded handoffs. Neither paper selection nor future drafting is execution approval.
 - Missing, stale, inaccessible or contradictory required sources/authority **block the affected path**. Record affected entry, fixture, question, source versions, owner and required decision before proceeding. Do not hide the gap as Outside or invent a rule.
 - Route unknown authority, conflicting lower-level permission versus Company prohibition, or material scope/risk decisions to **Human Leadership**, with AGENT-6 maintaining shared permission/decision linkage and Issue Delivery Manager coordinating the bounded escalation. A lower scope cannot manufacture permission.
 - Review defects return to the relevant author. No reviewer repairs its own subject. Missing specialist/human evidence cannot become a successful transition. Material candidate changes require applicable renewed review/decision; publication is distinct from human approval, merge and governance activation.
