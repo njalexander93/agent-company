@@ -74,6 +74,7 @@ Responses contain `ok`, `code`, identifiers, current `revision`, `binding_genera
 | `event` | Append one allowlisted bounded event under the same issue lock. Caller cannot impersonate another participant or invent provider acceptance. |
 | `outcome` | Coordinator records `active`, `blocked`, `in_review`, or terminal `completed`, `cancelled`, `failed`, with source evidence and expected revision. Failed only means terminal when explicitly abandoned with disposition; retryable failure stays blocked. |
 | `detach`, `reconcile-participant`, `transfer-coordinator` | Retire only the identified generation after verifying no pending activity; explicit evidence is required for uncertain participants and ownership transfers. No timeout-based coordinator election. |
+| `event-rollover` | Coordinator, expected revision, no pending operations and current verified archive required; retain an immutable segment and start the next globally chained stream. |
 | `archive-prepare`, `archive-verify` | Produce immutable export request; verify provider read-back and establish an archive receipt for that snapshot. No local boolean substitutes for read-back. |
 | `cleanup-plan`, `cleanup-commit` | Select/recheck only eligible issues; record recoverable intent; remove only the verified unchanged issue payload. Never delete control metadata. |
 | `restore` | Verify archive bytes and manifest into staging, then publish under lock and rebind with a new generation. Invalid/unavailable archives stop for recovery. |
@@ -369,9 +370,29 @@ Event bodies are fixed lifecycle facts. The `event` operation accepts only
 `check`, `tool-start`, `tool-complete`, or `observation`, and an optional typed
 `code` (`OK`, `FAILED`, `UNKNOWN`, `INTERRUPTED`); it rejects free-form summaries.
 Only `observation` is optional. Near the 16 MiB cap it is suppressed with an
-aggregate counter. Required writes return `ARCHIVE_PENDING` when the cap would
-be exceeded. Archived-segment rollover is **not implemented**; preserve the store
-and resolve this capacity gate before further required writes.
+aggregate counter. Ordinary required writes reserve 8 KiB of the 16 MiB active
+stream limit for an `archive-prepare` checkpoint event. Each admitted pending tool
+also reserves two maximum-sized events for its async transition and completion
+(one after the transition). Terminal outcomes require no pending tools. Repeated identical async transitions add no event;
+a changed handle conflicts. All other writes respect these reservations; exhausted writes return
+`ARCHIVE_PENDING` without changing bytes. A coordinator freezes and verifies a
+foreground archive, then calls `event-rollover` with the current expected revision.
+The core requires that verified snapshot to match the current complete inventory,
+with no pending tools. It retains the exact stream as
+`events-<12-digit-first>-<12-digit-last>.jsonl`, resets `events.jsonl`, and appends
+the globally chained rollover event in one recoverable transaction. A retry is
+idempotent. Optional observations never trigger rotation or external calls.
+
+Segments retain their sequence ranges, head/file digests and provider receipt in
+`event_segments`. All segments remain local until eligible verified cleanup.
+Readers validate segments in sequence and then the active stream. Reconciliation
+cannot rewrite either. Subsequent exports include the segment bytes and receipt
+lineage; cleanup and restore cover the whole inventory. The archive schema gains
+an optional `event_segments` field only for segmented stores; unsegmented encoder
+output shape is unchanged. Total local archive/state limits still apply and can
+stop further work with retention. This is bounded retention, not unlimited logging.
+An older store already beyond the new reserved threshold may require explicit
+capacity recovery; no committed history is truncated to manufacture space.
 
 An interrupted tail can be quarantined only when removing it reproduces the
 exact committed manifest; a changed committed prefix is never truncated.

@@ -32,6 +32,7 @@ DOCUMENT_LIMIT = 256 * 1024
 ARCHIVE_CHUNK = 64 * 1024
 ISSUE = re.compile(r"[A-Z][A-Z0-9]{0,15}-[1-9][0-9]{0,9}", re.ASCII)
 NOTE = re.compile(r"context/[a-z0-9][a-z0-9._-]{0,79}\.md", re.ASCII)
+SEGMENT = re.compile(r"events-([0-9]{12})-([0-9]{12})\.jsonl", re.ASCII)
 DIGEST = re.compile(r"[0-9a-f]{64}")
 TERMINAL = {"completed", "cancelled", "failed"}
 FAILPOINT = None  # Test-only callable; never accepted in requests or environment.
@@ -80,7 +81,7 @@ def issue_id(value):
 def payload_path(value, events=False):
     require(isinstance(value, str) and ".." not in value and
             (value == "roadmap.md" or NOTE.fullmatch(value) or
-             (events and value == "events.jsonl")), "UNSAFE_PATH")
+             (events and (value == "events.jsonl" or SEGMENT.fullmatch(value)))), "UNSAFE_PATH")
     return value
 
 
@@ -394,10 +395,8 @@ def write_payload(directory, path, data):
         directory.write(path, data)
 
 
-def validate_events(data):
+def validate_events(data, seq=0, prior=None):
     require(not data or data.endswith(b"\n"), "INTEGRITY_ERROR")
-    prior = None
-    seq = 0
     for line in data.splitlines():
         require(len(line) <= 8192, "INTEGRITY_ERROR")
         event = strict_json(line)
@@ -406,6 +405,16 @@ def validate_events(data):
                 sha(canonical(event)) == digest, "INTEGRITY_ERROR")
         prior, seq = digest, seq + 1
     return seq, prior
+
+
+def validate_history(files):
+    seq, head = 0, None
+    for path in sorted(p for p in files if SEGMENT.fullmatch(p)):
+        first, last = map(int, SEGMENT.fullmatch(path).groups())
+        require(first == seq + 1 and last >= first, "INTEGRITY_ERROR")
+        seq, head = validate_events(files[path], seq, head)
+        require(seq == last, "INTEGRITY_ERROR")
+    return validate_events(files.get("events.jsonl", b""), seq, head)
 
 
 class Issue:
@@ -431,7 +440,7 @@ class Issue:
                 self.control.put("diagnostic-loss.json", {"discarded_tail_bytes": len(tail), "at": now()})
             else:
                 raise WorkspaceError("UNTRACKED_CHANGE")
-        seq, head = validate_events(result.get("events.jsonl", b""))
+        seq, head = validate_history(result)
         require(seq == self.state["seq"] and head == self.state["head"], "INTEGRITY_ERROR")
         return result
 
@@ -470,8 +479,15 @@ class Issue:
     def commit(self, state, files, request, result, event_type=None):
         old_files = self.files() if self.state else {}
         if event_type:
+            require(request.get("event") is None or request["operation"] == "event", "INVALID_REQUEST")
             optional = event_type == "observation"
-            if optional and len(files.get("events.jsonl", b"")) + 8192 > MAX_EVENTS:
+            # Admit tools only while both their async transition and completion
+            # can still commit, plus the final provider checkpoint event.
+            pending_slots = sum(1 if tool["status"] == "unknown" else 2
+                                for member in state["participants"].values()
+                                for tool in member["pending"].values())
+            reserved = 8192 * (1 + pending_slots)
+            if optional and len(files.get("events.jsonl", b"")) + reserved + 8192 > MAX_EVENTS:
                 state["optional_loss_count"] = state.get("optional_loss_count", 0) + 1
                 result["code"] = "OPTIONAL_SUPPRESSED"
                 return self.commit(state, files, request, result)
@@ -489,7 +505,9 @@ class Issue:
             line = canonical(event) + b"\n"
             require(len(line) <= 8192, "SIZE_LIMIT")
             files["events.jsonl"] = files.get("events.jsonl", b"") + line
-            require(len(files["events.jsonl"]) <= MAX_EVENTS, "ARCHIVE_PENDING")
+            # Keep enough room to freeze a provider checkpoint at the boundary.
+            limit = MAX_EVENTS if event_type == "archive-prepare" else MAX_EVENTS - reserved
+            require(len(files["events.jsonl"]) <= limit, "ARCHIVE_PENDING")
             state["seq"], state["head"] = event["seq"], event["digest"]
             state.pop("archive", None)
         state["files"] = manifest(files)
@@ -611,7 +629,7 @@ def attach(state, request):
 
 
 def archive_payload(state, files):
-    return {"schema_version": 1, "repo_id": state["repo_id"], "issue_id": state["issue_id"],
+    result = {"schema_version": 1, "repo_id": state["repo_id"], "issue_id": state["issue_id"],
             "issue_uuid": state["issue_uuid"], "revision": state["revision"],
             "disposition": state["disposition"], "outcome": state.get("outcome"),
             "checkpoint": state.get("checkpoint"), "provenance": state.get("provenance", {}),
@@ -620,6 +638,9 @@ def archive_payload(state, files):
             "seq": state["seq"], "head": state["head"],
             "files": [{"path": p, "size": len(b), "sha256": sha(b), "scope": "coordinator-archive",
                        "data": encode(b)} for p, b in sorted(files.items())]}
+    if state.get("event_segments"):
+        result["event_segments"] = state["event_segments"]
+    return result
 
 
 def document(payload, heading):
@@ -702,7 +723,7 @@ def verify_provider(state, observations):
         data.decode("utf-8")
         files[path] = data
     require("roadmap.md" in files and "events.jsonl" in files, "INTEGRITY_ERROR")
-    require(validate_events(files["events.jsonl"]) == (snapshot["seq"], snapshot["head"]), "INTEGRITY_ERROR")
+    require(validate_history(files) == (snapshot["seq"], snapshot["head"]), "INTEGRITY_ERROR")
     receipt = {"snapshot": root["snapshot"], "root": {k: v for k, v in root_observed.items() if k != "content"},
                "parts": root["parts"], "read_at": now(), "observations_digest": sha(canonical(observations))}
     return snapshot, files, receipt
@@ -734,7 +755,7 @@ def finish_cleanup(issue):
         with control.child(name, private=False) as payload:
             require(payload.identity == intent["directory_identity"], "UNSAFE_PATH")
             names = os.listdir(payload.fd)
-            require(set(names) <= {"roadmap.md", "events.jsonl", "context"}, "UNSAFE_PATH")
+            require(all(n in {"roadmap.md", "events.jsonl", "context"} or SEGMENT.fullmatch(n) for n in names), "UNSAFE_PATH")
             # Verify the ENTIRE remaining tree before deleting any more of it.
             remaining = {}
             for entry in names:
@@ -815,12 +836,12 @@ def operate(store, issue, request):
                 files = inventory(payload)
             require(request.get("inventory") == manifest(files), "UNTRACKED_CHANGE")
             owners = request.get("owners", {})
-            require(set(owners) == set(files) - {"events.jsonl"} and owners["roadmap.md"] == key,
+            require(set(owners) == {p for p in files if p != "events.jsonl" and not SEGMENT.fullmatch(p)} and owners["roadmap.md"] == key,
                     "NOT_OWNER")
             require(all(DIGEST.fullmatch(v) for v in owners.values()), "NOT_OWNER")
             state["owners"] = owners
             state["adoption"] = {"inventory": manifest(files), "evidence": request["evidence"]}
-            state["seq"], state["head"] = validate_events(files.get("events.jsonl", b""))
+            state["seq"], state["head"] = validate_history(files)
         else:
             template = Path(__file__).resolve().parents[2] / "core/templates/task-workspace/roadmap.md"
             files = {"roadmap.md": template.read_text().replace("{{issue_id}}", issue.id).encode(),
@@ -841,6 +862,7 @@ def operate(store, issue, request):
         state["storage"], state["disposition"] = "present", "active"
         state["provenance"] = snapshot.get("provenance", {})
         state["checkpoint"] = snapshot.get("checkpoint")
+        state["event_segments"] = snapshot.get("event_segments", [])
         state["adoption"] = snapshot.get("adoption")
         state["checkpoint_history"] = snapshot.get("checkpoint_history", [])
         state["outcome_history"] = snapshot.get("outcome_history", [])
@@ -873,7 +895,8 @@ def operate(store, issue, request):
             observed = inventory(payload)
         require(manifest(observed) == request.get("inventory"), "UNTRACKED_CHANGE")
         require(set(observed) == set(state["files"]) and
-                sha(observed["events.jsonl"]) == state["files"]["events.jsonl"], "INTEGRITY_ERROR")
+                all(sha(b) == state["files"][p] for p, b in observed.items()
+                    if p == "events.jsonl" or SEGMENT.fullmatch(p)), "INTEGRITY_ERROR")
         # Explicit reconciliation imports inspected Markdown only, never arbitrary events.
         issue.state = copy.deepcopy(state)
         issue.state["files"] = manifest(observed)
@@ -894,7 +917,7 @@ def operate(store, issue, request):
     result = {}
     event_type = operation
     if operation in {"scope", "update", "checkpoint", "outcome", "transfer-coordinator", "reconcile-participant",
-                     "archive-prepare", "reopen"}:
+                     "archive-prepare", "event-rollover", "reopen"}:
         prepared = (operation == "archive-prepare" and sha((request["request_id"] + ":prepare").encode()) in state["requests"])
         if not prepared:
             expected(state, request)
@@ -902,7 +925,7 @@ def operate(store, issue, request):
                          "cleanup-plan", "cleanup-commit", "detach", "reopen", "archive-save-start", "archive-observe-save"}:
         require(state["disposition"] not in TERMINAL, "TERMINAL")
     if operation in {"scope", "checkpoint", "outcome", "transfer-coordinator", "reconcile-participant",
-                     "archive-prepare", "archive-index", "archive-verify", "archive-save-start", "archive-observe-save", "cleanup-plan", "cleanup-commit", "reopen"}:
+                     "archive-prepare", "archive-index", "archive-verify", "archive-save-start", "archive-observe-save", "cleanup-plan", "cleanup-commit", "event-rollover", "reopen"}:
         authorize(state, request, coordinator=True, maintenance=maintenance)
     if operation == "scope":
         target = request["target_participant"]
@@ -911,7 +934,10 @@ def operate(store, issue, request):
         require(all(ref["reader"] == target for ref in packet), "SCOPE_MISSING")
         state.setdefault("assignments", {})[target] = {"packet": packet}
         if target in state["participants"]:
-            state["participants"][target].update(packet=packet, ack=None, status="attached")
+            target_state = state["participants"][target]
+            target_state.update(packet=packet, ack=None)
+            if target_state["status"] != "detached":
+                target_state["status"] = "attached"
         for path in request.get("owned_paths", []):
             payload_path(path)
             require(path != "roadmap.md" and state["owners"].get(path, target) == target, "NOT_OWNER")
@@ -959,6 +985,8 @@ def operate(store, issue, request):
         disposition = request["disposition"]
         require(disposition in TERMINAL | {"active", "blocked", "in_review"})
         evidence(request.get("evidence"))
+        if disposition in TERMINAL:
+            require(not any(p["pending"] for p in state["participants"].values()), "PENDING_OPERATION")
         if disposition == "completed":
             require(set(request.get("completion", {})) == {"human_acceptance", "merge", "obligations"}, "EVIDENCE_REQUIRED")
             for refs in request["completion"].values():
@@ -995,7 +1023,11 @@ def operate(store, issue, request):
         tool = token(request["tool_id"])
         require(tool in participant["pending"], "UNKNOWN_OPERATION")
         if request.get("async_handle"):
-            participant["pending"][tool] = {"status": "unknown", "handle": token(request["async_handle"])}
+            handle = token(request["async_handle"])
+            if participant["pending"][tool]["status"] == "unknown":
+                require(participant["pending"][tool]["handle"] == handle, "REQUEST_CONFLICT")
+                event_type = None  # Duplicate transition cannot consume completion reserve.
+            participant["pending"][tool] = {"status": "unknown", "handle": handle}
         else:
             require(request.get("completed") is True, "UNKNOWN_OPERATION")
             del participant["pending"][tool]
@@ -1017,6 +1049,23 @@ def operate(store, issue, request):
         require(state["disposition"] in TERMINAL, "INVALID_REQUEST")
         state["disposition"] = "active"
         participant.update(status="attached", ack=None)
+    elif operation == "event-rollover":
+        require(not any(p["pending"] for p in state["participants"].values()), "PENDING_OPERATION")
+        receipt, export = state.get("archive"), state.get("export")
+        require(receipt and export and receipt["snapshot"] == export["snapshot"] and
+                export["files"] == manifest(files) and export["revision"] == state["revision"], "ARCHIVE_PENDING")
+        data = files["events.jsonl"]
+        require(data, "ARCHIVE_PENDING")
+        first = strict_json(data.splitlines()[0])["seq"]
+        name = f"events-{first:012d}-{state['seq']:012d}.jsonl"
+        require(SEGMENT.fullmatch(name) and name not in files, "INTEGRITY_ERROR")
+        # Retain exact checkpointed bytes. The same transaction publishes the segment,
+        # resets the active stream and appends the next globally chained event.
+        files[name], files["events.jsonl"] = data, b""
+        state.setdefault("event_segments", []).append({
+            "path": name, "first": first, "last": state["seq"], "head": state["head"],
+            "sha256": sha(data), "archive": receipt})
+        result = {"segment": name, "snapshot": receipt["snapshot"]}
     elif operation == "archive-prepare":
         require(not any(p["pending"] for p in state["participants"].values()), "PENDING_OPERATION")
         if request.get("seal"):
@@ -1036,6 +1085,7 @@ def operate(store, issue, request):
         export = export_documents(snapshot)
         state["export"] = {"snapshot": export["snapshot"], "revision": state["revision"],
                            "files": manifest(files), "request_id": request["request_id"]}
+        require(len(canonical(export)) <= MAX_REQUEST, "ARCHIVE_PENDING")
         issue.control.put("export-" + export["snapshot"] + ".json", export)
         return issue.commit(state, files, request, export)
     elif operation == "archive-index":

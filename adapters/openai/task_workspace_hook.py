@@ -23,7 +23,7 @@ BOOTSTRAP_FIELDS = {
     "archive-observe-save": {"document_id", "content_digest"},
     "cleanup-plan": set(), "cleanup-commit": {"observations", "cleanup_challenge"},
     "reopen": {"evidence"},
-    "archive-prepare": {"seal"},
+    "archive-prepare": {"seal"}, "event-rollover": set(),
     "reconcile-files": {"inventory", "evidence"},
     "rebind": {"new_issue_id", "new_binding_generation", "evidence"},
 }
