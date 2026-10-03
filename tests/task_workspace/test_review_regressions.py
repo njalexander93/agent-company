@@ -321,10 +321,37 @@ class ReviewRegressions(Fixture):
         Raises:
             AssertionError: An asserted lifecycle or boundary invariant does not hold.
         """
-        # Create an archive with deliberately small chunks to exercise multipart limits.
+        # Create the disposable issue and retain the real archive exporter.
         self.create()
-        # Generate many parts without increasing the payload size.
-        with mock.patch.object(w, 'ARCHIVE_CHUNK', 12):
+        export_documents = w.export_documents
+
+        def export_bounded_parts(snapshot):
+            """Exercise the real exporter with a snapshot-sized multipart budget.
+
+            Args:
+                snapshot: Frozen lifecycle snapshot supplied by archive preparation.
+
+            Returns:
+                Real export documents with a chunk size targeting 384 parts.
+
+            Raises:
+                AssertionError: Exported chunks do not reconstruct the exact snapshot.
+                w.WorkspaceError: The real exporter rejects the snapshot or documents.
+            """
+            # Round up the chunk budget so template growth cannot exceed 384 parts.
+            raw = w.canonical(snapshot)
+            chunk_size = max(1, (len(raw) + 383) // 384)
+            # Run the real exporter under the temporary chunk-size override.
+            with mock.patch.object(w, 'ARCHIVE_CHUNK', chunk_size):
+                result = export_documents(snapshot)
+            # Require byte-for-byte reconstruction before returning provider documents.
+            reconstructed = b''.join(w.decode(w.parse_document(part['content'])['data'])
+                                     for part in result['parts'])
+            self.assertEqual(reconstructed, raw)
+            return result
+
+        # Derive the budget from the exact sealed snapshot, including lifecycle events.
+        with mock.patch.object(w, 'export_documents', export_bounded_parts):
             export = self.seal()
         # Check that the fixture crosses the old bound while staying bounded.
         self.assertGreater(len(export['parts']), 257)
@@ -335,6 +362,8 @@ class ReviewRegressions(Fixture):
         observations.append({'id': 'index', 'url': 'https://linear.app/test/document/index',
                              'issue': self.base['issue_uuid'], 'updatedAt': '2026-10-03T00:00:00Z',
                              'origin': 'linear_get_document', 'request_id': 'fixture-get', 'content': index['content']})
+        # Keep all part observations plus the index within the provider-read limit.
+        self.assertLessEqual(len(observations), 514)
         # Verify reconstruction and ensure idempotency state does not inline export bodies.
         self.call('archive-verify', observations=observations)
         stored = self.state()['requests']
