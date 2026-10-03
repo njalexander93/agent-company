@@ -34,11 +34,13 @@ These are documentation and task-data boundaries, not a final runtime package or
 2. **D02 — Fresh author and separate review.** A fresh agent must author the one Agent Governance Officer example from a frozen documented packet and permitted sources, without this conversation, author reasoning or a prewritten example. A separate reviewer checks the exact output. Repair guide/input defects and repeat affected trials. These checks remain pending Steps 9–10.
 3. **D03 — Human-reviewed publication.** A GitHub PR into `main`, exact-candidate human review/acceptance and an actual human-controlled merge are mandatory. An agent review, open PR or earlier requirements decision is not acceptance. Publication does not activate policy.
 
-Source: SPEC, Interview decisions D01–D03 and R21–R23. The [acceptance record](#acceptance-evidence-and-readiness) tracks remaining evidence.
+Provenance: SPEC, Interview decisions D01–D03 and R21–R23. The requirements above are stated here so the fresh author does not need the supporting research report. The [acceptance record](#acceptance-evidence-and-readiness) tracks remaining evidence.
 
 ## Source authority and retrieval
 
 Capture date: 2026-10-03. AGENT-1 and the milestone define delivery scope. Accepted vault specifications, V0 and later explicit decisions govern organizational meaning. SPEC records the later user decisions and workspace amendment. Historical discovery is interpreted through those current sources, not by modification time or hash alone.
+
+**Fresh-author boundary:** This register preserves provenance for maintainers and reviewers; it is not a reading checklist. SPEC and research/author reasoning are excluded from the fresh-author packet. SPEC citations in product guidance attribute recorded decisions, not required research reading. The frozen packet must explicitly permit the governing records/sections needed for the assignment. Retrieve only those permitted inputs; do not supply the entire retention archive as authoring context.
 
 Framework contributors resolve the following paths relative to their accessible shared vault. Company-specific authors use accessible framework contracts and their own governing sources; this private-vault route is not a prerequisite for the reusable format. [SPEC: D01/R21]
 
@@ -112,7 +114,7 @@ The hashes below identify **current file bytes at capture**, or the exact retain
 
 ## Acceptance evidence and readiness
 
-**Not ready for final acceptance.** The register is retained and the workspace contract exists. Planned sibling artifacts and all trial, runtime, review and publication results still need integration evidence. These pending paths are navigation targets, not validated artifacts. [SPEC R17–R23; workspace amendment]
+**Not ready for final acceptance.** The register is retained and the workspace contract exists. The map, coverage, format and both fixtures must exist and be reconciled before freezing the trial packet. The Agent Governance Officer example is deliberately absent beforehand: Step 9 produces it and Step 10 reviews it. All trial, runtime, review and publication results still need integration evidence. These pending paths are navigation targets, not validated artifacts. [SPEC R17–R23; workspace amendment]
 
 | Evidence | Location / accountable delivery step | Current disposition |
 | --- | --- | --- |
