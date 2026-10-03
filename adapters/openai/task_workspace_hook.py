@@ -90,7 +90,6 @@ def request_for(event, operation):
         raise core.WorkspaceError(diagnosis["code"])
     # Carry the verified repository identity into the lifecycle request.
     request["repo_id"] = diagnosis["repo_id"]
-    # Keep filesystem resources scoped to this read or publication phase.
     with core.Store(request) as store:
         # Read the existing session binding; never infer it from the prompt.
         binding = store.binding()
@@ -117,7 +116,6 @@ def bootstrap(event, ready=False):
         return False
     # Select and decode the documented command input.
     args = event.get("tool_input", {})
-    # Check the supported input shape before interpreting its fields.
     if (not isinstance(args, dict) or args.get("tty") or args.get("login") is not False
             or args.get("shell") != "/bin/sh" or not set(args) <= {
                 "command", "cmd", "login", "shell", "workdir", "yield_time_ms", "max_output_tokens",
@@ -125,10 +123,8 @@ def bootstrap(event, ready=False):
         return False
     # Select and decode the documented command input.
     command = args.get("command", args.get("cmd"))
-    # Check the supported input shape before interpreting its fields.
     if not isinstance(command, str) or len(command.encode()) > 65536:
         return False
-    # Attempt this phase while retaining its error and cleanup paths.
     try:
         # Parse shell arguments for exact interpreter, entry point and JSON matching.
         argv = shlex.split(command)
@@ -138,9 +134,8 @@ def bootstrap(event, ready=False):
         # Reject shell spellings that could introduce expansion or wrappers.
         if command != shlex.join(argv):
             return False
-        # Build the request from explicit caller or observed session identities.
+        # Decode the sole lifecycle request before checking its allowed fields.
         request = core.strict_json(argv[3])
-        # Check the supported input shape before interpreting its fields.
         if not isinstance(request, dict):
             return False
         # Select the operation-specific bootstrap field policy.
@@ -159,14 +154,12 @@ def bootstrap(event, ready=False):
         if request["operation"] in {"register", "diagnose"}:
             return set(request) <= {"schema_version", "operation", "request_id", "worktree", "host",
                                     "session_id", "main_worktree", "startup"}
-        # Keep filesystem resources scoped to this read or publication phase.
+        # Require the bootstrap issue to match the session assignment stored in this worktree.
         with core.Directory.absolute(core.repository(event["cwd"])[0]) as root, root.child(".task") as local:
-            # Keep filesystem resources scoped to this read or publication phase.
             with local.child(".bindings") as bindings:
                 assignment = bindings.json(core.participant_key(request) + ".assignment.json")
         return request.get("issue_id") == assignment["issue_id"]
     except (core.WorkspaceError, OSError, ValueError, KeyError, TypeError):
-        # Preserve or translate this failure according to the enclosing contract.
         return False
 
 
@@ -184,48 +177,38 @@ def provider_gate(event):
         core.WorkspaceError: If binding, ownership or archive integrity validation fails.
         OSError: If archive state cannot be read.
     """
-    # Prepare sequence and event values without dropping prior history.
     tool = event.get("tool_name", "")
-    # Choose the supported branch; reject incompatible state or arguments.
     if tool not in {"mcp__codex_apps__linear_save_document", "mcp__codex_apps__linear_get_document"}:
         return False
     # Build the request from explicit caller or observed session identities.
     request = request_for(event, "ready")
-    # Hold the required locks while validating or publishing shared state.
     with core.Store(request) as store, store.issues.child(request["issue_id"]) as control, control.lock():
-        # Prepare the provider_gate values for the next contract boundary.
         issue = core.Issue(store, control, request["issue_id"])
         issue.recover()
         state = issue.state
         core.authorize(state, request, coordinator=True, maintenance=True)
-        # Handle the case state['storage'] != 'cleaned'.
         if state["storage"] != "cleaned":
             issue.files()
         # Select and decode the documented command input.
         args = event.get("tool_input", {})
-        # Handle the case tool.endswith('linear_get_document').
+        # Permit reads only of document IDs already recorded for this issue archive.
         if tool.endswith("linear_get_document"):
-            # Prepare the provider_gate values for the next contract boundary.
             identifiers = {x["id"] for x in state.get("provider_saves", {}).values() if x.get("id")}
-            # Check the recorded archive state before allowing the next archive phase.
             if state.get("archive"):
-                # Stage the verified lifecycle changes in the issue state.
                 identifiers.add(state["archive"]["root"]["id"])
                 identifiers.update(x["id"] for x in state["archive"]["parts"])
             return set(args) == {"id"} and args["id"] in identifiers
-        # Handle the case state['storage'] == 'cleaned'.
+        # A cleaned issue may read its archive but cannot start another save.
         if state["storage"] == "cleaned":
             return False
-        # Read provider_gate inputs through the scoped file interface.
         export = control.json("export-" + state["export"]["snapshot"] + ".json")
-        # Stage the verified lifecycle changes in the issue state.
         documents = export["parts"] + ([state["index_request"]] if state.get("index_request") else [])
         # Reject provider writes that differ from the immutable export request.
         if args not in documents:
             return False
         # Identify the exact content whose save uncertainty must be recorded.
         digest = core.sha(args["content"].encode())
-    # Invoke the core boundary and retain its structured result.
+    # Record save uncertainty before allowing the external provider write.
     result = core.execute({**request, "operation": "archive-save-start", "content_digest": digest})
     return result["ok"]
 
@@ -246,42 +229,30 @@ def automatic_attach(event, identifier):
     base = {"schema_version": 1, "request_id": "startup:" + event["session_id"],
             "operation": "diagnose", "worktree": event["cwd"], "host": "codex", "session_id": event["session_id"]}
     diagnosis = core.execute(base)
-    # Handle the case diagnosis.get('code') != 'REGISTERED'.
     if diagnosis.get("code") != "REGISTERED":
         return
-    # Prepare the automatic_attach values for the next contract boundary.
     base.update(repo_id=diagnosis["repo_id"], issue_id=identifier)
-    # Keep filesystem resources scoped to this read or publication phase.
     with core.Store(base) as store:
         # Read the existing session binding; never infer it from the prompt.
         binding = store.binding()
-        # Keep binding and generation checks ahead of the requested action.
         if binding:
             core.require(binding["issue_id"] == identifier, "BINDING_CONFLICT")
-        # Prepare the automatic_attach values for the next contract boundary.
         key = core.participant_key(base)
         filename = key + ".startup.json"
-        # Read automatic_attach inputs through the scoped file interface.
         setup = store.bindings.json(filename) if store.bindings.exists(filename) else None
-        # Keep binding and generation checks ahead of the requested action.
         if binding:
-            # Hold the required locks while validating or publishing shared state.
             with store.issues.child(identifier) as control, control.lock():
-                # Stage the verified lifecycle changes in the issue state.
                 issue = core.Issue(store, control, identifier)
                 issue.recover()
                 member = issue.state["participants"].get(key, {})
                 # Use only the assigned packet and its current acknowledgment.
                 if member.get("packet") is not None:
                     return
-    # Handle the case setup.
+    # Create only the explicitly assigned startup issue before applying its packet.
     if setup:
-        # Enforce BINDING_CONFLICT boundaries.
         core.require(setup["issue_id"] == identifier, "BINDING_CONFLICT")
-        # Invoke the core boundary and retain its structured result.
         result = core.execute({**base, "operation": "create", "coordinator": setup["coordinator"],
                                "issue_uuid": setup["issue_uuid"]})
-        # Enforce the explicit identity and input contract.
         core.require(result["ok"], result["code"])
         # A previous scope failure may follow successful creation. Read current revision
         # and retry only the still-missing assignment, never replace a later packet.
@@ -290,13 +261,11 @@ def automatic_attach(event, identifier):
                                "binding_generation": result["binding_generation"],
                                "expected_revision": diagnostic["revision"], "target_participant": key,
                                "packet": setup["packet"]})
-        # Enforce the explicit identity and input contract.
         core.require(result["ok"], result["code"])
     # Leave an absent assignment unbound rather than inventing identity.
     elif not binding:
         # Existing coordinator assignment in shared state is required for a new join.
         result = core.execute({**base, "operation": "attach"})
-        # Separate successful lifecycle results from recovery diagnostics.
         if not result["ok"] and result["code"] not in {"BINDING_MISSING", "SCOPE_MISSING"}:
             raise core.WorkspaceError(result["code"])
 
@@ -326,17 +295,15 @@ def prompt(event):
     identifier = lines[0][6:]
     request = {"host": "codex", "session_id": event["session_id"]}
     root, _, _ = core.repository(event["cwd"])
-    # Hold the required locks while validating or publishing shared state.
     with core.Directory.absolute(root) as worktree, worktree.child(".task", True) as local, \
             local.child(".bindings", True) as bindings, bindings.lock("assignment.lock"):
         # Derive the assignment key from the explicit host/session identity.
         key = core.participant_key(request)
-        # Process each name under the same validation boundary.
+        # Reject implicit task switches in either the live binding or the recorded assignment.
         for name in (key + ".json", key + ".assignment.json"):
             # Validate any existing entry before reusing or replacing it.
             if bindings.exists(name) and bindings.json(name)["issue_id"] != identifier:
                 return {"decision": "block", "reason": "BINDING_CONFLICT: Explicit rebind is required."}
-        # Publish validated content and flush the required filesystem boundary.
         bindings.put(key + ".assignment.json", {"issue_id": identifier})
     # Attempt setup using only the recorded startup assignment or existing packet.
     automatic_attach(event, identifier)
@@ -359,26 +326,23 @@ def handle(event):
     """
     # Select the event-specific host response and lifecycle action.
     name = event.get("hook_event_name")
-    # Handle the UserPromptSubmit hook event.
+    # Record explicit task identity before attempting assigned setup.
     if name == "UserPromptSubmit":
         return prompt(event)
-    # Handle the PermissionRequest hook event.
+    # Leave permission decisions to the host.
     if name == "PermissionRequest":
         return {}  # Never grant host permissions.
-    # Handle the PreToolUse hook event.
+    # Require readiness or an exact recovery route before admitting tool work.
     if name == "PreToolUse":
         # Allow only the exact scoped bootstrap route before ordinary readiness checks.
         if bootstrap(event):
             return {}
-        # Attempt this phase while retaining its error and cleanup paths.
         try:
             # Allow the exact pending archive provider call only after gate validation.
             if provider_gate(event):
                 return {}
         except core.WorkspaceError:
-            # Preserve or translate this failure according to the enclosing contract.
             pass
-        # Prepare sequence and event values without dropping prior history.
         tool = event.get("tool_name", "")
         # Deny covered child creation until host child identity can be verified.
         if any(s in tool for s in ("spawn_agent", "create_thread", "fork_thread", "send_message_to_thread", "followup_task")):
@@ -408,20 +372,17 @@ def handle(event):
         result = core.execute({**request, "operation": "tool-start", "request_id": "pre:" + event["tool_use_id"],
                                "tool_id": event["tool_use_id"], "poll_handle": poll_handle})
         return {} if result["ok"] else denial(result["code"])
-    # Handle the PostToolUse hook event.
+    # Settle work only from typed completion facts and validated handle correlation.
     if name == "PostToolUse":
         # Build the request from explicit caller or observed session identities.
         request = request_for(event, "tool-complete")
         response = event.get("tool_response", {})
-        # Check the supported input shape before interpreting its fields.
+        # Decode serialized tool responses; malformed shapes supply no completion evidence.
         if isinstance(response, str):
-            # Attempt this phase while retaining its error and cleanup paths.
             try:
                 response = json.loads(response)
             except ValueError:
-                # Preserve or translate this failure according to the enclosing contract.
                 response = {}
-        # Check the supported input shape before interpreting its fields.
         if not isinstance(response, dict):
             response = {}
         # Unknown response shapes keep the operation pending; never infer completion.
@@ -458,16 +419,14 @@ def handle(event):
         if not result["ok"]:
             return {"systemMessage": "TASK_WORKSPACE_NOT_READY: " + result["code"]}
         return {}
-    # Handle the SubagentStart hook event.
+    # Report the unsupported child-identity boundary without granting readiness.
     if name == "SubagentStart":
         return {"systemMessage": "HOST_UNSUPPORTED: Native child-to-tool identity is not verified. No child readiness is established."}
     # Allow lifecycle recovery while preserving tool-level readiness enforcement.
     if name in {"SessionStart", "PreCompact", "PostCompact"}:
-        # Attempt this phase while retaining its error and cleanup paths.
         try:
             result = core.execute(request_for(event, "ready"))
         except core.WorkspaceError as error:
-            # Preserve or translate this failure according to the enclosing contract.
             result = {"ok": False, "code": error.code}
         # Leave successful compaction hooks unobtrusive after checking readiness.
         if result["ok"] and name in {"PreCompact", "PostCompact"}:
@@ -483,14 +442,12 @@ def handle(event):
                 "the permitted packet, or repair the reported condition. Readiness was not granted."}}
     # Record only bounded optional facts for advisory lifecycle endings.
     if name in {"Stop", "Interrupt", "SessionEnd", "SubagentStop"}:
-        # Attempt this phase while retaining its error and cleanup paths.
         try:
             # Build the request from explicit caller or observed session identities.
             request = request_for(event, "event")
             core.execute({**request, "event_type": "observation", "event": {
                 "code": "INTERRUPTED" if name == "Interrupt" else "UNKNOWN"}})
         except (core.WorkspaceError, OSError):
-            # Preserve or translate this failure according to the enclosing contract.
             pass  # Optional observations cannot establish completion or retirement.
     return {}
 
@@ -501,7 +458,6 @@ def main():
     Returns:
         Zero after emitting a supported JSON response; failures become bounded diagnostics.
     """
-    # Prepare the main values for the next contract boundary.
     name = None
     def timeout(*_):
         """Interrupt a hook that exceeds its process-local execution deadline.
@@ -512,31 +468,26 @@ def main():
         Raises:
             core.WorkspaceError: Always, with the bounded BUSY diagnostic.
         """
-        # Stop with the original failure rather than continue with incomplete state.
         raise core.WorkspaceError("BUSY")
-    # Prepare the main values for the next contract boundary.
+    # Bound the entire hook, including input reads and filesystem checks, to two seconds.
     signal.signal(signal.SIGALRM, timeout)
     signal.setitimer(signal.ITIMER_REAL, 2.0)
-    # Attempt this phase while retaining its error and cleanup paths.
     try:
-        # Read main inputs through the scoped file interface.
+        # Reject oversized input before parsing or dispatching the host event.
         raw = sys.stdin.buffer.read(1024 * 1024 + 1)
-        # Enforce SIZE_LIMIT boundaries.
         core.require(len(raw) <= 1024 * 1024, "SIZE_LIMIT")
-        # Prepare sequence and event values without dropping prior history.
         event = core.strict_json(raw)
         name = event.get("hook_event_name")
         result = handle(event)
+    # Deny pre-tool failures; report other failures using the event-specific response shape.
     except Exception as error:
-        # Preserve or translate this failure according to the enclosing contract.
         code = error.code if isinstance(error, core.WorkspaceError) else "RECOVERY_REQUIRED"
         result = denial(code) if name == "PreToolUse" else (
             {"decision": "block", "reason": "TASK_WORKSPACE_NOT_READY: " + code} if name == "UserPromptSubmit" else
             {"systemMessage": "TASK_WORKSPACE_NOT_READY: " + code})
     finally:
-        # Release temporary resources even after a partial failure.
+        # Cancel the alarm even when decoding or hook handling fails.
         signal.setitimer(signal.ITIMER_REAL, 0)
-    # Prepare the main values for the next contract boundary.
     print(json.dumps(result, separators=(",", ":")))
     return 0
 

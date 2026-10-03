@@ -35,10 +35,8 @@ class PRReviewRegressions(Fixture):
         Raises:
             AssertionError: If the regression violates its expected safety or recovery result.
         """
-        # Arrange the disposable fixture and exercise the real lifecycle boundary.
         result = hook.handle(self.event('PreToolUse', tool_name='Bash',
                                        tool_use_id=identifier, tool_input={'command': 'true'}))
-        # Assert the expected safety result and preserved fixture state.
         self.assertEqual(result, {})
         return identifier
 
@@ -67,30 +65,23 @@ class PRReviewRegressions(Fixture):
         Raises:
             AssertionError: If the regression violates its expected safety or recovery result.
         """
-        # Arrange the disposable fixture and exercise the real lifecycle boundary.
         self.create(); self.ready()
         self.call('scope', expected_revision=self.state()['revision'],
                   target_participant=self.base['coordinator'], packet=[])
-        # Process each name under the same validation boundary.
+        # Check that each lifecycle hook preserves recovery access and the precise diagnostic.
         for name in ('SessionStart', 'PreCompact', 'PostCompact'):
-            # Report each hook or metadata variant as its own regression case.
             with self.subTest(name=name):
-                # Arrange the disposable fixture and exercise the real lifecycle boundary.
                 result = hook.handle(self.event(name))
-                # Assert the expected safety result and preserved fixture state.
                 self.assertNotEqual(result.get('continue'), False, result)
                 self.assertIn('NOT_READY', json.dumps(result))
-        # Arrange the disposable fixture and exercise the real lifecycle boundary.
+        # Ordinary tools must remain blocked until the assigned packet is acknowledged.
         denied = hook.handle(self.event('PreToolUse', tool_name='Bash',
                                        tool_use_id='unready', tool_input={'command': 'true'}))
-        # Assert the expected safety result and preserved fixture state.
         self.assertEqual(denied['hookSpecificOutput']['permissionDecision'], 'deny')
-        # Arrange the disposable fixture and exercise the real lifecycle boundary.
         self.call('acknowledge', packet_digest=w.sha(w.canonical([])))
+        # Confirm detachment is reachable once no pending work remains.
         self.call('detach', evidence=self.evidence())
-        # Assert the expected safety result and preserved fixture state.
         self.assertNotEqual(hook.handle(self.event('SessionStart')).get('continue'), False)
-        # Arrange the disposable fixture and exercise the real lifecycle boundary.
         resumed = self.call('resume')
         self.base['binding_generation'] = resumed['binding_generation']
         self.call('acknowledge', packet_digest=w.sha(w.canonical([])))
@@ -105,7 +96,6 @@ class PRReviewRegressions(Fixture):
         # Confine the injected failure to this disposable regression action.
         with mock.patch.object(hook, 'request_for', side_effect=w.WorkspaceError('REPOSITORY_MISMATCH')):
             result = hook.handle(self.event('SessionStart'))
-        # Assert the expected safety result and preserved fixture state.
         self.assertIn('REPOSITORY_MISMATCH', json.dumps(result))
         self.assertNotIn('BINDING_MISSING', json.dumps(result))
 
@@ -115,14 +105,11 @@ class PRReviewRegressions(Fixture):
         Raises:
             AssertionError: If the regression violates its expected safety or recovery result.
         """
-        # Arrange the disposable fixture and exercise the real lifecycle boundary.
         self.create(); self.ready(); self.start_tool()
         self.post_tool({'session_id': 123})
-        # Assert the expected safety result and preserved fixture state.
         self.assertEqual(self.state()['participants'][self.base['coordinator']]['pending']['original']['handle'], '123')
-        # Arrange the disposable fixture and exercise the real lifecycle boundary.
+        # Explicit completion must settle the original call even when its handle remains present.
         self.post_tool({'session_id': 123, 'exit_code': 0})
-        # Assert the expected safety result and preserved fixture state.
         self.assertEqual(self.state()['participants'][self.base['coordinator']]['pending'], {})
 
     def test_B2_poll_completion_resolves_original_handle(self):
@@ -131,12 +118,10 @@ class PRReviewRegressions(Fixture):
         Raises:
             AssertionError: If the regression violates its expected safety or recovery result.
         """
-        # Arrange the disposable fixture and exercise the real lifecycle boundary.
         self.create(); self.ready(); self.start_tool()
         self.post_tool({'session_id': 123})
         self.post_tool({'exit_code': 0}, identifier='poll', tool_name='write_stdin',
                        tool_input={'session_id': 123})
-        # Assert the expected safety result and preserved fixture state.
         self.assertEqual(self.state()['participants'][self.base['coordinator']]['pending'], {})
 
     def test_B3_metadata_survives_until_narrow_verified_cleanup(self):
@@ -145,29 +130,25 @@ class PRReviewRegressions(Fixture):
         Raises:
             AssertionError: If the regression violates its expected safety or recovery result.
         """
-        # Arrange the disposable fixture and exercise the real lifecycle boundary.
         self.create(); self.ready()
+        # Exercise metadata rules in both the issue root and its context directory.
         payload = self.root / '.task/TEST-1'
-        # Process each directory under the same validation boundary.
         for directory in (payload, payload / 'context'):
-            # Process each name under the same validation boundary.
             for name in ('.DS_Store', '._roadmap.md'):
                 (directory / name).write_bytes(b'fixture metadata')
-        # Stage the verified lifecycle changes in the issue state.
         self.call('ready')
         state = self.state()
         self.call('update', path='roadmap.md', content='# preserved work\n',
                   old_digest=state['files']['roadmap.md'], expected_revision=state['revision'],
                   provenance={'sources': self.evidence(), 'status': 'draft', 'applicability': 'test'})
         observations = self.archive()
+        # Verify excluded metadata never becomes reconstructable archive content.
         snapshot, files, receipt = w.verify_provider(self.state(), observations)
-        # Assert the expected safety result and preserved fixture state.
         self.assertFalse(any('.DS_Store' in name or '/._' in name or name.startswith('._') for name in files))
         self.require_ok(w.execute(self.cleanup_request(observations)))
         self.assertFalse(payload.exists())
-        # Arrange the disposable fixture and exercise the real lifecycle boundary.
+        # Restore the verified task bytes after narrow cleanup removes the payload.
         self.call('restore', observations=observations)
-        # Assert the expected safety result and preserved fixture state.
         self.assertEqual((payload / 'roadmap.md').read_text(), '# preserved work\n')
 
     def test_B1_real_repository_mismatch_is_not_unbound(self):
@@ -176,18 +157,14 @@ class PRReviewRegressions(Fixture):
         Raises:
             AssertionError: If the regression violates its expected safety or recovery result.
         """
-        # Arrange the disposable fixture and exercise the real lifecycle boundary.
         registration = self.root / '.task/.repository.json'
-        # Read repository registration through validated directory handles.
+        # Corrupt the disposable registration identity to exercise the real mismatch path.
         data = json.loads(registration.read_text())
-        # Arrange the disposable fixture and exercise the real lifecycle boundary.
         data['common_identity'] = [-1, -1]
         registration.write_text(json.dumps(data))
-        # Process each name under the same validation boundary.
+        # Check that each lifecycle hook preserves recovery access and the precise diagnostic.
         for name in ('SessionStart', 'PreCompact', 'PostCompact'):
-            # Arrange the disposable fixture and exercise the real lifecycle boundary.
             result = hook.handle(self.event(name))
-            # Assert the expected safety result and preserved fixture state.
             self.assertIn('REPOSITORY_MISMATCH', json.dumps(result))
             self.assertNotIn('BINDING_MISSING', json.dumps(result))
 
@@ -197,35 +174,28 @@ class PRReviewRegressions(Fixture):
         Raises:
             AssertionError: If the regression violates its expected safety or recovery result.
         """
-        # Arrange the disposable fixture and exercise the real lifecycle boundary.
         self.create(); self.ready(); self.start_tool()
-        # Process each response under the same validation boundary.
         for response in ({}, {'session_id': None, 'exit_code': None, 'isError': None},
                          {'exit_code': False}, {'exit_code': '0'}, {'isError': 'false'}):
-            # Normalize response metadata without inferring completion from missing values.
+            # Ambiguous response fields must leave the original operation pending.
             self.post_tool(response)
-            # Assert the expected safety result and preserved fixture state.
             self.assertIn('original', self.state()['participants'][self.base['coordinator']]['pending'])
-        # Arrange the disposable fixture and exercise the real lifecycle boundary.
         self.post_tool({'session_id': 123, 'isError': False})
-        # Assert the expected safety result and preserved fixture state.
         self.assertEqual(self.state()['participants'][self.base['coordinator']]['pending']['original']['handle'], '123')
-        # Arrange the disposable fixture and exercise the real lifecycle boundary.
+        # Capture the complete state so rejected observations must preserve every field.
         before = self.state()
         rejected = self.post_tool({'session_id': 456, 'exit_code': 0})
-        # Assert the expected safety result and preserved fixture state.
         self.assertIn('REQUEST_CONFLICT', json.dumps(rejected))
         self.assertEqual(self.state(), before)
-        # Arrange the disposable fixture and exercise the real lifecycle boundary.
         self.post_tool({'session_id': 456, 'exit_code': 0}, identifier='poll-conflict',
                        tool_name='write_stdin', tool_input={'session_id': 123})
-        # Assert the expected safety result and preserved fixture state.
         self.assertEqual(self.state(), before)
-        # Arrange the disposable fixture and exercise the real lifecycle boundary.
+        # Explicit completion must settle the original call even when its handle remains present.
         self.post_tool({'session_id': 123, 'exit_code': 0})
+        # An exact completion retry must not append events or change the settled state.
         completed = self.state()
+        # Explicit completion must settle the original call even when its handle remains present.
         self.post_tool({'session_id': 123, 'exit_code': 0})
-        # Assert the expected safety result and preserved fixture state.
         self.assertEqual(self.state(), completed)
 
     def test_B2_polling_ambiguous_handle_does_not_choose_an_operation(self):
@@ -234,14 +204,13 @@ class PRReviewRegressions(Fixture):
         Raises:
             AssertionError: If the regression violates its expected safety or recovery result.
         """
-        # Arrange the disposable fixture and exercise the real lifecycle boundary.
         self.create(); self.ready(); self.start_tool('first'); self.start_tool('second')
         self.post_tool({'session_id': 123}, identifier='first')
         self.post_tool({'session_id': 123}, identifier='second')
+        # Capture the complete state so rejected observations must preserve every field.
         before = self.state()
         result = self.post_tool({'exit_code': 0}, identifier='poll', tool_name='write_stdin',
                                 tool_input={'session_id': 123})
-        # Assert the expected safety result and preserved fixture state.
         self.assertIn('UNKNOWN_OPERATION', json.dumps(result))
         self.assertEqual(self.state(), before)
 
@@ -251,26 +220,20 @@ class PRReviewRegressions(Fixture):
         Raises:
             AssertionError: If the regression violates its expected safety or recovery result.
         """
-        # Arrange the disposable fixture and exercise the real lifecycle boundary.
         self.create(); self.ready(); self.start_tool()
         self.post_tool({'isError': None}, tool_name='mcp__fixture__read')
-        # Assert the expected safety result and preserved fixture state.
         self.assertIn('original', self.state()['participants'][self.base['coordinator']]['pending'])
-        # Arrange the disposable fixture and exercise the real lifecycle boundary.
         self.post_tool({'isError': False}, tool_name='mcp__fixture__read')
-        # Assert the expected safety result and preserved fixture state.
         self.assertEqual(self.state()['participants'][self.base['coordinator']]['pending'], {})
-        # Arrange the disposable fixture and exercise the real lifecycle boundary.
+        # Exercise the core correlation check directly after proving typed MCP completion.
         self.start_tool('next')
         self.call('tool-complete', tool_id='next', async_handle='123')
+        # Capture the complete state so rejected observations must preserve every field.
         before = self.state()
         denied = w.execute(self.req('tool-complete', tool_id='next', async_handle='456', completed=True))
-        # Assert the expected safety result and preserved fixture state.
         self.assertEqual(denied['code'], 'REQUEST_CONFLICT')
         self.assertEqual(self.state(), before)
-        # Arrange the disposable fixture and exercise the real lifecycle boundary.
         self.call('tool-complete', tool_id='next', async_handle='123', completed=True)
-        # Assert the expected safety result and preserved fixture state.
         self.assertEqual(self.state()['participants'][self.base['coordinator']]['pending'], {})
 
     def test_B3_unsafe_metadata_and_other_dotfiles_are_not_ignored(self):
@@ -279,43 +242,30 @@ class PRReviewRegressions(Fixture):
         Raises:
             AssertionError: If the regression violates its expected safety or recovery result.
         """
-        # Arrange the disposable fixture and exercise the real lifecycle boundary.
         self.create(); self.ready()
         sentinel = self.root / 'outside-sentinel'
         sentinel.write_bytes(b'outside unchanged')
+        # Exercise metadata rules in both the issue root and its context directory.
         payload = self.root / '.task/TEST-1'
-        # Process each directory under the same validation boundary.
         for directory in (payload, payload / 'context'):
-            # Process each name under the same validation boundary.
             for name in ('.DS_Store', '._roadmap.md'):
-                # Arrange the disposable fixture and exercise the real lifecycle boundary.
                 path = directory / name
+                # A recognized metadata name must still reject symlinks, hardlinks, and directories.
                 path.symlink_to(sentinel)
-                # Assert the expected safety result and preserved fixture state.
                 self.assertFalse(w.execute(self.req('ready'))['ok'])
-                # Release the scoped resource or remove the already validated direct entry.
                 path.unlink()
-                # Arrange the disposable fixture and exercise the real lifecycle boundary.
                 os.link(sentinel, path)
-                # Assert the expected safety result and preserved fixture state.
                 self.assertFalse(w.execute(self.req('ready'))['ok'])
-                # Release the scoped resource or remove the already validated direct entry.
                 path.unlink()
-                # Arrange the disposable fixture and exercise the real lifecycle boundary.
                 path.mkdir()
-                # Assert the expected safety result and preserved fixture state.
                 self.assertFalse(w.execute(self.req('ready'))['ok'])
-                # Release the scoped resource or remove the already validated direct entry.
                 path.rmdir()
-            # Arrange the disposable fixture and exercise the real lifecycle boundary.
+            # Unrelated hidden files must remain visible as unsafe payload entries.
             foreign = directory / '.foreign'
             foreign.write_text('foreign data')
-            # Assert the expected safety result and preserved fixture state.
             self.assertFalse(w.execute(self.req('ready'))['ok'])
             self.assertEqual(foreign.read_text(), 'foreign data')
-            # Release the scoped resource or remove the already validated direct entry.
             foreign.unlink()
-        # Assert the expected safety result and preserved fixture state.
         self.assertEqual(sentinel.read_bytes(), b'outside unchanged')
 
     def test_B3_quarantine_metadata_substitution_preserves_outside_and_payload(self):
@@ -324,7 +274,6 @@ class PRReviewRegressions(Fixture):
         Raises:
             AssertionError: If the regression violates its expected safety or recovery result.
         """
-        # Build the request from explicit caller or observed session identities.
         self.create(); self.ready()
         observations = self.archive()
         sentinel = self.root / 'outside-sentinel'
@@ -337,27 +286,21 @@ class PRReviewRegressions(Fixture):
             Args:
                 point: Named internal transaction boundary for a test injection.
             """
-            # Handle the case point == 'quarantine'.
+            # Substitute metadata only after cleanup has moved the verified issue into quarantine.
             if point == 'quarantine':
-                # Read substitute inputs through the scoped file interface.
                 intent = json.loads((control / 'cleanup.json').read_text())
-                # Arrange the disposable fixture and exercise the real lifecycle boundary.
                 (control / intent['quarantine'] / '.DS_Store').symlink_to(sentinel)
         # Confine the injected failure to this disposable regression action.
         with mock.patch.object(w, 'FAILPOINT', substitute):
             result = w.execute(request)
-        # Assert the expected safety result and preserved fixture state.
+        # Cleanup must stop before deleting task bytes or following the substituted link.
         self.assertFalse(result['ok'])
-        # Read test_B3_quarantine_metadata_substitution_preserves_outside_and_payload inputs through the scoped file interface.
         intent = json.loads((control / 'cleanup.json').read_text())
-        # Arrange the disposable fixture and exercise the real lifecycle boundary.
         quarantine = control / intent['quarantine']
-        # Assert the expected safety result and preserved fixture state.
         self.assertTrue((quarantine / 'roadmap.md').exists())
         self.assertEqual(sentinel.read_bytes(), b'outside unchanged')
-        # Release the scoped resource or remove the already validated direct entry.
+        # Remove only the injected link, then prove the same cleanup request can recover.
         (quarantine / '.DS_Store').unlink()
-        # Assert the expected safety result and preserved fixture state.
         self.require_ok(w.execute(request))
 
     def test_B2_full_poll_lifecycle_retires_transport_and_original(self):
@@ -385,6 +328,7 @@ class PRReviewRegressions(Fixture):
         # Terminal disposition and retirement must now be reachable without manual edits.
         self.assertEqual(pending, {})
         self.call('outcome', expected_revision=self.state()['revision'], disposition='cancelled', evidence=self.evidence())
+        # Confirm detachment is reachable once no pending work remains.
         self.call('detach', evidence=self.evidence())
 
     def test_B2_malformed_explicit_handles_cannot_retire_work(self):
@@ -396,6 +340,7 @@ class PRReviewRegressions(Fixture):
         # Establish a known running process whose retirement must remain blocked.
         self.create(); self.ready(); self.start_tool()
         self.post_tool({'session_id': 123})
+        # Capture the complete state so rejected observations must preserve every field.
         before = self.state()
         # Exercise invalid JSON types and empty tokens at both correlation boundaries.
         for malformed in ([], {}, True, False, '', ' ', 1.5):
@@ -411,6 +356,7 @@ class PRReviewRegressions(Fixture):
         # Missing metadata remains valid when the original call ID supplies correlation.
         self.assertEqual(w.execute(self.req('detach', evidence=self.evidence()))['code'], 'PENDING_OPERATION')
         self.post_tool({'exit_code': 0})
+        # Confirm detachment is reachable once no pending work remains.
         self.call('detach', evidence=self.evidence())
 
     def test_B2_concurrent_polls_retire_after_one_settles_parent(self):
@@ -448,6 +394,7 @@ class PRReviewRegressions(Fixture):
         # Reject invalid handles before a polling tool can create pending state.
         self.create(); self.ready(); self.start_tool()
         self.post_tool({'session_id': 123})
+        # Capture the complete state so rejected observations must preserve every field.
         before = self.state()
         for malformed in ([], True, '', None):
             result = hook.handle(self.event('PreToolUse', tool_name='write_stdin',
