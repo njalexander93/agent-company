@@ -9,7 +9,7 @@
 3. Copy the appropriate template. Replace every placeholder with sourced content or an explicit disposition from [Completeness and gaps](#completeness-and-gaps). Link shared rules instead of recreating them.
 4. Check the draft against [Review and maintenance](#review-and-maintenance). Record field completeness, reference verification and semantic review separately. A structurally complete document can still misstate authority.
 
-For the fresh-author trial, the frozen packet supplies product guidance and explicitly permitted governing records. **SPEC is research provenance, never required fresh-author reading.** Research notes, upstream author reasoning and conversations are not implicit inputs. The single Agent Governance Officer example is deliberately absent until the fresh author creates it; this format supplies no completed Role-specific answer. [Baseline, confirmed decisions D01/D02; RC-07, Context rules.]
+For the fresh-author trial, the frozen packet supplies product guidance and explicitly permitted governing records. **SPEC is research provenance, never required fresh-author reading.** Research notes, upstream author reasoning and conversations are not implicit inputs. The frozen trial packet deliberately excluded the Agent Governance Officer example, which the fresh author subsequently produced; this format supplies no completed Role-specific answer. [Baseline, confirmed decisions D01/D02; RC-07, Context rules.]
 
 ## Role template
 
@@ -184,7 +184,7 @@ Needed starter methods can include source/reference verification, bounded drafti
 5. **Changes:** When a source rule or parent changes, identify all affected Roles/Profiles, policy references, coverage entries and fixture expectations. Retain the changed source identity; update affected artifacts in the same review or explicitly linked work with an owner and readiness effect. Recheck references and semantics; repeat affected authoring/review trials. A material candidate change requires applicable renewed review/decision, not transferred approval.
 6. **Evidence:** Record the exact candidate, checks, failures/repairs, unresolved gaps and actual reviewer decisions at a durable evidence locator. Apply the baseline's human-reviewed GitHub PR requirement. Paper expectations remain separate from actual receipts, runtime tests, human acceptance and activation.
 
-The authoring trial, independent example review and integrated acceptance remain downstream. No AGO example, answer key, Skill implementation or runtime test result is supplied by this document. [Baseline, confirmed decisions and acceptance evidence; L6; RC-02/RC-07.]
+The frozen authoring trial and independent example review passed their bounded documentation checks; see the [baseline evidence record](baseline.md#acceptance-evidence-and-readiness). Integrated acceptance remains open. This reusable format supplies no Role-specific answer key, Skill implementation or runtime test result. [Baseline, confirmed decisions and acceptance evidence; L6; RC-02/RC-07.]
 
 ## Sources
 
