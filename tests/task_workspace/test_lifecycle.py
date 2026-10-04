@@ -3,27 +3,27 @@
 Provider evidence is synthetic. These tests do not prove live desktop coverage,
 provider acceptance, human approval or adversarial runtime isolation.
 """
-import concurrent.futures
+
 import copy
-import importlib.util
 import json
 import multiprocessing
 import os
-from pathlib import Path
 import shlex
 import subprocess
 import sys
 import tempfile
 import unittest
 import uuid
+from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT))
-from operations.memory import task_workspace as w
+import pytest
+
 from adapters.openai import task_workspace_hook as hook
+from operations.memory import task_workspace as w
+from tests.task_workspace.types import JsonObject, JsonValue
 
 
-def call_process(request):
+def call_process(request: JsonObject) -> JsonObject:
     """Dispatch one lifecycle request in a multiprocessing worker.
 
     Args:
@@ -35,13 +35,25 @@ def call_process(request):
     return w.execute(request)
 
 
+ROOT = Path(__file__).resolve().parents[2]
+
+pytestmark = pytest.mark.integration
+
+
 class Fixture(unittest.TestCase):
     """Provide disposable Git worktrees and synthetic lifecycle evidence.
 
     Helpers call the real local core. Provider observations and evidence markers
     are test fixtures, not live provider read-back or human acceptance.
     """
-    def setUp(self):
+
+    temp: tempfile.TemporaryDirectory[str]
+    root: Path
+    other: Path
+    serial: int
+    base: JsonObject
+
+    def setUp(self) -> None:
         """Create isolated worktrees and register their shared repository identity.
 
         Temporary files are removed through unittest cleanup even if setup fails.
@@ -54,24 +66,45 @@ class Fixture(unittest.TestCase):
         # Allocate a disposable root and register cleanup before filesystem setup.
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name).resolve() / 'main'
+        self.root = Path(self.temp.name).resolve() / "main"
         self.root.mkdir()
         # Initialize a committed main repository and its linked worktree.
-        self.git('init', '-q')
-        self.git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--allow-empty', '-qm', 'fixture')
-        self.other = Path(self.temp.name).resolve() / 'other'
-        self.git('worktree', 'add', '-q', '-b', 'other', str(self.other))
+        self.git("init", "-q")
+        self.git(
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "fixture",
+        )
+        self.other = Path(self.temp.name).resolve() / "other"
+        self.git("worktree", "add", "-q", "-b", "other", str(self.other))
         # Define the explicit coordinator and issue identity for fixture requests.
         self.serial = 0
-        self.base = {'schema_version': 1, 'worktree': str(self.root), 'session_id': 'coordinator', 'host': 'codex',
-                     'issue_id': 'TEST-1', 'issue_uuid': 'fixture-issue-uuid'}
-        self.base['coordinator'] = w.participant_key(self.base)
+        self.base = {
+            "schema_version": 1,
+            "worktree": str(self.root),
+            "session_id": "coordinator",
+            "host": "codex",
+            "issue_id": "TEST-1",
+            "issue_uuid": "fixture-issue-uuid",
+        }
+        self.base["coordinator"] = w.participant_key(self.base)
         # Register both worktrees against the same canonical repository.
-        reg = self.call('register', main_worktree=str(self.root))
-        self.base['repo_id'] = reg['repo_id']
-        self.require_ok(w.execute(self.req('register', worktree=str(self.other), main_worktree=str(self.root), repo_id=None)))
+        reg = self.call("register", main_worktree=str(self.root))
+        self.base["repo_id"] = reg["repo_id"]
+        self.require_ok(
+            w.execute(
+                self.req(
+                    "register", worktree=str(self.other), main_worktree=str(self.root), repo_id=None
+                )
+            )
+        )
 
-    def git(self, *args):
+    def git(self, *args: str) -> str:
         """Run Git against the disposable main worktree.
 
         Args:
@@ -85,9 +118,11 @@ class Fixture(unittest.TestCase):
             subprocess.CalledProcessError: Git returns a nonzero exit status.
         """
         # Run Git without shell interpolation and capture checked output.
-        return subprocess.run(['git', '-C', str(self.root), *args], check=True, capture_output=True, text=True).stdout
+        return subprocess.run(
+            ["git", "-C", str(self.root), *args], check=True, capture_output=True, text=True
+        ).stdout
 
-    def req(self, operation, **kwargs):
+    def req(self, operation: str, **kwargs: JsonValue) -> JsonObject:
         """Build a fresh fixture request with explicit per-call overrides.
 
         Args:
@@ -99,11 +134,11 @@ class Fixture(unittest.TestCase):
         """
         # Advance fixture numbering and apply explicit overrides to a fresh request.
         self.serial += 1
-        request = {**self.base, 'operation': operation, 'request_id': str(uuid.uuid4()), **kwargs}
+        request = {**self.base, "operation": operation, "request_id": str(uuid.uuid4()), **kwargs}
         # Omit fields removed by None overrides before dispatch.
         return {k: v for k, v in request.items() if v is not None}
 
-    def require_ok(self, result):
+    def require_ok(self, result: JsonObject) -> JsonObject:
         """Require a successful core response and return it unchanged.
 
         Args:
@@ -116,10 +151,10 @@ class Fixture(unittest.TestCase):
             AssertionError: The response reports failure.
         """
         # Reject an unsuccessful response before exposing it to the caller.
-        self.assertTrue(result['ok'], result)
+        self.assertTrue(result["ok"], result)
         return result
 
-    def call(self, operation, **kwargs):
+    def call(self, operation: str, **kwargs: JsonValue) -> JsonObject:
         """Build and dispatch a fixture request that is expected to succeed.
 
         Args:
@@ -135,7 +170,7 @@ class Fixture(unittest.TestCase):
         # Dispatch the constructed request and require its declared success.
         return self.require_ok(w.execute(self.req(operation, **kwargs)))
 
-    def create(self):
+    def create(self) -> JsonObject:
         """Create the fixture issue and remember its returned binding generation.
 
         Returns:
@@ -145,11 +180,11 @@ class Fixture(unittest.TestCase):
             AssertionError: Creation fails.
         """
         # Create once and retain the generation needed by later requests.
-        result = self.call('create')
-        self.base['binding_generation'] = result['binding_generation']
+        result = self.call("create")
+        self.base["binding_generation"] = result["binding_generation"]
         return result
 
-    def state(self):
+    def state(self) -> JsonObject:
         """Read the committed control state of the primary fixture issue.
 
         Returns:
@@ -160,28 +195,33 @@ class Fixture(unittest.TestCase):
             json.JSONDecodeError: The state file is not valid JSON.
         """
         # Read and decode the current committed control file.
-        return json.loads((self.root / '.task/.control/issues/TEST-1/state.json').read_text())
+        return json.loads((self.root / ".task/.control/issues/TEST-1/state.json").read_text())
 
-    def evidence(self):
+    def evidence(self) -> list[JsonObject]:
         """Return a synthetic evidence marker for local request validation.
 
         Returns:
             A fixture locator and placeholder digest, not verified acceptance evidence.
         """
-        return [{'id': 'fixture', 'locator': 'fixture://test-evidence', 'sha256': 'a' * 64}]
+        return [{"id": "fixture", "locator": "fixture://test-evidence", "sha256": "a" * 64}]
 
-    def ready(self):
+    def ready(self) -> None:
         """Assign and acknowledge an empty coordinator packet.
 
         Raises:
             AssertionError: Packet assignment or acknowledgment fails.
         """
         # Install the explicit empty packet at the current revision.
-        self.call('scope', expected_revision=self.state()['revision'], target_participant=self.base['coordinator'], packet=[])
+        self.call(
+            "scope",
+            expected_revision=self.state()["revision"],
+            target_participant=self.base["coordinator"],
+            packet=[],
+        )
         # Acknowledge that exact packet digest for subsequent readiness checks.
-        self.call('acknowledge', packet_digest=w.sha(w.canonical([])))
+        self.call("acknowledge", packet_digest=w.sha(w.canonical([])))
 
-    def observations(self, export):
+    def observations(self, export: JsonObject) -> list[JsonObject]:
         """Construct synthetic provider read-back for the exported parts.
 
         Args:
@@ -192,12 +232,20 @@ class Fixture(unittest.TestCase):
             No remote provider is contacted.
         """
         # Map each exported part to a deterministic synthetic provider observation.
-        return [{'id': 'part-' + str(i), 'url': 'https://linear.app/test/document/part-' + str(i),
-                 'issue': self.base['issue_uuid'], 'updatedAt': '2026-10-03T00:00:00Z',
-                 'origin': 'linear_get_document', 'request_id': 'fixture-get', 'content': part['content']}
-                for i, part in enumerate(export['parts'])]
+        return [
+            {
+                "id": "part-" + str(i),
+                "url": "https://linear.app/test/document/part-" + str(i),
+                "issue": self.base["issue_uuid"],
+                "updatedAt": "2026-10-03T00:00:00Z",
+                "origin": "linear_get_document",
+                "request_id": "fixture-get",
+                "content": part["content"],
+            }
+            for i, part in enumerate(export["parts"])
+        ]
 
-    def seal(self):
+    def seal(self) -> JsonObject:
         """Cancel the fixture issue and seal its terminal archive snapshot.
 
         Returns:
@@ -207,11 +255,16 @@ class Fixture(unittest.TestCase):
             AssertionError: Cancellation or archive preparation fails.
         """
         # Record cancellation as the explicit terminal basis for this fixture.
-        self.call('outcome', expected_revision=self.state()['revision'], disposition='cancelled', evidence=self.evidence())
+        self.call(
+            "outcome",
+            expected_revision=self.state()["revision"],
+            disposition="cancelled",
+            evidence=self.evidence(),
+        )
         # Seal and export only after the terminal outcome commits.
-        return self.call('archive-prepare', expected_revision=self.state()['revision'], seal=True)
+        return self.call("archive-prepare", expected_revision=self.state()["revision"], seal=True)
 
-    def archive(self):
+    def archive(self) -> list[JsonObject]:
         """Verify a sealed archive using synthetic part and index observations.
 
         Returns:
@@ -224,15 +277,23 @@ class Fixture(unittest.TestCase):
         export = self.seal()
         observations = self.observations(export)
         # Create the index and add its matching synthetic read-back.
-        index = self.call('archive-index', observations=observations)
-        observations.append({'id': 'index', 'url': 'https://linear.app/test/document/index',
-                             'issue': self.base['issue_uuid'], 'updatedAt': '2026-10-03T00:00:00Z',
-                             'origin': 'linear_get_document', 'request_id': 'fixture-get', 'content': index['content']})
+        index = self.call("archive-index", observations=observations)
+        observations.append(
+            {
+                "id": "index",
+                "url": "https://linear.app/test/document/index",
+                "issue": self.base["issue_uuid"],
+                "updatedAt": "2026-10-03T00:00:00Z",
+                "origin": "linear_get_document",
+                "request_id": "fixture-get",
+                "content": index["content"],
+            }
+        )
         # Verify the complete observation set before returning it for cleanup tests.
-        self.call('archive-verify', observations=observations)
+        self.call("archive-verify", observations=observations)
         return observations
 
-    def cleanup_request(self, observations):
+    def cleanup_request(self, observations: list[JsonObject]) -> JsonObject:
         """Bind retained fixture observations to a new cleanup challenge.
 
         Args:
@@ -245,93 +306,122 @@ class Fixture(unittest.TestCase):
             AssertionError: Cleanup planning refuses the current fixture state.
         """
         # Request a fresh cleanup challenge for the verified terminal snapshot.
-        challenge = self.call('cleanup-plan')['cleanup_challenge']
+        challenge = self.call("cleanup-plan")["cleanup_challenge"]
         # Bind each observation to this challenge and build the commit request.
-        observations = [{**o, 'request_id': challenge} for o in observations]
-        return self.req('cleanup-commit', observations=observations, cleanup_challenge=challenge)
+        observations = [{**o, "request_id": challenge} for o in observations]
+        return self.req("cleanup-commit", observations=observations, cleanup_challenge=challenge)
 
 
 class LifecycleTests(Fixture):
     """Exercise local lifecycle, containment and adapter contracts in disposable stores."""
-    def test_T01_cross_worktree_concurrent_create_and_isolation(self):
+
+    def test_T01_cross_worktree_concurrent_create_and_isolation(self) -> None:
         """Verify concurrent creation converges while another issue stays separate.
 
         Raises:
             AssertionError: An asserted lifecycle or boundary invariant does not hold.
         """
         # Prepare matching issue creation from both registered worktrees.
-        requests = [self.req('create'), self.req('create', worktree=str(self.other), binding_generation=1)]
+        requests = [
+            self.req("create"),
+            self.req("create", worktree=str(self.other), binding_generation=1),
+        ]
         # Race both creators using separate processes.
-        with multiprocessing.get_context('fork').Pool(2) as pool:
+        with multiprocessing.get_context("fork").Pool(2) as pool:
             results = pool.map(call_process, requests)
         # Check every result and the shared canonical view.
         for r in results:
             self.require_ok(r)
-        self.assertTrue((self.other / '.task/TEST-1').is_symlink())
-        self.assertEqual((self.other / '.task/TEST-1').resolve(), self.root / '.task/TEST-1')
+        self.assertTrue((self.other / ".task/TEST-1").is_symlink())
+        self.assertEqual((self.other / ".task/TEST-1").resolve(), self.root / ".task/TEST-1")
         # Create a different issue and verify its roadmap has a distinct identity.
-        second = self.req('create', issue_id='TEST-2', issue_uuid='second', session_id='second')
-        second['coordinator'] = w.participant_key(second)
+        second = self.req("create", issue_id="TEST-2", issue_uuid="second", session_id="second")
+        second["coordinator"] = w.participant_key(second)
         self.require_ok(w.execute(second))
-        self.assertNotEqual((self.root / '.task/TEST-1/roadmap.md').read_bytes(), (self.root / '.task/TEST-2/roadmap.md').read_bytes())
+        self.assertNotEqual(
+            (self.root / ".task/TEST-1/roadmap.md").read_bytes(),
+            (self.root / ".task/TEST-2/roadmap.md").read_bytes(),
+        )
 
-    def test_T02_invalid_ids_links_foreign_registration(self):
+    def test_T02_invalid_ids_links_foreign_registration(self) -> None:
         """Reject unsafe issue IDs and linked payloads without changing outside bytes.
 
         Raises:
             AssertionError: An asserted lifecycle or boundary invariant does not hold.
         """
         # Try malformed and ambiguous IDs before creating any payload.
-        for identifier in ['../TEST-1', 'test-1', 'TEST-01', 'TEST-0', 'TEST-1/', 'ТEST-1', 'TEST-1\n']:
-            self.assertFalse(w.execute(self.req('create', issue_id=identifier))['ok'])
+        for identifier in [
+            "../TEST-1",
+            "test-1",
+            "TEST-01",
+            "TEST-0",
+            "TEST-1/",
+            "ТEST-1",
+            "TEST-1\n",
+        ]:
+            self.assertFalse(w.execute(self.req("create", issue_id=identifier))["ok"])
         # Create an outside sentinel and substitute a payload symlink.
-        sentinel = Path(self.temp.name).resolve() / 'sentinel'
-        sentinel.write_text('outside')
+        sentinel = Path(self.temp.name).resolve() / "sentinel"
+        sentinel.write_text("outside")
         self.create()
-        note = self.root / '.task/TEST-1/context/escape.md'
+        note = self.root / ".task/TEST-1/context/escape.md"
         note.symlink_to(sentinel)
         # Check that readiness refuses the substituted path without changing its target.
-        self.assertFalse(w.execute(self.req('ready'))['ok'])
-        self.assertEqual(sentinel.read_text(), 'outside')
+        self.assertFalse(w.execute(self.req("ready"))["ok"])
+        self.assertEqual(sentinel.read_text(), "outside")
         # Replace the symlink with a hard link and repeat the containment check.
         note.unlink()
         os.link(sentinel, note)
-        self.assertFalse(w.execute(self.req('ready'))['ok'])
-        self.assertEqual(sentinel.read_text(), 'outside')
+        self.assertFalse(w.execute(self.req("ready"))["ok"])
+        self.assertEqual(sentinel.read_text(), "outside")
 
-    def test_T03_resume_idempotency_adoption_generation(self):
+    def test_T03_resume_idempotency_adoption_generation(self) -> None:
         """Preserve exact roadmap bytes across retries, resume and manual adoption.
 
         Raises:
             AssertionError: An asserted lifecycle or boundary invariant does not hold.
         """
         # Create once and replay the same request to check idempotency.
-        request = self.req('create')
+        request = self.req("create")
         first = self.require_ok(w.execute(request))
         self.assertEqual(first, w.execute(request))
-        self.base['binding_generation'] = first['binding_generation']
+        self.base["binding_generation"] = first["binding_generation"]
         # Capture progress and verify resume preserves it.
-        before = (self.root / '.task/TEST-1/roadmap.md').read_bytes()
-        self.call('resume')
-        self.assertEqual(before, (self.root / '.task/TEST-1/roadmap.md').read_bytes())
+        before = (self.root / ".task/TEST-1/roadmap.md").read_bytes()
+        self.call("resume")
+        self.assertEqual(before, (self.root / ".task/TEST-1/roadmap.md").read_bytes())
         # Reject stale participant generations and conflicting provider identities.
-        self.assertEqual(w.execute(self.req('resume', binding_generation=999))['code'], 'STALE_BINDING')
-        self.assertEqual(w.execute({**request, 'issue_uuid': 'different'})['code'], 'ISSUE_MISMATCH')
+        self.assertEqual(
+            w.execute(self.req("resume", binding_generation=999))["code"], "STALE_BINDING"
+        )
+        self.assertEqual(
+            w.execute({**request, "issue_uuid": "different"})["code"], "ISSUE_MISMATCH"
+        )
         # Prepare a manually maintained workspace with distinctive formatting.
-        manual = self.root / '.task/MANUAL-2'
-        (manual / 'context').mkdir(parents=True)
-        (manual / 'roadmap.md').write_text('# Preserve my exact formatting\n')
+        manual = self.root / ".task/MANUAL-2"
+        (manual / "context").mkdir(parents=True)
+        (manual / "roadmap.md").write_text("# Preserve my exact formatting\n")
         # Bind adoption to the inspected inventory and its explicit owner.
-        request = self.req('adopt', issue_id='MANUAL-2', session_id='manual', binding_generation=None,
-                           issue_uuid='manual', evidence=self.evidence())
+        request = self.req(
+            "adopt",
+            issue_id="MANUAL-2",
+            session_id="manual",
+            binding_generation=None,
+            issue_uuid="manual",
+            evidence=self.evidence(),
+        )
         key = w.participant_key(request)
-        request.update(coordinator=key, inventory={'roadmap.md': w.sha((manual / 'roadmap.md').read_bytes())}, owners={'roadmap.md': key})
+        request.update(
+            coordinator=key,
+            inventory={"roadmap.md": w.sha((manual / "roadmap.md").read_bytes())},
+            owners={"roadmap.md": key},
+        )
         # Adopt the existing bytes and verify only the adoption event is new.
         self.require_ok(w.execute(request))
-        self.assertEqual((manual / 'roadmap.md').read_text(), '# Preserve my exact formatting\n')
-        self.assertEqual(len((manual / 'events.jsonl').read_text().splitlines()), 1)
+        self.assertEqual((manual / "roadmap.md").read_text(), "# Preserve my exact formatting\n")
+        self.assertEqual(len((manual / "events.jsonl").read_text().splitlines()), 1)
 
-    def test_T04_concurrent_update_and_owner(self):
+    def test_T04_concurrent_update_and_owner(self) -> None:
         """Allow one revision-matched writer and reject its racing stale update.
 
         Raises:
@@ -340,28 +430,51 @@ class LifecycleTests(Fixture):
         # Prepare two competing writes from the same committed revision.
         self.create()
         state = self.state()
-        requests = [self.req('update', path='roadmap.md', content='# ' + str(i), expected_revision=state['revision'],
-                             old_digest=state['files']['roadmap.md'], provenance={'sources': self.evidence(), 'status': 'draft', 'applicability': 'fixture'}) for i in range(2)]
+        requests = [
+            self.req(
+                "update",
+                path="roadmap.md",
+                content="# " + str(i),
+                expected_revision=state["revision"],
+                old_digest=state["files"]["roadmap.md"],
+                provenance={
+                    "sources": self.evidence(),
+                    "status": "draft",
+                    "applicability": "fixture",
+                },
+            )
+            for i in range(2)
+        ]
         # Race the writes in separate processes under the shared issue lock.
-        with multiprocessing.get_context('fork').Pool(2) as pool:
+        with multiprocessing.get_context("fork").Pool(2) as pool:
             results = pool.map(call_process, requests)
         # Require one winner and one explicit revision conflict.
-        self.assertEqual(sum(r['ok'] for r in results), 1, results)
-        self.assertIn('REVISION_CONFLICT', [r['code'] for r in results])
+        self.assertEqual(sum(r["ok"] for r in results), 1, results)
+        self.assertIn("REVISION_CONFLICT", [r["code"] for r in results])
 
-    def test_T05_transaction_boundaries_exactly_once(self):
+    def test_T05_transaction_boundaries_exactly_once(self) -> None:
         """Recover each interrupted creation with exactly one committed event.
 
         Raises:
             AssertionError: An asserted lifecycle or boundary invariant does not hold.
         """
         # Exercise each selected persistence boundary with a fresh issue.
-        for point in ['intent', 'payload:roadmap.md', 'payload:events.jsonl', 'payload-flush', 'state', 'transaction-complete']:
+        for point in [
+            "intent",
+            "payload:roadmap.md",
+            "payload:events.jsonl",
+            "payload-flush",
+            "state",
+            "transaction-complete",
+        ]:
             # Isolate the seam and give this attempt its own coordinator identity.
             with self.subTest(point=point):
-                request = self.req('create', issue_id='CRASH-' + str(self.serial + 1), session_id=point)
-                request['coordinator'] = w.participant_key(request)
-                def fail(actual):
+                request = self.req(
+                    "create", issue_id="CRASH-" + str(self.serial + 1), session_id=point
+                )
+                request["coordinator"] = w.participant_key(request)
+
+                def fail(actual: str) -> None:
                     """Interrupt the selected transaction persistence boundary.
 
                     Args:
@@ -372,21 +485,22 @@ class LifecycleTests(Fixture):
                     """
                     # Raise only at the selected seam; let other persistence steps continue.
                     if actual == point:
-                        raise OSError('injected')
+                        raise OSError("injected")
+
                 # Install the failure seam before executing the creation transaction.
                 w.FAILPOINT = fail
                 # Expect the injected I/O failure to become an unsuccessful result.
                 try:
-                    self.assertFalse(w.execute(request)['ok'])
+                    self.assertFalse(w.execute(request)["ok"])
                 # Always remove the seam before retrying or leaving the subtest.
                 finally:
                     w.FAILPOINT = None
                 # Retry the same transaction and verify exactly-once event publication.
                 self.require_ok(w.execute(request))
-                events = (self.root / '.task' / request['issue_id'] / 'events.jsonl').read_bytes()
+                events = (self.root / ".task" / request["issue_id"] / "events.jsonl").read_bytes()
                 self.assertEqual(w.validate_events(events)[0], 1)
 
-    def test_T06_concurrent_events_secret_rejection_and_corruption(self):
+    def test_T06_concurrent_events_secret_rejection_and_corruption(self) -> None:
         """Serialize concurrent events, reject free text and recover a partial tail.
 
         Raises:
@@ -394,25 +508,29 @@ class LifecycleTests(Fixture):
         """
         # Prepare independent event requests against one disposable issue.
         self.create()
-        requests = [self.req('event', event_type='check', event={'code': 'OK'}) for _ in range(12)]
+        requests = [self.req("event", event_type="check", event={"code": "OK"}) for _ in range(12)]
         # Append concurrently to exercise shared event coordination.
-        with multiprocessing.get_context('fork').Pool(4) as pool:
+        with multiprocessing.get_context("fork").Pool(4) as pool:
             # Require every concurrent append to complete successfully.
             for r in pool.map(call_process, requests):
                 self.require_ok(r)
         # Validate the complete stream and reject an unrestricted diagnostic payload.
-        path = self.root / '.task/TEST-1/events.jsonl'
+        path = self.root / ".task/TEST-1/events.jsonl"
         self.assertEqual(w.validate_events(path.read_bytes())[0], 13)
-        self.assertFalse(w.execute(self.req('event', event_type='check', event={'summary': 'SECRET-MARKER'}))['ok'])
-        self.assertNotIn(b'SECRET-MARKER', path.read_bytes())
+        self.assertFalse(
+            w.execute(self.req("event", event_type="check", event={"summary": "SECRET-MARKER"}))[
+                "ok"
+            ]
+        )
+        self.assertNotIn(b"SECRET-MARKER", path.read_bytes())
         # Inject an interrupted final write without altering the committed prefix.
-        with path.open('ab') as stream:
+        with path.open("ab") as stream:
             stream.write(b'{"interrupted":')
         # Trigger tail recovery and verify the unrelated missing-scope diagnostic remains.
-        self.assertEqual(w.execute(self.req('ready'))['code'], 'SCOPE_MISSING')
-        self.assertTrue(path.read_bytes().endswith(b'\n'))
+        self.assertEqual(w.execute(self.req("ready"))["code"], "SCOPE_MISSING")
+        self.assertTrue(path.read_bytes().endswith(b"\n"))
 
-    def test_T07_scope_and_stale_source(self):
+    def test_T07_scope_and_stale_source(self) -> None:
         """Deny readiness when an acknowledged required source changes.
 
         Raises:
@@ -420,23 +538,38 @@ class LifecycleTests(Fixture):
         """
         # Create a required source and a packet pinned to its initial bytes.
         self.create()
-        source = Path(self.temp.name).resolve() / 'source.md'
-        source.write_text('required source')
-        packet = [{'id': 'source', 'locator': str(source), 'sha256': w.sha(source.read_bytes()), 'required': True,
-                   'authority': 'fixture', 'reason': 'test', 'stage': 'review', 'reader': self.base['coordinator']}]
+        source = Path(self.temp.name).resolve() / "source.md"
+        source.write_text("required source")
+        packet = [
+            {
+                "id": "source",
+                "locator": str(source),
+                "sha256": w.sha(source.read_bytes()),
+                "required": True,
+                "authority": "fixture",
+                "reason": "test",
+                "stage": "review",
+                "reader": self.base["coordinator"],
+            }
+        ]
         # Deliver only the assigned reference and check that the roadmap is not disclosed.
-        self.call('scope', expected_revision=self.state()['revision'], target_participant=self.base['coordinator'], packet=packet)
-        read = self.call('read')
-        self.assertEqual(len(read['references']), 1)
-        self.assertNotIn('roadmap.md', json.dumps(read))
+        self.call(
+            "scope",
+            expected_revision=self.state()["revision"],
+            target_participant=self.base["coordinator"],
+            packet=packet,
+        )
+        read = self.call("read")
+        self.assertEqual(len(read["references"]), 1)
+        self.assertNotIn("roadmap.md", json.dumps(read))
         # Acknowledge the exact packet and establish readiness.
-        self.call('acknowledge', packet_digest=read['packet_digest'])
-        self.call('ready')
+        self.call("acknowledge", packet_digest=read["packet_digest"])
+        self.call("ready")
         # Change the source after acknowledgment and require a stale-source stop.
-        source.write_text('changed')
-        self.assertEqual(w.execute(self.req('ready'))['code'], 'SOURCE_STALE')
+        source.write_text("changed")
+        self.assertEqual(w.execute(self.req("ready"))["code"], "SOURCE_STALE")
 
-    def test_T08_active_in_review_pending_retained(self):
+    def test_T08_active_in_review_pending_retained(self) -> None:
         """Retain active, pending-tool and in-review workspaces.
 
         Raises:
@@ -445,17 +578,29 @@ class LifecycleTests(Fixture):
         # Establish readiness and verify active work cannot be collected.
         self.create()
         self.ready()
-        self.assertEqual(w.execute(self.req('cleanup-plan'))['code'], 'RETAINED')
+        self.assertEqual(w.execute(self.req("cleanup-plan"))["code"], "RETAINED")
         # Keep pending execution from detaching or sealing its workspace.
-        self.call('tool-start', tool_id='tool-1')
-        self.assertEqual(w.execute(self.req('detach', evidence=self.evidence()))['code'], 'PENDING_OPERATION')
-        self.assertEqual(w.execute(self.req('archive-prepare', expected_revision=self.state()['revision'], seal=True))['code'], 'PENDING_OPERATION')
+        self.call("tool-start", tool_id="tool-1")
+        self.assertEqual(
+            w.execute(self.req("detach", evidence=self.evidence()))["code"], "PENDING_OPERATION"
+        )
+        self.assertEqual(
+            w.execute(
+                self.req("archive-prepare", expected_revision=self.state()["revision"], seal=True)
+            )["code"],
+            "PENDING_OPERATION",
+        )
         # Settle the tool, enter review, and verify review still prevents cleanup.
-        self.call('tool-complete', tool_id='tool-1', completed=True)
-        self.call('outcome', expected_revision=self.state()['revision'], disposition='in_review', evidence=self.evidence())
-        self.assertEqual(w.execute(self.req('cleanup-plan'))['code'], 'RETAINED')
+        self.call("tool-complete", tool_id="tool-1", completed=True)
+        self.call(
+            "outcome",
+            expected_revision=self.state()["revision"],
+            disposition="in_review",
+            evidence=self.evidence(),
+        )
+        self.assertEqual(w.execute(self.req("cleanup-plan"))["code"], "RETAINED")
 
-    def test_T09_archive_validation_and_fresh_cleanup(self):
+    def test_T09_archive_validation_and_fresh_cleanup(self) -> None:
         """Require matching provider fixtures and a fresh cleanup challenge.
 
         Raises:
@@ -465,23 +610,26 @@ class LifecycleTests(Fixture):
         self.create()
         observations = self.archive()
         # Alter one archive identity dimension per verification attempt.
-        for mutate in ['parent', 'part', 'version']:
+        for mutate in ["parent", "part", "version"]:
             bad = copy.deepcopy(observations)
             # Reject observations attributed to a different issue.
-            if mutate == 'parent': bad[0]['issue'] = 'foreign'
+            if mutate == "parent":
+                bad[0]["issue"] = "foreign"
             # Reject an incomplete multipart observation set.
-            if mutate == 'part': bad = bad[1:]
+            if mutate == "part":
+                bad = bad[1:]
             # Reject a provider version that differs from the verified archive.
-            if mutate == 'version': bad[0]['updatedAt'] = 'changed'
+            if mutate == "version":
+                bad[0]["updatedAt"] = "changed"
             # Verify malformed evidence retains the local workspace.
-            self.assertFalse(w.execute(self.req('archive-verify', observations=bad))['ok'])
-            self.assertTrue((self.root / '.task/TEST-1').is_dir())
+            self.assertFalse(w.execute(self.req("archive-verify", observations=bad))["ok"])
+            self.assertTrue((self.root / ".task/TEST-1").is_dir())
         # Reject stale read-back, then collect only with a newly bound challenge.
-        self.assertFalse(w.execute(self.req('cleanup-commit', observations=observations))['ok'])
+        self.assertFalse(w.execute(self.req("cleanup-commit", observations=observations))["ok"])
         self.require_ok(w.execute(self.cleanup_request(observations)))
-        self.assertFalse((self.root / '.task/TEST-1').exists())
+        self.assertFalse((self.root / ".task/TEST-1").exists())
 
-    def test_T10_cleanup_interruption_and_outside_sentinel(self):
+    def test_T10_cleanup_interruption_and_outside_sentinel(self) -> None:
         """Resume interrupted cleanup without deleting a neighboring issue.
 
         Raises:
@@ -491,10 +639,11 @@ class LifecycleTests(Fixture):
         self.create()
         observations = self.archive()
         request = self.cleanup_request(observations)
-        sentinel = self.root / '.task/OTHER-2'
+        sentinel = self.root / ".task/OTHER-2"
         sentinel.mkdir()
-        (sentinel / 'keep').write_text('keep')
-        def fail(point):
+        (sentinel / "keep").write_text("keep")
+
+        def fail(point: str) -> None:
             """Interrupt cleanup at quarantine publication.
 
             Args:
@@ -504,21 +653,23 @@ class LifecycleTests(Fixture):
                 OSError: The configured seam is reached; other seams return normally.
             """
             # Raise only at the selected seam; let other persistence steps continue.
-            if point == 'quarantine': raise OSError('injected')
+            if point == "quarantine":
+                raise OSError("injected")
+
         # Install the quarantine failure seam.
         w.FAILPOINT = fail
         # Observe the interrupted cleanup as an unsuccessful result.
         try:
-            self.assertFalse(w.execute(request)['ok'])
+            self.assertFalse(w.execute(request)["ok"])
         # Remove the seam even if the assertion fails.
         finally:
             w.FAILPOINT = None
         # Retry cleanup and verify both the tombstone state and outside sentinel.
         self.require_ok(w.execute(request))
-        self.assertEqual((sentinel / 'keep').read_text(), 'keep')
-        self.assertEqual(self.state()['storage'], 'cleaned')
+        self.assertEqual((sentinel / "keep").read_text(), "keep")
+        self.assertEqual(self.state()["storage"], "cleaned")
 
-    def test_T11_restore_and_repeated_restore(self):
+    def test_T11_restore_and_repeated_restore(self) -> None:
         """Restore verified history once and require recovery after cleanup.
 
         Raises:
@@ -529,63 +680,118 @@ class LifecycleTests(Fixture):
         observations = self.archive()
         self.require_ok(w.execute(self.cleanup_request(observations)))
         # Require recovery rather than an empty resume, then restore the saved bytes.
-        self.assertEqual(w.execute(self.req('resume'))['code'], 'RECOVERY_REQUIRED')
-        restore = self.req('restore', observations=observations)
+        self.assertEqual(w.execute(self.req("resume"))["code"], "RECOVERY_REQUIRED")
+        restore = self.req("restore", observations=observations)
         result = self.require_ok(w.execute(restore))
         # Replay restore and verify the reopened generation and event history.
         self.assertEqual(result, w.execute(restore))
-        self.assertEqual(self.state()['disposition'], 'active')
-        self.assertGreater(result['binding_generation'], 1)
-        self.assertEqual(w.validate_events((self.root / '.task/TEST-1/events.jsonl').read_bytes())[0], 4)
+        self.assertEqual(self.state()["disposition"], "active")
+        self.assertGreater(result["binding_generation"], 1)
+        self.assertEqual(
+            w.validate_events((self.root / ".task/TEST-1/events.jsonl").read_bytes())[0], 4
+        )
 
-    def test_T14_real_adapter_bootstrap_argument_gate(self):
+    def test_T14_real_adapter_bootstrap_argument_gate(self) -> None:
         """Check exact bootstrap admission and subprocess denial of shell variants.
 
         Raises:
             AssertionError: An asserted lifecycle or boundary invariant does not hold.
         """
         # Bind the hook session and construct its canonical diagnostic command.
-        event = {'hook_event_name': 'UserPromptSubmit', 'cwd': str(self.root), 'session_id': 'coordinator', 'prompt': 'Task: TEST-1'}
+        event = {
+            "hook_event_name": "UserPromptSubmit",
+            "cwd": str(self.root),
+            "session_id": "coordinator",
+            "prompt": "Task: TEST-1",
+        }
         hook.handle(event)
-        request = self.req('diagnose', repo_id=None, issue_id=None, issue_uuid=None, coordinator=None)
-        command = shlex.join([hook.PYTHON, str(hook.LIFECYCLE), '--request-json', json.dumps(request)])
+        request = self.req(
+            "diagnose", repo_id=None, issue_id=None, issue_uuid=None, coordinator=None
+        )
+        command = shlex.join(
+            [hook.PYTHON, str(hook.LIFECYCLE), "--request-json", json.dumps(request)]
+        )
         # Admit and execute the supported bootstrap command.
-        event.update(hook_event_name='PreToolUse', tool_name='Bash', tool_use_id='test', tool_input={'command': command, 'login': False, 'shell': '/bin/sh'})
+        event.update(
+            hook_event_name="PreToolUse",
+            tool_name="Bash",
+            tool_use_id="test",
+            tool_input={"command": command, "login": False, "shell": "/bin/sh"},
+        )
         self.assertEqual(hook.handle(event), {})
         result = subprocess.run(command, shell=True, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         # Reject command chaining, wrappers, redirection and alternate interpreters.
-        for bad in [command + '; touch sentinel', 'env ' + command, command + ' > output', command + ' && true', command.replace('/usr/bin/python3', 'python3', 1)]:
-            event['tool_input']['command'] = bad
+        for bad in [
+            command + "; touch sentinel",
+            "env " + command,
+            command + " > output",
+            command + " && true",
+            command.replace(shlex.quote(hook.PYTHON), "python3", 1),
+        ]:
+            event["tool_input"]["command"] = bad
             self.assertFalse(hook.bootstrap(event))
         # Feed the rejected command through the actual JSON adapter entry point.
-        denied = subprocess.run([sys.executable, str(ROOT / 'adapters/openai/task_workspace_hook.py')],
-                                input=json.dumps(event), capture_output=True, text=True)
+        denied = subprocess.run(
+            [sys.executable, str(ROOT / "adapters/openai/task_workspace_hook.py")],
+            input=json.dumps(event),
+            capture_output=True,
+            text=True,
+        )
         # Verify a successful hook process still emits an explicit tool denial.
         self.assertEqual(denied.returncode, 0)
-        self.assertEqual(json.loads(denied.stdout)['hookSpecificOutput']['permissionDecision'], 'deny')
+        self.assertEqual(
+            json.loads(denied.stdout)["hookSpecificOutput"]["permissionDecision"], "deny"
+        )
 
-    def test_T16_ignore_patterns_keep_products(self):
+    def test_T16_ignore_patterns_keep_products(self) -> None:
         """Ignore generated task and OS metadata while keeping reusable products.
 
         Raises:
             AssertionError: An asserted lifecycle or boundary invariant does not hold.
         """
         # Install the repository ignore rules in the disposable Git repository.
-        (self.root / '.gitignore').write_bytes((ROOT / '.gitignore').read_bytes())
+        (self.root / ".gitignore").write_bytes((ROOT / ".gitignore").read_bytes())
         # Select representative generated paths and product paths.
-        ignored = ['.task/TEST-1/roadmap.md', '.DS_Store', 'nested/.DS_Store', 'nested/._data', 'Thumbs.db',
-                   'nested/Desktop.ini', 'nested/.Trash-1000/file', '$RECYCLE.BIN/file']
-        kept = ['docs/task-workspace.md', '.codex/hooks.json', 'core/templates/task-workspace/roadmap.md',
-                'nested/product.ini', 'product.cab', '.env.example', '.github/workflows/check.yml']
+        ignored = [
+            ".task/TEST-1/roadmap.md",
+            ".DS_Store",
+            "nested/.DS_Store",
+            "nested/._data",
+            "Thumbs.db",
+            "nested/Desktop.ini",
+            "nested/.Trash-1000/file",
+            "$RECYCLE.BIN/file",
+        ]
+        kept = [
+            "docs/task-workspace.md",
+            ".codex/hooks.json",
+            "core/templates/task-workspace/roadmap.md",
+            "nested/product.ini",
+            "product.cab",
+            ".env.example",
+            ".github/workflows/check.yml",
+        ]
         # Require each generated or OS metadata path to match an ignore rule.
         for path in ignored:
-            self.assertEqual(subprocess.run(['git', '-C', str(self.root), 'check-ignore', '--no-index', '-q', path]).returncode, 0, path)
+            self.assertEqual(
+                subprocess.run(
+                    ["git", "-C", str(self.root), "check-ignore", "--no-index", "-q", path]
+                ).returncode,
+                0,
+                path,
+            )
         # Require reusable product and configuration paths to remain trackable.
         for path in kept:
-            self.assertEqual(subprocess.run(['git', '-C', str(self.root), 'check-ignore', '--no-index', '-q', path]).returncode, 1, path)
+            self.assertEqual(
+                subprocess.run(
+                    ["git", "-C", str(self.root), "check-ignore", "--no-index", "-q", path]
+                ).returncode,
+                1,
+                path,
+            )
 
 
 # Run the same local checks when this module is invoked as a script.
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()
