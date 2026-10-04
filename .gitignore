@@ -1,24 +1,88 @@
-# Local issue data; reusable assets live outside this directory.
+# Local task and planning data; reusable assets stay tracked.
 /.task/
+/.project/
 
-# Narrow OS metadata patterns from github/gitignore Global templates.
+# macOS
 .DS_Store
 .localized
 .AppleDouble
 .LSOverride
 ._*
+Icon?
 __MACOSX/
 .Spotlight-V100/
 .Trashes/
+
+# Windows
 Thumbs.db
 Thumbs.db:encryptable
 ehthumbs.db
 ehthumbs_vista.db
 [Dd]esktop.ini
 $RECYCLE.BIN/
+
+# Linux
 .Trash-*/
 .nfs*
+*~
 
-# Python runtime cache.
+# Python bytecode and compiled extensions
 __pycache__/
 *.py[cod]
+*$py.class
+*.so
+
+# Python distribution and build output
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+wheels/
+share/python-wheels/
+.installed.cfg
+
+# Python test, coverage, lint and type-check output
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.hypothesis/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.coverage\ *
+htmlcov/
+coverage.xml
+coverage.json
+nosetests.xml
+*.cover
+*.py,cover
+.dmypy.json
+dmypy.json
+.pyright/
+
+# Poetry and Python environments; poetry.lock and poetry.toml stay tracked.
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Local environment files; safe examples stay tracked.
+.env
+.env.*
+!.env.example
+!.env.template
+!.env.*.example
+!.env.*.template
+
+# Documentation, notebook and editor caches
+docs/_build/
+.ipynb_checkpoints/
+.idea/
+*.sw?
+.spyderproject
+.spyproject
+.ropeproject
