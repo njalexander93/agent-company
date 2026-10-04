@@ -1,39 +1,61 @@
 #!/usr/bin/env python3
 """Bounded Codex wire adapter. Host trust/coverage is a separate acceptance gate."""
+
 from __future__ import annotations
+
 import json
-import os
-from pathlib import Path
 import re
 import shlex
 import signal
 import sys
 import uuid
+from collections.abc import Mapping
+from pathlib import Path
+from typing import NoReturn
 
-ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from operations.memory import task_workspace as core
 
+ROOT = Path(__file__).resolve().parents[2]
+
 BOOTSTRAP_FIELDS = {
-    "diagnose": set(), "register": {"main_worktree", "startup"},
-    "bind": set(), "adopt": {"coordinator", "inventory", "owners", "evidence"},
-    "resume": set(), "restore": {"observations"},
-    "read": set(), "acknowledge": {"packet_digest"},
-    "archive-index": {"observations"}, "archive-verify": {"observations"},
+    "diagnose": set(),
+    "register": {"main_worktree", "startup"},
+    "bind": set(),
+    "adopt": {"coordinator", "inventory", "owners", "evidence"},
+    "resume": set(),
+    "restore": {"observations"},
+    "read": set(),
+    "acknowledge": {"packet_digest"},
+    "archive-index": {"observations"},
+    "archive-verify": {"observations"},
     "archive-observe-save": {"document_id", "content_digest"},
-    "cleanup-plan": set(), "cleanup-commit": {"observations", "cleanup_challenge"},
+    "cleanup-plan": set(),
+    "cleanup-commit": {"observations", "cleanup_challenge"},
     "reopen": {"evidence"},
-    "archive-prepare": {"seal"}, "event-rollover": set(),
+    "archive-prepare": {"seal"},
+    "event-rollover": set(),
     "reconcile-files": {"inventory", "evidence"},
     "rebind": {"new_issue_id", "new_binding_generation", "evidence"},
 }
-COMMON_FIELDS = {"schema_version", "operation", "request_id", "worktree", "host", "session_id",
-                 "repo_id", "issue_id", "issue_uuid", "binding_generation", "expected_revision"}
+COMMON_FIELDS = {
+    "schema_version",
+    "operation",
+    "request_id",
+    "worktree",
+    "host",
+    "session_id",
+    "repo_id",
+    "issue_id",
+    "issue_uuid",
+    "binding_generation",
+    "expected_revision",
+}
 LIFECYCLE = ROOT / "operations/memory/task_workspace.py"
-PYTHON = "/usr/bin/python3"
+PYTHON = str(ROOT / ".venv" / "bin" / "python")
 
 
-def denial(code):
+def denial(code: str) -> core.JSONObject:
     """Construct a supported explicit PreToolUse denial without granting permissions.
 
     Args:
@@ -42,12 +64,18 @@ def denial(code):
     Returns:
         The hook-specific denial object.
     """
-    return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
-            "permissionDecisionReason": "TASK_WORKSPACE_NOT_READY: " + code +
-            ". Use the exact lifecycle --request-json command for the assigned session."}}
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": "TASK_WORKSPACE_NOT_READY: "
+            + code
+            + ". Use the exact lifecycle --request-json command for the assigned session.",
+        }
+    }
 
 
-def async_handle(value):
+def async_handle(value: object) -> str | None:
     """Normalize optional host handles without disguising malformed metadata.
 
     Args:
@@ -67,7 +95,7 @@ def async_handle(value):
     return core.token(str(value))
 
 
-def request_for(event, operation):
+def request_for(event: core.JSONObject, operation: str) -> core.JSONObject:
     """Resolve an actual hook session to its registered repository and binding.
 
     Args:
@@ -82,8 +110,14 @@ def request_for(event, operation):
         OSError: If the local store cannot be read.
     """
     # Build the request from explicit caller or observed session identities.
-    request = {"schema_version": 1, "operation": operation, "request_id": str(uuid.uuid4()),
-               "worktree": event["cwd"], "host": "codex", "session_id": event["session_id"]}
+    request = {
+        "schema_version": 1,
+        "operation": operation,
+        "request_id": str(uuid.uuid4()),
+        "worktree": event["cwd"],
+        "host": "codex",
+        "session_id": event["session_id"],
+    }
     diagnosis = core.execute({**request, "operation": "diagnose"})
     # Stop on the exact repository diagnostic before opening a bound session.
     if not diagnosis["ok"] or diagnosis["code"] != "REGISTERED":
@@ -101,7 +135,7 @@ def request_for(event, operation):
     return request
 
 
-def bootstrap(event, ready=False):
+def bootstrap(event: core.JSONObject, ready: bool = False) -> bool:
     """Recognize only the exact scoped lifecycle command and canonical shell spelling.
 
     Args:
@@ -116,10 +150,25 @@ def bootstrap(event, ready=False):
         return False
     # Select and decode the documented command input.
     args = event.get("tool_input", {})
-    if (not isinstance(args, dict) or args.get("tty") or args.get("login") is not False
-            or args.get("shell") != "/bin/sh" or not set(args) <= {
-                "command", "cmd", "login", "shell", "workdir", "yield_time_ms", "max_output_tokens",
-                "sandbox_permissions", "justification", "prefix_rule"}):
+    if (
+        not isinstance(args, dict)
+        or args.get("tty")
+        or args.get("login") is not False
+        or args.get("shell") != "/bin/sh"
+        or not set(args)
+        <= {
+            "command",
+            "cmd",
+            "login",
+            "shell",
+            "workdir",
+            "yield_time_ms",
+            "max_output_tokens",
+            "sandbox_permissions",
+            "justification",
+            "prefix_rule",
+        }
+    ):
         return False
     # Select and decode the documented command input.
     command = args.get("command", args.get("cmd"))
@@ -141,30 +190,46 @@ def bootstrap(event, ready=False):
         # Select the operation-specific bootstrap field policy.
         operation = request.get("operation")
         # Limit unready sessions to the documented recovery operation schemas.
-        if not ready and (operation not in BOOTSTRAP_FIELDS or
-                          not set(request) <= COMMON_FIELDS | BOOTSTRAP_FIELDS[operation]):
+        if not ready and (
+            operation not in BOOTSTRAP_FIELDS
+            or not set(request) <= COMMON_FIELDS | BOOTSTRAP_FIELDS[operation]
+        ):
             return False
         # Bind bootstrap execution to the actual hook session and host.
-        if request.get("session_id") != event["session_id"] or request.get("host", "codex") != "codex":
+        if (
+            request.get("session_id") != event["session_id"]
+            or request.get("host", "codex") != "codex"
+        ):
             return False
         # Require the bootstrap worktree to match the observed hook worktree.
         if core.repository(request["worktree"])[0] != core.repository(event["cwd"])[0]:
             return False
         # Keep registration and diagnostics free of arbitrary issue/tool fields.
         if request["operation"] in {"register", "diagnose"}:
-            return set(request) <= {"schema_version", "operation", "request_id", "worktree", "host",
-                                    "session_id", "main_worktree", "startup"}
+            return set(request) <= {
+                "schema_version",
+                "operation",
+                "request_id",
+                "worktree",
+                "host",
+                "session_id",
+                "main_worktree",
+                "startup",
+            }
         # Require the bootstrap issue to match the session assignment stored in this worktree.
-        with core.Directory.absolute(core.repository(event["cwd"])[0]) as root, root.child(".task") as local:
+        with (
+            core.Directory.absolute(core.repository(event["cwd"])[0]) as root,
+            root.child(".task") as local,
+        ):
             with local.child(".bindings") as bindings:
                 assignment = bindings.json(core.participant_key(request) + ".assignment.json")
-        return request.get("issue_id") == assignment["issue_id"]
-    except (core.WorkspaceError, OSError, ValueError, KeyError, TypeError):
+        matches_assignment: bool = request.get("issue_id") == assignment["issue_id"]
+        return matches_assignment
+    except core.WorkspaceError, OSError, ValueError, KeyError, TypeError:
         return False
 
 
-
-def provider_gate(event):
+def provider_gate(event: core.JSONObject) -> bool:
     """Permit only exact coordinator-bound provider save/get requests.
 
     Args:
@@ -178,14 +243,21 @@ def provider_gate(event):
         OSError: If archive state cannot be read.
     """
     tool = event.get("tool_name", "")
-    if tool not in {"mcp__codex_apps__linear_save_document", "mcp__codex_apps__linear_get_document"}:
+    if tool not in {
+        "mcp__codex_apps__linear_save_document",
+        "mcp__codex_apps__linear_get_document",
+    }:
         return False
     # Build the request from explicit caller or observed session identities.
     request = request_for(event, "ready")
-    with core.Store(request) as store, store.issues.child(request["issue_id"]) as control, control.lock():
+    with (
+        core.Store(request) as store,
+        store.issues.child(request["issue_id"]) as control,
+        control.lock(),
+    ):
         issue = core.Issue(store, control, request["issue_id"])
         issue.recover()
-        state = issue.state
+        state = issue.committed_state()
         core.authorize(state, request, coordinator=True, maintenance=True)
         if state["storage"] != "cleaned":
             issue.files()
@@ -202,7 +274,9 @@ def provider_gate(event):
         if state["storage"] == "cleaned":
             return False
         export = control.json("export-" + state["export"]["snapshot"] + ".json")
-        documents = export["parts"] + ([state["index_request"]] if state.get("index_request") else [])
+        documents = export["parts"] + (
+            [state["index_request"]] if state.get("index_request") else []
+        )
         # Reject provider writes that differ from the immutable export request.
         if args not in documents:
             return False
@@ -210,11 +284,11 @@ def provider_gate(event):
         digest = core.sha(args["content"].encode())
     # Record save uncertainty before allowing the external provider write.
     result = core.execute({**request, "operation": "archive-save-start", "content_digest": digest})
-    return result["ok"]
+    allowed: bool = result["ok"]
+    return allowed
 
 
-
-def automatic_attach(event, identifier):
+def automatic_attach(event: core.JSONObject, identifier: str) -> None:
     """Apply only an explicit startup assignment or an existing participant packet.
 
     Args:
@@ -226,8 +300,14 @@ def automatic_attach(event, identifier):
         OSError: If assignment or issue state cannot be accessed.
     """
     # Build the request from explicit caller or observed session identities.
-    base = {"schema_version": 1, "request_id": "startup:" + event["session_id"],
-            "operation": "diagnose", "worktree": event["cwd"], "host": "codex", "session_id": event["session_id"]}
+    base = {
+        "schema_version": 1,
+        "request_id": "startup:" + event["session_id"],
+        "operation": "diagnose",
+        "worktree": event["cwd"],
+        "host": "codex",
+        "session_id": event["session_id"],
+    }
     diagnosis = core.execute(base)
     if diagnosis.get("code") != "REGISTERED":
         return
@@ -244,23 +324,38 @@ def automatic_attach(event, identifier):
             with store.issues.child(identifier) as control, control.lock():
                 issue = core.Issue(store, control, identifier)
                 issue.recover()
-                member = issue.state["participants"].get(key, {})
+                member: Mapping[str, object] = issue.committed_state()["participants"].get(key, {})
                 # Use only the assigned packet and its current acknowledgment.
                 if member.get("packet") is not None:
                     return
     # Create only the explicitly assigned startup issue before applying its packet.
     if setup:
         core.require(setup["issue_id"] == identifier, "BINDING_CONFLICT")
-        result = core.execute({**base, "operation": "create", "coordinator": setup["coordinator"],
-                               "issue_uuid": setup["issue_uuid"]})
+        result = core.execute(
+            {
+                **base,
+                "operation": "create",
+                "coordinator": setup["coordinator"],
+                "issue_uuid": setup["issue_uuid"],
+            }
+        )
         core.require(result["ok"], result["code"])
         # A previous scope failure may follow successful creation. Read current revision
         # and retry only the still-missing assignment, never replace a later packet.
-        diagnostic = core.execute({**base, "operation": "diagnose", "request_id": base["request_id"] + ":diagnose"})
-        result = core.execute({**base, "operation": "scope", "request_id": base["request_id"] + ":scope",
-                               "binding_generation": result["binding_generation"],
-                               "expected_revision": diagnostic["revision"], "target_participant": key,
-                               "packet": setup["packet"]})
+        diagnostic = core.execute(
+            {**base, "operation": "diagnose", "request_id": base["request_id"] + ":diagnose"}
+        )
+        result = core.execute(
+            {
+                **base,
+                "operation": "scope",
+                "request_id": base["request_id"] + ":scope",
+                "binding_generation": result["binding_generation"],
+                "expected_revision": diagnostic["revision"],
+                "target_participant": key,
+                "packet": setup["packet"],
+            }
+        )
         core.require(result["ok"], result["code"])
     # Leave an absent assignment unbound rather than inventing identity.
     elif not binding:
@@ -270,7 +365,7 @@ def automatic_attach(event, identifier):
             raise core.WorkspaceError(result["code"])
 
 
-def prompt(event):
+def prompt(event: core.JSONObject) -> core.JSONObject:
     """Record one explicit Task line and attempt only its assigned workspace setup.
 
     Args:
@@ -290,28 +385,46 @@ def prompt(event):
         return {}
     # Reject multiple or malformed Task lines before recording an assignment.
     if len(lines) != 1 or not re.fullmatch(r"Task: [A-Z][A-Z0-9]{0,15}-[1-9][0-9]{0,9}", lines[0]):
-        return {"decision": "block", "reason": "BINDING_CONFLICT: Supply exactly one Task: ISSUE-ID line."}
+        return {
+            "decision": "block",
+            "reason": "BINDING_CONFLICT: Supply exactly one Task: ISSUE-ID line.",
+        }
     # Build the request from explicit caller or observed session identities.
     identifier = lines[0][6:]
     request = {"host": "codex", "session_id": event["session_id"]}
     root, _, _ = core.repository(event["cwd"])
-    with core.Directory.absolute(root) as worktree, worktree.child(".task", True) as local, \
-            local.child(".bindings", True) as bindings, bindings.lock("assignment.lock"):
+    with (
+        core.Directory.absolute(root) as worktree,
+        worktree.child(".task", True) as local,
+        local.child(".bindings", True) as bindings,
+        bindings.lock("assignment.lock"),
+    ):
         # Derive the assignment key from the explicit host/session identity.
         key = core.participant_key(request)
         # Reject implicit task switches in either the live binding or the recorded assignment.
         for name in (key + ".json", key + ".assignment.json"):
             # Validate any existing entry before reusing or replacing it.
             if bindings.exists(name) and bindings.json(name)["issue_id"] != identifier:
-                return {"decision": "block", "reason": "BINDING_CONFLICT: Explicit rebind is required."}
+                return {
+                    "decision": "block",
+                    "reason": "BINDING_CONFLICT: Explicit rebind is required.",
+                }
         bindings.put(key + ".assignment.json", {"issue_id": identifier})
     # Attempt setup using only the recorded startup assignment or existing packet.
     automatic_attach(event, identifier)
-    return {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext":
-            "Task identity recorded. Explicitly assigned workspace setup was attempted. Read and acknowledge the permitted packet before task tools; use the lifecycle diagnostic route if setup is missing."}}
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "UserPromptSubmit",
+            "additionalContext": (
+                "Task identity recorded. Explicitly assigned workspace setup was "
+                "attempted. Read and acknowledge the permitted packet before task "
+                "tools; use the lifecycle diagnostic route if setup is missing."
+            ),
+        }
+    }
 
 
-def handle(event):
+def handle(event: core.JSONObject) -> core.JSONObject:
     """Translate one observed host lifecycle event into scoped core actions.
 
     Args:
@@ -345,7 +458,16 @@ def handle(event):
             pass
         tool = event.get("tool_name", "")
         # Deny covered child creation until host child identity can be verified.
-        if any(s in tool for s in ("spawn_agent", "create_thread", "fork_thread", "send_message_to_thread", "followup_task")):
+        if any(
+            s in tool
+            for s in (
+                "spawn_agent",
+                "create_thread",
+                "fork_thread",
+                "send_message_to_thread",
+                "followup_task",
+            )
+        ):
             return denial("HOST_UNSUPPORTED_CHILD_IDENTITY")
         # Keep identity and permission clarification available to unready sessions.
         if tool in {"request_user_input", "request_user_input_async"}:
@@ -358,7 +480,7 @@ def handle(event):
             return denial(result["code"])
         # Avoid counting the lifecycle transaction itself as pending external work.
         if bootstrap(event, ready=True):
-            return {}  # Local lifecycle owns its transaction; don't count itself as pending external work.
+            return {}
         # Bind an observed polling transport to its unique original operation.
         polling = tool == "write_stdin"
         poll_handle = None
@@ -369,8 +491,15 @@ def handle(event):
             except core.WorkspaceError as error:
                 return denial(error.code)
         # Reserve and record the transport separately when the host emits its pre-hook.
-        result = core.execute({**request, "operation": "tool-start", "request_id": "pre:" + event["tool_use_id"],
-                               "tool_id": event["tool_use_id"], "poll_handle": poll_handle})
+        result = core.execute(
+            {
+                **request,
+                "operation": "tool-start",
+                "request_id": "pre:" + event["tool_use_id"],
+                "tool_id": event["tool_use_id"],
+                "poll_handle": poll_handle,
+            }
+        )
         return {} if result["ok"] else denial(result["code"])
     # Settle work only from typed completion facts and validated handle correlation.
     if name == "PostToolUse":
@@ -393,8 +522,10 @@ def handle(event):
             handle = async_handle(response.get("session_id"))
             if polling:
                 input_handle = async_handle(event.get("tool_input", {}).get("session_id"))
-                core.require(input_handle is not None and (handle is None or handle == input_handle),
-                             "ASYNC_HANDLE_CONFLICT")
+                core.require(
+                    input_handle is not None and (handle is None or handle == input_handle),
+                    "ASYNC_HANDLE_CONFLICT",
+                )
                 handle = input_handle
         except core.WorkspaceError as error:
             return {"systemMessage": "TASK_WORKSPACE_NOT_READY: " + error.code}
@@ -412,16 +543,28 @@ def handle(event):
             return {}
         # Key idempotency by completion facts so a later final response is not an old retry.
         observation = [event["tool_use_id"], completed, handle, polling]
-        result = core.execute({**request, "request_id": "post:" + core.sha(core.canonical(observation)),
-                               "tool_id": event["tool_use_id"], "poll": polling,
-                               "completed": completed, "async_handle": handle})
+        result = core.execute(
+            {
+                **request,
+                "request_id": "post:" + core.sha(core.canonical(observation)),
+                "tool_id": event["tool_use_id"],
+                "poll": polling,
+                "completed": completed,
+                "async_handle": handle,
+            }
+        )
         # Preserve the precise core failure in the host response.
         if not result["ok"]:
             return {"systemMessage": "TASK_WORKSPACE_NOT_READY: " + result["code"]}
         return {}
     # Report the unsupported child-identity boundary without granting readiness.
     if name == "SubagentStart":
-        return {"systemMessage": "HOST_UNSUPPORTED: Native child-to-tool identity is not verified. No child readiness is established."}
+        return {
+            "systemMessage": (
+                "HOST_UNSUPPORTED: Native child-to-tool identity is not verified. "
+                "No child readiness is established."
+            )
+        }
     # Allow lifecycle recovery while preserving tool-level readiness enforcement.
     if name in {"SessionStart", "PreCompact", "PostCompact"}:
         try:
@@ -433,33 +576,52 @@ def handle(event):
             return {}
         # Expose successful binding context without copying task-note content.
         if result["ok"]:
-            return {"hookSpecificOutput": {"hookEventName": name, "additionalContext":
-                    "Task binding checked. Retrieve the permitted packet through the lifecycle read operation."}}
-        return {"hookSpecificOutput": {"hookEventName": name, "additionalContext":
-                "TASK_WORKSPACE_NOT_READY: " + result["code"] +
-                ". Ordinary task tools remain denied. Use only the assigned lifecycle "
+            return {
+                "hookSpecificOutput": {
+                    "hookEventName": name,
+                    "additionalContext": (
+                        "Task binding checked. Retrieve the permitted packet through the "
+                        "lifecycle read operation."
+                    ),
+                }
+            }
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": name,
+                "additionalContext": "TASK_WORKSPACE_NOT_READY: "
+                + result["code"]
+                + ". Ordinary task tools remain denied. Use only the assigned lifecycle "
                 "diagnostic/bootstrap routes to register, resume, read and acknowledge "
-                "the permitted packet, or repair the reported condition. Readiness was not granted."}}
+                "the permitted packet, or repair the reported condition. Readiness was not "
+                "granted.",
+            }
+        }
     # Record only bounded optional facts for advisory lifecycle endings.
     if name in {"Stop", "Interrupt", "SessionEnd", "SubagentStop"}:
         try:
             # Build the request from explicit caller or observed session identities.
             request = request_for(event, "event")
-            core.execute({**request, "event_type": "observation", "event": {
-                "code": "INTERRUPTED" if name == "Interrupt" else "UNKNOWN"}})
-        except (core.WorkspaceError, OSError):
+            core.execute(
+                {
+                    **request,
+                    "event_type": "observation",
+                    "event": {"code": "INTERRUPTED" if name == "Interrupt" else "UNKNOWN"},
+                }
+            )
+        except core.WorkspaceError, OSError:
             pass  # Optional observations cannot establish completion or retirement.
     return {}
 
 
-def main():
+def main() -> int:
     """Run one hook with bounded input, execution time and event-specific error output.
 
     Returns:
         Zero after emitting a supported JSON response; failures become bounded diagnostics.
     """
     name = None
-    def timeout(*_):
+
+    def timeout(*_: object) -> NoReturn:
         """Interrupt a hook that exceeds its process-local execution deadline.
 
         Args:
@@ -469,6 +631,7 @@ def main():
             core.WorkspaceError: Always, with the bounded BUSY diagnostic.
         """
         raise core.WorkspaceError("BUSY")
+
     # Bound the entire hook, including input reads and filesystem checks, to two seconds.
     signal.signal(signal.SIGALRM, timeout)
     signal.setitimer(signal.ITIMER_REAL, 2.0)
@@ -482,9 +645,15 @@ def main():
     # Deny pre-tool failures; report other failures using the event-specific response shape.
     except Exception as error:
         code = error.code if isinstance(error, core.WorkspaceError) else "RECOVERY_REQUIRED"
-        result = denial(code) if name == "PreToolUse" else (
-            {"decision": "block", "reason": "TASK_WORKSPACE_NOT_READY: " + code} if name == "UserPromptSubmit" else
-            {"systemMessage": "TASK_WORKSPACE_NOT_READY: " + code})
+        result = (
+            denial(code)
+            if name == "PreToolUse"
+            else (
+                {"decision": "block", "reason": "TASK_WORKSPACE_NOT_READY: " + code}
+                if name == "UserPromptSubmit"
+                else {"systemMessage": "TASK_WORKSPACE_NOT_READY: " + code}
+            )
+        )
     finally:
         # Cancel the alarm even when decoding or hook handling fails.
         signal.setitimer(signal.ITIMER_REAL, 0)

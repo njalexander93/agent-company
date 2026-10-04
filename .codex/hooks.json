@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/usr/bin/python3 \"$(git rev-parse --show-toplevel)/adapters/openai/task_workspace_hook.py\"",
+            "command": "task_workspace_root=$(git rev-parse --show-toplevel) || exit 2; if [ ! -x \"$task_workspace_root/.venv/bin/python\" ]; then printf '%s\\n' 'TASK_WORKSPACE_SETUP_REQUIRED: Run Poetry setup for Python 3.14.8.' >&2; exit 2; fi; exec \"$task_workspace_root/.venv/bin/python\" \"$task_workspace_root/adapters/openai/task_workspace_hook.py\"",
             "timeout": 10
           }
         ]
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/usr/bin/python3 \"$(git rev-parse --show-toplevel)/adapters/openai/task_workspace_hook.py\"",
+            "command": "task_workspace_root=$(git rev-parse --show-toplevel) || exit 2; if [ ! -x \"$task_workspace_root/.venv/bin/python\" ]; then printf '%s\\n' 'TASK_WORKSPACE_SETUP_REQUIRED: Run Poetry setup for Python 3.14.8.' >&2; exit 2; fi; exec \"$task_workspace_root/.venv/bin/python\" \"$task_workspace_root/adapters/openai/task_workspace_hook.py\"",
             "timeout": 10
           }
         ]
@@ -28,7 +28,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/usr/bin/python3 \"$(git rev-parse --show-toplevel)/adapters/openai/task_workspace_hook.py\"",
+            "command": "task_workspace_root=$(git rev-parse --show-toplevel) || exit 2; if [ ! -x \"$task_workspace_root/.venv/bin/python\" ]; then printf '%s\\n' 'TASK_WORKSPACE_SETUP_REQUIRED: Run Poetry setup for Python 3.14.8.' >&2; exit 2; fi; exec \"$task_workspace_root/.venv/bin/python\" \"$task_workspace_root/adapters/openai/task_workspace_hook.py\"",
             "timeout": 10
           }
         ]
@@ -39,7 +39,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/usr/bin/python3 \"$(git rev-parse --show-toplevel)/adapters/openai/task_workspace_hook.py\"",
+            "command": "task_workspace_root=$(git rev-parse --show-toplevel) || exit 2; if [ ! -x \"$task_workspace_root/.venv/bin/python\" ]; then printf '%s\\n' 'TASK_WORKSPACE_SETUP_REQUIRED: Run Poetry setup for Python 3.14.8.' >&2; exit 2; fi; exec \"$task_workspace_root/.venv/bin/python\" \"$task_workspace_root/adapters/openai/task_workspace_hook.py\"",
             "timeout": 10
           }
         ]
@@ -50,7 +50,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/usr/bin/python3 \"$(git rev-parse --show-toplevel)/adapters/openai/task_workspace_hook.py\"",
+            "command": "task_workspace_root=$(git rev-parse --show-toplevel) || exit 2; if [ ! -x \"$task_workspace_root/.venv/bin/python\" ]; then printf '%s\\n' 'TASK_WORKSPACE_SETUP_REQUIRED: Run Poetry setup for Python 3.14.8.' >&2; exit 2; fi; exec \"$task_workspace_root/.venv/bin/python\" \"$task_workspace_root/adapters/openai/task_workspace_hook.py\"",
             "timeout": 10
           }
         ]
@@ -61,7 +61,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/usr/bin/python3 \"$(git rev-parse --show-toplevel)/adapters/openai/task_workspace_hook.py\"",
+            "command": "task_workspace_root=$(git rev-parse --show-toplevel) || exit 2; if [ ! -x \"$task_workspace_root/.venv/bin/python\" ]; then printf '%s\\n' 'TASK_WORKSPACE_SETUP_REQUIRED: Run Poetry setup for Python 3.14.8.' >&2; exit 2; fi; exec \"$task_workspace_root/.venv/bin/python\" \"$task_workspace_root/adapters/openai/task_workspace_hook.py\"",
             "timeout": 10
           }
         ]
@@ -72,7 +72,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/usr/bin/python3 \"$(git rev-parse --show-toplevel)/adapters/openai/task_workspace_hook.py\"",
+            "command": "task_workspace_root=$(git rev-parse --show-toplevel) || exit 2; if [ ! -x \"$task_workspace_root/.venv/bin/python\" ]; then printf '%s\\n' 'TASK_WORKSPACE_SETUP_REQUIRED: Run Poetry setup for Python 3.14.8.' >&2; exit 2; fi; exec \"$task_workspace_root/.venv/bin/python\" \"$task_workspace_root/adapters/openai/task_workspace_hook.py\"",
             "timeout": 10
           }
         ]
@@ -83,7 +83,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/usr/bin/python3 \"$(git rev-parse --show-toplevel)/adapters/openai/task_workspace_hook.py\"",
+            "command": "task_workspace_root=$(git rev-parse --show-toplevel) || exit 2; if [ ! -x \"$task_workspace_root/.venv/bin/python\" ]; then printf '%s\\n' 'TASK_WORKSPACE_SETUP_REQUIRED: Run Poetry setup for Python 3.14.8.' >&2; exit 2; fi; exec \"$task_workspace_root/.venv/bin/python\" \"$task_workspace_root/adapters/openai/task_workspace_hook.py\"",
             "timeout": 10
           }
         ]
@@ -94,7 +94,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/usr/bin/python3 \"$(git rev-parse --show-toplevel)/adapters/openai/task_workspace_hook.py\"",
+            "command": "task_workspace_root=$(git rev-parse --show-toplevel) || exit 2; if [ ! -x \"$task_workspace_root/.venv/bin/python\" ]; then printf '%s\\n' 'TASK_WORKSPACE_SETUP_REQUIRED: Run Poetry setup for Python 3.14.8.' >&2; exit 2; fi; exec \"$task_workspace_root/.venv/bin/python\" \"$task_workspace_root/adapters/openai/task_workspace_hook.py\"",
             "timeout": 10
           }
         ]
@@ -105,7 +105,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/usr/bin/python3 \"$(git rev-parse --show-toplevel)/adapters/openai/task_workspace_hook.py\"",
+            "command": "task_workspace_root=$(git rev-parse --show-toplevel) || exit 2; if [ ! -x \"$task_workspace_root/.venv/bin/python\" ]; then printf '%s\\n' 'TASK_WORKSPACE_SETUP_REQUIRED: Run Poetry setup for Python 3.14.8.' >&2; exit 2; fi; exec \"$task_workspace_root/.venv/bin/python\" \"$task_workspace_root/adapters/openai/task_workspace_hook.py\"",
             "timeout": 10
           }
         ]
@@ -116,7 +116,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/usr/bin/python3 \"$(git rev-parse --show-toplevel)/adapters/openai/task_workspace_hook.py\"",
+            "command": "task_workspace_root=$(git rev-parse --show-toplevel) || exit 2; if [ ! -x \"$task_workspace_root/.venv/bin/python\" ]; then printf '%s\\n' 'TASK_WORKSPACE_SETUP_REQUIRED: Run Poetry setup for Python 3.14.8.' >&2; exit 2; fi; exec \"$task_workspace_root/.venv/bin/python\" \"$task_workspace_root/adapters/openai/task_workspace_hook.py\"",
             "timeout": 3
           }
         ]
@@ -127,7 +127,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/usr/bin/python3 \"$(git rev-parse --show-toplevel)/adapters/openai/task_workspace_hook.py\"",
+            "command": "task_workspace_root=$(git rev-parse --show-toplevel) || exit 2; if [ ! -x \"$task_workspace_root/.venv/bin/python\" ]; then printf '%s\\n' 'TASK_WORKSPACE_SETUP_REQUIRED: Run Poetry setup for Python 3.14.8.' >&2; exit 2; fi; exec \"$task_workspace_root/.venv/bin/python\" \"$task_workspace_root/adapters/openai/task_workspace_hook.py\"",
             "timeout": 3
           }
         ]
