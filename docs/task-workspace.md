@@ -278,8 +278,8 @@ Human-reviewed PR into main remains mandatory. [PR #1](https://github.com/njalex
 
 ## Candidate usage and measured capabilities
 
-Run `python3 -m unittest discover -s tests/task_workspace -v` from the repository
-root. Tests create temporary non-bare repositories and linked worktrees. They do
+Complete the [Python 3.14.8 and Poetry setup](development.md), then run `make check`
+from the repository root. Tests create temporary non-bare repositories and linked worktrees. They do
 not clean or adopt this active issue. Python's standard library is the only
 runtime dependency. The first platform remains macOS/POSIX (`fcntl` and directory
 file descriptors); Windows ignore rules do not imply a Windows runtime port.
@@ -321,7 +321,8 @@ worktree, session and issue. Shell wrappers, redirection, additional commands,
 substitution and alternate interpreters are rejected.
 
 ```python
-argv = ["/usr/bin/python3", absolute_core_path, "--request-json", json.dumps(request)]
+python_path = str(Path(absolute_repository_root) / ".venv" / "bin" / "python")
+argv = [python_path, absolute_core_path, "--request-json", json.dumps(request)]
 command = shlex.join(argv)
 ```
 
