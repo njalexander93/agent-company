@@ -42,6 +42,8 @@ The tracked configuration alone does not install a Git hook. Install it in each
 clone without `--overwrite` or changes to global `core.hooksPath`. Linked
 worktrees normally share the Git hooks directory, so installation affects those
 worktrees too; each still needs its own configured environment.
+The installed runner references the installing environment. If that environment
+is removed, reinstall from a retained checkout with a configured environment.
 See [pre-commit installation](https://pre-commit.com/#usage) and
 [Git worktree details](https://git-scm.com/docs/git-worktree#_details).
 
@@ -56,7 +58,8 @@ the locked Poetry tools and [project rules](../pyproject.toml):
   pre-commit.
 
 For commit checks, the framework temporarily hides unstaged tracked edits and
-restores them afterward. The setup command `--all-files` checks matching files
+restores them afterward. Untracked files remain visible to full-scope mypy.
+The setup command `--all-files` checks matching files
 in the working tree; it is not a staged-only check.
 See [pre-commit staged-content behavior](https://pre-commit.com/#pre-commit).
 
@@ -111,7 +114,7 @@ two shared settings/recommendation files.
 | --- | --- |
 | `make` or `make help` | List development commands without changing files. |
 | `make install` | Sync locked dependencies and install the editable package. |
-| `make validate-config` | Validate project metadata and lock consistency. |
+| `make validate-config` | Validate project metadata, lock consistency and hook configuration. |
 | `make format-check` | Ruff formatting without changing files. |
 | `make lint` | Ruff errors, warnings, imports, docstrings and logging rules; no automatic fixes. |
 | `make type-check` | Mypy on production code under `src/agent_company/`. |
