@@ -381,7 +381,7 @@ def strict_json(data: bytes | str) -> Any:
             object_pairs_hook=pairs,
             parse_constant=lambda _: (_ for _ in ()).throw(WorkspaceError("INVALID_REQUEST")),
         )
-    except ValueError, UnicodeError:
+    except (ValueError, UnicodeError):
         raise WorkspaceError("INVALID_REQUEST") from None
 
 
@@ -1461,7 +1461,7 @@ def packet_reads(
                     data = parent.read(path.name, MAX_FILE)
             else:
                 data = files.get(ref["locator"])
-        except OSError, WorkspaceError:
+        except (OSError, WorkspaceError):
             # Missing optional sources remain unavailable; required sources block readiness.
             if ref["required"]:
                 raise WorkspaceError("SOURCE_STALE") from None
@@ -2721,14 +2721,14 @@ def permission_paths(request: JSONObject) -> list[str]:
     root = Path(request.get("worktree", "/"))
     try:
         root = repository(root)[0]
-    except OSError, WorkspaceError, subprocess.SubprocessError:
+    except (OSError, WorkspaceError, subprocess.SubprocessError):
         pass
     main = request.get("main_worktree")
     if main is None:
         try:
             with Directory.absolute(root) as directory, directory.child(".task") as local:
                 main = local.json(".repository.json")["main"]
-        except OSError, WorkspaceError, KeyError:
+        except (OSError, WorkspaceError, KeyError):
             pass
     paths = [str(root / ".task/.repository.json"), str(root / ".task/.bindings")]
     if main:
@@ -2800,14 +2800,14 @@ def execute(request: JSONObject) -> JSONObject:
             ),
         }
     # Retain data when filesystem or Git checks fail; require explicit recovery.
-    except OSError, subprocess.SubprocessError:
+    except (OSError, subprocess.SubprocessError):
         return {
             "ok": False,
             "code": "RECOVERY_REQUIRED",
             "action": "Inspect filesystem identity and unfinished transactions; retain all data.",
         }
     # Translate malformed requests without exposing exception contents.
-    except KeyError, TypeError, ValueError, UnicodeError, AttributeError:
+    except (KeyError, TypeError, ValueError, UnicodeError, AttributeError):
         return {
             "ok": False,
             "code": "INVALID_REQUEST",

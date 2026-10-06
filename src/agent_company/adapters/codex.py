@@ -4,54 +4,20 @@
 from __future__ import annotations
 
 import json
-import re
-import shlex
 import signal
 import sys
-import uuid
-from collections.abc import Mapping
 from pathlib import Path
 from typing import NoReturn
 
+from agent_company.adapters import common
 from agent_company.lifecycle import task_workspace as core
 
 ROOT = Path(__file__).resolve().parents[3]
 
-BOOTSTRAP_FIELDS = {
-    "diagnose": set(),
-    "register": {"main_worktree", "startup"},
-    "bind": set(),
-    "adopt": {"coordinator", "inventory", "owners", "evidence"},
-    "resume": set(),
-    "restore": {"observations"},
-    "read": set(),
-    "acknowledge": {"packet_digest"},
-    "archive-index": {"observations"},
-    "archive-verify": {"observations"},
-    "archive-observe-save": {"document_id", "content_digest"},
-    "cleanup-plan": set(),
-    "cleanup-commit": {"observations", "cleanup_challenge"},
-    "reopen": {"evidence"},
-    "archive-prepare": {"seal"},
-    "event-rollover": set(),
-    "reconcile-files": {"inventory", "evidence"},
-    "rebind": {"new_issue_id", "new_binding_generation", "evidence"},
-}
-COMMON_FIELDS = {
-    "schema_version",
-    "operation",
-    "request_id",
-    "worktree",
-    "host",
-    "session_id",
-    "repo_id",
-    "issue_id",
-    "issue_uuid",
-    "binding_generation",
-    "expected_revision",
-}
-LIFECYCLE = ROOT / "src/agent_company/lifecycle/task_workspace.py"
-PYTHON = str(ROOT / ".venv" / "bin" / "python")
+BOOTSTRAP_FIELDS = common.BOOTSTRAP_FIELDS
+COMMON_FIELDS = common.COMMON_FIELDS
+LIFECYCLE = common.LIFECYCLE
+PYTHON = common.PYTHON
 
 
 def denial(code: str) -> core.JSONObject:
@@ -108,30 +74,7 @@ def request_for(event: core.JSONObject, operation: str) -> core.JSONObject:
         core.WorkspaceError: If registration or binding validation fails.
         OSError: If the local store cannot be read.
     """
-    # Build the request from explicit caller or observed session identities.
-    request = {
-        "schema_version": 1,
-        "operation": operation,
-        "request_id": str(uuid.uuid4()),
-        "worktree": event["cwd"],
-        "host": "codex",
-        "session_id": event["session_id"],
-    }
-    diagnosis = core.execute({**request, "operation": "diagnose"})
-    # Stop on the exact repository diagnostic before opening a bound session.
-    if not diagnosis["ok"] or diagnosis["code"] != "REGISTERED":
-        raise core.WorkspaceError(diagnosis["code"])
-    # Carry the verified repository identity into the lifecycle request.
-    request["repo_id"] = diagnosis["repo_id"]
-    with core.Store(request) as store:
-        # Read the existing session binding; never infer it from the prompt.
-        binding = store.binding()
-        # Leave an absent assignment unbound rather than inventing identity.
-        if not binding:
-            raise core.WorkspaceError("BINDING_MISSING")
-        # Copy only the recorded issue and generation into the request.
-        request.update(binding)
-    return request
+    return common.request_for(event, operation, "codex")
 
 
 def bootstrap(event: core.JSONObject, ready: bool = False) -> bool:
@@ -171,61 +114,7 @@ def bootstrap(event: core.JSONObject, ready: bool = False) -> bool:
         return False
     # Select and decode the documented command input.
     command = args.get("command", args.get("cmd"))
-    if not isinstance(command, str) or len(command.encode()) > 65536:
-        return False
-    try:
-        # Parse shell arguments for exact interpreter, entry point and JSON matching.
-        argv = shlex.split(command)
-        # Require one reviewed interpreter invocation with one JSON argument.
-        if len(argv) != 4 or argv[:3] != [PYTHON, str(LIFECYCLE), "--request-json"]:
-            return False
-        # Reject shell spellings that could introduce expansion or wrappers.
-        if command != shlex.join(argv):
-            return False
-        # Decode the sole lifecycle request before checking its allowed fields.
-        request = core.strict_json(argv[3])
-        if not isinstance(request, dict):
-            return False
-        # Select the operation-specific bootstrap field policy.
-        operation = request.get("operation")
-        # Limit unready sessions to the documented recovery operation schemas.
-        if not ready and (
-            operation not in BOOTSTRAP_FIELDS
-            or not set(request) <= COMMON_FIELDS | BOOTSTRAP_FIELDS[operation]
-        ):
-            return False
-        # Bind bootstrap execution to the actual hook session and host.
-        if (
-            request.get("session_id") != event["session_id"]
-            or request.get("host", "codex") != "codex"
-        ):
-            return False
-        # Require the bootstrap worktree to match the observed hook worktree.
-        if core.repository(request["worktree"])[0] != core.repository(event["cwd"])[0]:
-            return False
-        # Keep registration and diagnostics free of arbitrary issue/tool fields.
-        if request["operation"] in {"register", "diagnose"}:
-            return set(request) <= {
-                "schema_version",
-                "operation",
-                "request_id",
-                "worktree",
-                "host",
-                "session_id",
-                "main_worktree",
-                "startup",
-            }
-        # Require the bootstrap issue to match the session assignment stored in this worktree.
-        with (
-            core.Directory.absolute(core.repository(event["cwd"])[0]) as root,
-            root.child(".task") as local,
-        ):
-            with local.child(".bindings") as bindings:
-                assignment = bindings.json(core.participant_key(request) + ".assignment.json")
-        matches_assignment: bool = request.get("issue_id") == assignment["issue_id"]
-        return matches_assignment
-    except core.WorkspaceError, OSError, ValueError, KeyError, TypeError:
-        return False
+    return common.canonical_bootstrap(event, command, "codex", ready, PYTHON, LIFECYCLE)
 
 
 def provider_gate(event: core.JSONObject) -> bool:
@@ -298,70 +187,7 @@ def automatic_attach(event: core.JSONObject, identifier: str) -> None:
         core.WorkspaceError: If registration, assignment or lifecycle setup fails.
         OSError: If assignment or issue state cannot be accessed.
     """
-    # Build the request from explicit caller or observed session identities.
-    base = {
-        "schema_version": 1,
-        "request_id": "startup:" + event["session_id"],
-        "operation": "diagnose",
-        "worktree": event["cwd"],
-        "host": "codex",
-        "session_id": event["session_id"],
-    }
-    diagnosis = core.execute(base)
-    if diagnosis.get("code") != "REGISTERED":
-        return
-    base.update(repo_id=diagnosis["repo_id"], issue_id=identifier)
-    with core.Store(base) as store:
-        # Read the existing session binding; never infer it from the prompt.
-        binding = store.binding()
-        if binding:
-            core.require(binding["issue_id"] == identifier, "BINDING_CONFLICT")
-        key = core.participant_key(base)
-        filename = key + ".startup.json"
-        setup = store.bindings.json(filename) if store.bindings.exists(filename) else None
-        if binding:
-            with store.issues.child(identifier) as control, control.lock():
-                issue = core.Issue(store, control, identifier)
-                issue.recover()
-                member: Mapping[str, object] = issue.committed_state()["participants"].get(key, {})
-                # Use only the assigned packet and its current acknowledgment.
-                if member.get("packet") is not None:
-                    return
-    # Create only the explicitly assigned startup issue before applying its packet.
-    if setup:
-        core.require(setup["issue_id"] == identifier, "BINDING_CONFLICT")
-        result = core.execute(
-            {
-                **base,
-                "operation": "create",
-                "coordinator": setup["coordinator"],
-                "issue_uuid": setup["issue_uuid"],
-            }
-        )
-        core.require(result["ok"], result["code"])
-        # A previous scope failure may follow successful creation. Read current revision
-        # and retry only the still-missing assignment, never replace a later packet.
-        diagnostic = core.execute(
-            {**base, "operation": "diagnose", "request_id": base["request_id"] + ":diagnose"}
-        )
-        result = core.execute(
-            {
-                **base,
-                "operation": "scope",
-                "request_id": base["request_id"] + ":scope",
-                "binding_generation": result["binding_generation"],
-                "expected_revision": diagnostic["revision"],
-                "target_participant": key,
-                "packet": setup["packet"],
-            }
-        )
-        core.require(result["ok"], result["code"])
-    # Leave an absent assignment unbound rather than inventing identity.
-    elif not binding:
-        # Existing coordinator assignment in shared state is required for a new join.
-        result = core.execute({**base, "operation": "attach"})
-        if not result["ok"] and result["code"] not in {"BINDING_MISSING", "SCOPE_MISSING"}:
-            raise core.WorkspaceError(result["code"])
+    common.automatic_attach(event, identifier, "codex")
 
 
 def prompt(event: core.JSONObject) -> core.JSONObject:
@@ -377,50 +203,7 @@ def prompt(event: core.JSONObject) -> core.JSONObject:
         core.WorkspaceError: If workspace registration or setup fails.
         OSError: If assignment persistence fails.
     """
-    # Extract only explicit Task lines from the submitted prompt.
-    lines = [line for line in event.get("prompt", "").splitlines() if line.startswith("Task:")]
-    # Leave ordinary prompts unchanged when no task identity was supplied.
-    if not lines:
-        return {}
-    # Reject multiple or malformed Task lines before recording an assignment.
-    if len(lines) != 1 or not re.fullmatch(r"Task: [A-Z][A-Z0-9]{0,15}-[1-9][0-9]{0,9}", lines[0]):
-        return {
-            "decision": "block",
-            "reason": "BINDING_CONFLICT: Supply exactly one Task: ISSUE-ID line.",
-        }
-    # Build the request from explicit caller or observed session identities.
-    identifier = lines[0][6:]
-    request = {"host": "codex", "session_id": event["session_id"]}
-    root, _, _ = core.repository(event["cwd"])
-    with (
-        core.Directory.absolute(root) as worktree,
-        worktree.child(".task", True) as local,
-        local.child(".bindings", True) as bindings,
-        bindings.lock("assignment.lock"),
-    ):
-        # Derive the assignment key from the explicit host/session identity.
-        key = core.participant_key(request)
-        # Reject implicit task switches in either the live binding or the recorded assignment.
-        for name in (key + ".json", key + ".assignment.json"):
-            # Validate any existing entry before reusing or replacing it.
-            if bindings.exists(name) and bindings.json(name)["issue_id"] != identifier:
-                return {
-                    "decision": "block",
-                    "reason": "BINDING_CONFLICT: Explicit rebind is required.",
-                }
-        bindings.put(key + ".assignment.json", {"issue_id": identifier})
-    # Attempt setup using only the recorded startup assignment or existing packet.
-    automatic_attach(event, identifier)
-    return {
-        "hookSpecificOutput": {
-            "hookEventName": "UserPromptSubmit",
-            "additionalContext": (
-                "Task identity recorded. Explicitly assigned workspace setup was "
-                "attempted. Read and acknowledge the permitted packet before task "
-                "tools; use the lifecycle diagnostic route if setup is missing."
-            ),
-        }
-    }
+    return common.prompt(event, "codex")
 
 
 def handle(event: core.JSONObject) -> core.JSONObject:
@@ -607,7 +390,7 @@ def handle(event: core.JSONObject) -> core.JSONObject:
                     "event": {"code": "INTERRUPTED" if name == "Interrupt" else "UNKNOWN"},
                 }
             )
-        except core.WorkspaceError, OSError:
+        except (core.WorkspaceError, OSError):
             pass  # Optional observations cannot establish completion or retirement.
     return {}
 

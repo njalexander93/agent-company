@@ -1,0 +1,128 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -n \"${CURSOR_VERSION:-}\" ]; then exit 0; fi; task_workspace_root=$(git rev-parse --show-toplevel) || exit 2; if [ ! -x \"$task_workspace_root/.venv/bin/python\" ]; then printf '%s\\n' 'TASK_WORKSPACE_SETUP_REQUIRED: Run Poetry setup in this checkout.' >&2; exit 2; fi; \"$task_workspace_root/.venv/bin/python\" \"$task_workspace_root/src/agent_company/adapters/claude.py\" || exit 2",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -n \"${CURSOR_VERSION:-}\" ]; then exit 0; fi; task_workspace_root=$(git rev-parse --show-toplevel) || exit 2; if [ ! -x \"$task_workspace_root/.venv/bin/python\" ]; then printf '%s\\n' 'TASK_WORKSPACE_SETUP_REQUIRED: Run Poetry setup in this checkout.' >&2; exit 2; fi; \"$task_workspace_root/.venv/bin/python\" \"$task_workspace_root/src/agent_company/adapters/claude.py\" || exit 2",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -n \"${CURSOR_VERSION:-}\" ]; then exit 0; fi; task_workspace_root=$(git rev-parse --show-toplevel) || exit 2; if [ ! -x \"$task_workspace_root/.venv/bin/python\" ]; then printf '%s\\n' 'TASK_WORKSPACE_SETUP_REQUIRED: Run Poetry setup in this checkout.' >&2; exit 2; fi; \"$task_workspace_root/.venv/bin/python\" \"$task_workspace_root/src/agent_company/adapters/claude.py\" || exit 2",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -n \"${CURSOR_VERSION:-}\" ]; then exit 0; fi; task_workspace_root=$(git rev-parse --show-toplevel) || exit 2; if [ ! -x \"$task_workspace_root/.venv/bin/python\" ]; then printf '%s\\n' 'TASK_WORKSPACE_SETUP_REQUIRED: Run Poetry setup in this checkout.' >&2; exit 2; fi; \"$task_workspace_root/.venv/bin/python\" \"$task_workspace_root/src/agent_company/adapters/claude.py\" || exit 2",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -n \"${CURSOR_VERSION:-}\" ]; then exit 0; fi; task_workspace_root=$(git rev-parse --show-toplevel) || exit 2; if [ ! -x \"$task_workspace_root/.venv/bin/python\" ]; then printf '%s\\n' 'TASK_WORKSPACE_SETUP_REQUIRED: Run Poetry setup in this checkout.' >&2; exit 2; fi; \"$task_workspace_root/.venv/bin/python\" \"$task_workspace_root/src/agent_company/adapters/claude.py\" || exit 2",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -n \"${CURSOR_VERSION:-}\" ]; then exit 0; fi; task_workspace_root=$(git rev-parse --show-toplevel) || exit 2; if [ ! -x \"$task_workspace_root/.venv/bin/python\" ]; then printf '%s\\n' 'TASK_WORKSPACE_SETUP_REQUIRED: Run Poetry setup in this checkout.' >&2; exit 2; fi; \"$task_workspace_root/.venv/bin/python\" \"$task_workspace_root/src/agent_company/adapters/claude.py\" || exit 2",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -n \"${CURSOR_VERSION:-}\" ]; then exit 0; fi; task_workspace_root=$(git rev-parse --show-toplevel) || exit 2; if [ ! -x \"$task_workspace_root/.venv/bin/python\" ]; then printf '%s\\n' 'TASK_WORKSPACE_SETUP_REQUIRED: Run Poetry setup in this checkout.' >&2; exit 2; fi; \"$task_workspace_root/.venv/bin/python\" \"$task_workspace_root/src/agent_company/adapters/claude.py\" || exit 2",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -n \"${CURSOR_VERSION:-}\" ]; then exit 0; fi; task_workspace_root=$(git rev-parse --show-toplevel) || exit 2; if [ ! -x \"$task_workspace_root/.venv/bin/python\" ]; then printf '%s\\n' 'TASK_WORKSPACE_SETUP_REQUIRED: Run Poetry setup in this checkout.' >&2; exit 2; fi; \"$task_workspace_root/.venv/bin/python\" \"$task_workspace_root/src/agent_company/adapters/claude.py\" || exit 2",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -n \"${CURSOR_VERSION:-}\" ]; then exit 0; fi; task_workspace_root=$(git rev-parse --show-toplevel) || exit 2; if [ ! -x \"$task_workspace_root/.venv/bin/python\" ]; then printf '%s\\n' 'TASK_WORKSPACE_SETUP_REQUIRED: Run Poetry setup in this checkout.' >&2; exit 2; fi; \"$task_workspace_root/.venv/bin/python\" \"$task_workspace_root/src/agent_company/adapters/claude.py\" || exit 2",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -n \"${CURSOR_VERSION:-}\" ]; then exit 0; fi; task_workspace_root=$(git rev-parse --show-toplevel) || exit 2; if [ ! -x \"$task_workspace_root/.venv/bin/python\" ]; then printf '%s\\n' 'TASK_WORKSPACE_SETUP_REQUIRED: Run Poetry setup in this checkout.' >&2; exit 2; fi; \"$task_workspace_root/.venv/bin/python\" \"$task_workspace_root/src/agent_company/adapters/claude.py\" || exit 2",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -n \"${CURSOR_VERSION:-}\" ]; then exit 0; fi; task_workspace_root=$(git rev-parse --show-toplevel) || exit 2; if [ ! -x \"$task_workspace_root/.venv/bin/python\" ]; then printf '%s\\n' 'TASK_WORKSPACE_SETUP_REQUIRED: Run Poetry setup in this checkout.' >&2; exit 2; fi; \"$task_workspace_root/.venv/bin/python\" \"$task_workspace_root/src/agent_company/adapters/claude.py\" || exit 2",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  },
+  "env": {
+    "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1"
+  }
+}
