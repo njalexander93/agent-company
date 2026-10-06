@@ -2,7 +2,7 @@
 name = "agent-company"
 version = "0.1.0"
 description = "Agent Company definitions and local task workspace tooling"
-requires-python = "==3.14.8"
+requires-python = ">=3.12,<3.15"
 dependencies = []
 
 [tool.poetry]
@@ -27,7 +27,7 @@ build-backend = "poetry.core.masonry.api"
 # Application dependencies and asynchronous test plugins are not used here.
 [tool.ruff]
 line-length = 100
-target-version = "py314"
+target-version = "py312"
 fix = true
 
 [tool.ruff.lint]
@@ -42,7 +42,7 @@ quote-style = "double"
 indent-style = "space"
 
 [tool.mypy]
-python_version = "3.14"
+python_version = "3.12"
 mypy_path = "src"
 files = ["src"]
 explicit_package_bases = true
