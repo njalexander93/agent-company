@@ -54,7 +54,7 @@ Existing manually shared workspaces, including AGENT-1, require `adopt`, not `cr
 
 ## Core interface and state
 
-Implement `operations/memory/task_workspace.py` with a Python standard-library API and matching command interface. The reusable entry point is `execute(request: dict) -> dict`; CLI reads one bounded UTF-8 JSON object from stdin, or accepts exactly one `--request-json` argument, and emits one JSON object to stdout. The argument route makes bootstrap callable without shell redirection. Host-specific input never enters the core unchanged. Command names below are operations in the request, not shell fragments.
+Implement `src/agent_company/lifecycle/task_workspace.py` with a Python standard-library API and matching command interface. The reusable entry point is `execute(request: dict) -> dict`; CLI reads one bounded UTF-8 JSON object from stdin, or accepts exactly one `--request-json` argument, and emits one JSON object to stdout. The argument route makes bootstrap callable without shell redirection. Host-specific input never enters the core unchanged. Command names below are operations in the request, not shell fragments.
 
 Every request has `schema_version: 1`, `operation`, `request_id` and explicit `worktree`. **Bootstrap exception:** `register` takes `main_worktree` and no `repo_id`; it creates or validates registration and returns the acquired `repo_id`. A pre-registration `diagnose` omits `repo_id` and returns `REGISTRATION_REQUIRED` or the stored identity. Every issue operation then supplies `repo_id`, `host`, `session_id`, and applicable `issue_id`, `participant_id`, `binding_generation`, `expected_revision` and operation arguments. IDs are opaque bounded strings except validated issue IDs; filesystem names derived from session IDs use SHA-256, never raw host identifiers. Persist idempotency by request ID plus canonical request digest. Same ID/same request returns the prior result; same ID/different request is rejected. Do not record arbitrary raw request bodies.
 
@@ -175,7 +175,7 @@ Keep the tombstone, verified archive locator/manifest, terminal disposition, fin
 
 ## Codex adapter contract
 
-Implement `adapters/openai/task_workspace_hook.py` as a thin JSON stdin/stdout adapter. Configure synchronous project hooks in `.codex/hooks.json`; no background handlers. Resolve the reviewed script from the Git worktree root with safe quoting and run from subdirectories correctly. Trust is required for both the project layer and exact hook definition. Do not install/trust broad global hooks or bypass trust. A changed hook definition requires legitimate review again. [H1]
+Implement `src/agent_company/adapters/codex.py` as a thin JSON stdin/stdout adapter. Configure synchronous project hooks in `.codex/hooks.json`; no background handlers. Resolve the reviewed script from the Git worktree root with safe quoting and run from subdirectories correctly. Trust is required for both the project layer and exact hook definition. Do not install/trust broad global hooks or bypass trust. A changed hook definition requires legitimate review again. [H1]
 
 Use finite adapter deadlines shorter than host deadlines: ordinary hooks at most 5 seconds with a 10-second host timeout; lock waits at most 1 second. SessionEnd/Interrupt do bounded local observations only, within the host's short limit. No provider network work in a hook. Catch expected parsing/I/O/lock errors and emit the event's valid denial. An interpreter crash, missing script, timeout or disabled/untrusted hook cannot be made fail-closed by Python code that never runs.
 
@@ -231,7 +231,7 @@ Disabled/untrusted hooks, script failures and uncovered tools remain host bypass
 
 ## Step 3 implementation and acceptance packet
 
-Owned implementation paths are `.gitignore`, `.codex/hooks.json`, `operations/memory/task_workspace.py`, `adapters/openai/task_workspace_hook.py`, `core/templates/task-workspace/`, `tests/task_workspace/`, plus implementation/evidence updates here. Preserve LICENSE. Keep host-neutral state/provider boundaries; no credentials, personal absolute paths or private-vault prerequisite in product code.
+Owned implementation paths are `.gitignore`, `.codex/hooks.json`, `src/agent_company/lifecycle/task_workspace.py`, `src/agent_company/adapters/codex.py`, `src/agent_company/resources/task_workspace/`, `tests/lifecycle/` and `tests/adapters/`, plus implementation/evidence updates here. Preserve LICENSE. Keep host-neutral state/provider boundaries; no credentials, personal absolute paths or private-vault prerequisite in product code.
 
 Implement in this order:
 
@@ -321,7 +321,9 @@ worktree, session and issue. Shell wrappers, redirection, additional commands,
 substitution and alternate interpreters are rejected.
 
 ```python
-python_path = str(Path(absolute_repository_root) / ".venv" / "bin" / "python")
+repository_root = Path(absolute_repository_root)
+python_path = str(repository_root / ".venv" / "bin" / "python")
+absolute_core_path = str(repository_root / "src/agent_company/lifecycle/task_workspace.py")
 argv = [python_path, absolute_core_path, "--request-json", json.dumps(request)]
 command = shlex.join(argv)
 ```

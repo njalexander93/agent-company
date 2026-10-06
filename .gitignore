@@ -81,6 +81,11 @@ venv.bak/
 # Documentation, notebook and editor caches
 docs/_build/
 .ipynb_checkpoints/
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+.vscode-test/
+.history/
 .idea/
 *.sw?
 .spyderproject
