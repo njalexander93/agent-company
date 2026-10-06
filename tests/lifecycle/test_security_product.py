@@ -6,8 +6,9 @@ No host activation, provider calls, or large-capacity probes are performed.
 from unittest import mock
 
 import pytest
+from agent_company.lifecycle import task_workspace as w
 
-from tests.task_workspace.test_lifecycle import Fixture, w
+from tests.support import Fixture
 
 pytestmark = pytest.mark.integration
 

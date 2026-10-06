@@ -4,9 +4,10 @@ import json
 from unittest import mock
 
 import pytest
+from agent_company.lifecycle import task_workspace as w
 
-from tests.task_workspace.test_lifecycle import Fixture, w
-from tests.task_workspace.types import JsonObject
+from tests.support import Fixture
+from tests.types import JsonObject
 
 pytestmark = pytest.mark.integration
 

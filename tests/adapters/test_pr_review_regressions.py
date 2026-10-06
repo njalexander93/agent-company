@@ -5,9 +5,11 @@ import os
 from unittest import mock
 
 import pytest
+from agent_company.adapters import codex as hook
+from agent_company.lifecycle import task_workspace as w
 
-from tests.task_workspace.test_lifecycle import Fixture, hook, w
-from tests.task_workspace.types import JsonObject, JsonValue
+from tests.support import Fixture
+from tests.types import JsonObject, JsonValue
 
 pytestmark = pytest.mark.integration
 
