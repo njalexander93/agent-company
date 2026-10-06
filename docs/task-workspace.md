@@ -375,13 +375,13 @@ OS metadata ignores do not imply runtime support on those operating systems. The
 
 ### Recovery and completion semantics
 
-SessionStart, PreCompact and PostCompact retain precise readiness/error codes in
+Codex SessionStart, PreCompact and PostCompact retain precise readiness/error codes in
 bounded recovery context. They do not terminate the session merely because it
 needs registration, resume, scope repair or acknowledgment. No readiness is granted:
 ordinary PreToolUse calls remain denied, and the existing exact bootstrap and
 provider exceptions still apply.
 
-PostToolUse settles pending work only from typed completion evidence: an integer
+Codex PostToolUse settles pending work only from typed completion evidence: an integer
 exit code, a boolean MCP/local-tool `isError` result, or a shell error without an
 async handle. Null/string metadata does not establish completion; a successful
 shell wrapper with an async handle remains pending. A final response may retain
@@ -394,6 +394,12 @@ explicit completion retires the original process; nonfinal and concurrent polls
 cannot strand transport records or settle an unrelated process. Distinct
 observations use distinct idempotency keys, while exact repeats remain idempotent.
 Pending-operation event reservations remain in force.
+
+Claude Code and Cursor use their own native event and completion contracts in the
+[host guide](host-hooks.md). Claude compaction hooks record observations only;
+they do not deliver recovery context or grant readiness. Supported startup and
+pre-tool responses carry recovery diagnostics. Do not apply Codex's response
+fields or completion rules to another host.
 
 At the issue root and directly inside `context/`, inventory excludes only regular,
 owned, no-follow validated `.DS_Store` and `._*` files with a nonempty suffix.
