@@ -10,6 +10,7 @@ install: ## Install the package in editable mode and sync locked development dep
 
 validate-config: ## Validate project metadata and lock consistency.
 	poetry check --lock
+	poetry run pre-commit validate-config
 
 format: ## Apply Ruff formatting to source and tests.
 	poetry run ruff format src tests
