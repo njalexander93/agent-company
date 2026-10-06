@@ -89,7 +89,7 @@ Escalation destinations below apply V1's rule: route to the authority actually r
 - **Boundaries:** Internal, External and Product Security Reviewer cannot substitute for or waive one another. Reviewers do not implement remediation, activate tools, change reviewed gates/evidence or accept material risk. Internal Security does not replace Product Security for shipped framework behavior or External Security for exposed surfaces.
 - **Escalation:** Human Leadership for material risk acceptance and protected decisions; Issue Delivery Manager coordinates delivery blockers and separately scoped remediation. Negative or inconclusive findings cannot be self-waived.
 
-**Source:** [V1: “Team charters → Security Engineering Team”; V10: “Role boundaries,” “Overlap and aggregation”; SPEC: “Accepted inventory versus definition backlog.”](#governing-sections)
+**Source:** [V1: “Team charters → Security Engineering Team”; V10: “Role boundaries,” “Overlap and aggregation”](#governing-sections)
 
 ### Platform Engineering Team
 
@@ -104,13 +104,13 @@ Escalation destinations below apply V1's rule: route to the authority actually r
 
 **Control Plane is infrastructure outside the hierarchy.** It includes deterministic Wave Controller, workflow/gate evaluation, contract/lease/receipt/context routing, ledger/projections, provider synchronization and evidence registry. It neither becomes a Team member nor replaces independent specialist judgment or human authorization. No Wave Planner Role is added. [V1: “Accepted POC hierarchy,” “Coordination and separation rules”; DEC-098; RC-02.](#governing-sections)
 
-**Known drafting work is not an unknown authority decision.** The coverage record must reconcile 22 canonical Roles separately from the 12-Role/4-Profile downstream definition backlog. AGENT-2 owns planning/review definitions; AGENT-3 coordination; AGENT-4 tooling/test/code review and four Profiles; AGENT-5 governance/security/publication and supporting participation. AGENT-6/7 own shared permission and handoff/context/outcome work. The later fresh-agent trial supplies the one AGO example; this map does not prewrite it. [SPEC: “Coverage and downstream contracts,” “Required fresh-agent authoring trial.”](#governing-sections)
+**Known drafting work is not an unknown authority decision.** The [coverage record](role-coverage.md) distinguishes 22 canonical Roles from the smaller selected definition set. It records responsibilities and fixture participation without assigning new authority. The [worked AGO example](examples/roles/agent-governance-officer.md) is documentation, not a runtime Role.
 
-The high-level hierarchy is not an exhaustive Profile inventory. Security Profile taxonomy remains deliberately deferred. If a required source or governing authority decision is missing/conflicting, block the affected path and route the decision to Human Leadership; do not fill it with a new unit, Role or permission. No such source conflict was found for this map at the registered input versions. [SPEC: “Prevent a false dependency cycle,” “Blockers and limitations”; V11: “Decision — detailed design deferred to a Spike”; V1: “Authority and runtime boundary.”](#governing-sections)
+The high-level hierarchy is not an exhaustive Profile inventory. Security Profile taxonomy remains deliberately deferred. If a required source or governing authority decision is missing/conflicting, block the affected path and route the decision to Human Leadership; do not fill it with a new unit, Role or permission. No such source conflict was found for this map at the registered input versions. [V11: “Decision — detailed design deferred to a Spike”; V1: “Authority and runtime boundary.”](#governing-sections)
 
 ## Governing sections
 
-These are **shared-vault-relative locators**, not repository paths. Use the [baseline source register](baseline.md#governing-source-register) for retained bytes, stable IDs and retrieval. Company-specific authors use accessible framework contracts and their own governing context; this internal retrieval route is not their prerequisite. [SPEC: D01.]
+These are **shared-vault-relative locators**, not repository paths. Use the [baseline source register](baseline.md#governing-source-register) for retained bytes, stable IDs and retrieval. Company-specific authors use accessible framework contracts and their own governing context; this internal retrieval route is not their prerequisite.
 
 | Key / stable ID | Vault-relative path | Sections used |
 | --- | --- | --- |
@@ -120,4 +120,3 @@ These are **shared-vault-relative locators**, not repository paths. Use the [bas
 | V10 / `DISC-L2905` | `Sources/Discovery/Round 3/DISC-L2905 - Question 3.22 - Security assurance role structure.md` | Role boundaries; Overlap and aggregation. |
 | V11 / `DISC-L2981` | `Sources/Discovery/Round 3/DISC-L2981 - Question 3.24 - Security Role profiles.md` | Decision — detailed design deferred to a Spike. |
 | DEC-098, DEC-099, DEC-101 | `Decisions/Records/DEC-098.md`, `Decisions/Records/DEC-099.md`, `Decisions/Records/DEC-101.md` | Decision as recorded; Rationale as recorded (each). |
-| SPEC / `PROPOSAL-AGENT-1-RESEARCH` | `Delivery/Research/AGENT-1 - Research and Delivery Requirements.md` | R03/R19/R21; Coverage and downstream contracts; Required fresh-agent authoring trial; Interview decisions D01; Blockers and limitations. |

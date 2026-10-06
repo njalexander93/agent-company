@@ -1,6 +1,6 @@
 # Shared Role and Profile format
 
-**Define bounded responsibilities, not personalities.** These Markdown templates describe a Role and a Profile for review. They do not grant execution authority, implement Skills or finalize a machine/runtime schema. A Profile only narrows its canonical parent Role. A Skill supplies methods and grants no authority. [V1, Hierarchy rule; V3, Policy before personality; L1/LM — see Sources below.]
+**Define bounded responsibilities, not personalities.** These Markdown templates describe a Role and a Profile for review. They do not grant execution authority, implement Skills or finalize a machine/runtime schema. A Profile only narrows its canonical parent Role. A Skill supplies methods and grants no authority. [V1, Hierarchy rule; V3, Policy before personality]
 
 ## Authoring route
 
@@ -9,7 +9,7 @@
 3. Copy the appropriate template. Replace every placeholder with sourced content or an explicit disposition from [Completeness and gaps](#completeness-and-gaps). Link shared rules instead of recreating them.
 4. Check the draft against [Review and maintenance](#review-and-maintenance). Record field completeness, reference verification and semantic review separately. A structurally complete document can still misstate authority.
 
-For the fresh-author trial, the frozen packet supplies product guidance and explicitly permitted governing records. **SPEC is research provenance, never required fresh-author reading.** Research notes, upstream author reasoning and conversations are not implicit inputs. The frozen trial packet deliberately excluded the Agent Governance Officer example, which the fresh author subsequently produced; this format supplies no completed Role-specific answer. [Baseline, confirmed decisions D01/D02; RC-07, Context rules.]
+For a fresh-author usability check, supply frozen product guidance and explicitly permitted governing records. Exclude research notes, upstream reasoning, conversations and a prewritten answer. Review the exact output separately. [Baseline, authoring rules; RC-07, Context rules.]
 
 ## Role template
 
@@ -131,7 +131,7 @@ must resolve. Record affected scope, owner/destination, next action and readines
 for unresolved inputs. Identify the relevant coverage entry.>
 ```
 
-A parent reference must resolve to content, not merely a name. If the parent definition is assigned downstream, record its draft/version or absence and the owning issue. Stable accepted sources can support drafting, but parent compatibility remains unverified until the exact parent is reconciled. Do not present that Profile as accepted or ready for execution. [L1/LM; baseline, known drafting gaps.]
+A parent reference must resolve to content, not merely a name. If the parent definition is assigned downstream, record its draft/version or absence and the assigned author and review destination. Stable accepted sources can support drafting, but parent compatibility remains unverified until the exact parent is reconciled. Do not present that Profile as accepted or ready for execution. [coverage, Definition backlog and readiness.]
 
 A narrower artifact review still needs every assigned interface covered; separate component passes do not imply interface coverage. Deferred taxonomy is not an accepted Profile list. Use detailed accepted sources when the high-level diagram is incomplete. [V9, Multi-domain aggregation; V11, detailed design deferral.]
 
@@ -145,7 +145,7 @@ A narrower artifact review still needs every assigned interface covered; separat
 | Not applicable — reason/source | An applicable rule or scope makes this field's particular obligation irrelevant. Name that rule and scope. Never use this to hide a required responsibility or missing evidence. |
 | Intentionally absent — reason/source | The accepted boundary deliberately excludes a capability or output. For example, no implementation writes for a repository-read-only review. Record the explicit exclusion; a blank cell is ambiguous. |
 | Conditional | State the trigger and required input/evidence if triggered. Record whether it applies to the selected path and why. Uncertainty about a required trigger blocks the affected conclusion. |
-| Known drafting gap | Accepted meaning exists, but its downstream definition/contract is unfinished. Name the owning issue, next action and reconciliation gate. Continue independent drafting; do not claim the absent artifact exists. |
+| Known drafting gap | Accepted meaning exists, but its downstream definition/contract is unfinished. Name the assigned author and review destination, next action and reconciliation gate. Continue independent drafting; do not claim the absent artifact exists. |
 | Unknown / conflicting / unavailable | Identify the missing decision, stale version, inaccessible source or conflicting sections; state the affected path and decision destination. Stop that conclusion and continue unaffected work. Do not resolve authority by inference or recency. |
 
 A source can be readable and correctly hashed yet lack governing authority. An authoritative source can be unavailable to the assigned author and therefore unusable for the affected step. Neither source verification nor a populated template establishes review acceptance. [V0; V3, Least privilege; RC-07, Context rules and Human boundary/failure.]
@@ -171,9 +171,9 @@ Resolve each substantive claim to its section, reopen the permitted version, com
 
 **Reference canonical shared rules.** V3 governs authority and independence; RC-02 governs decision rights and transition evidence; RC-07 governs context and receipt progression. Received artifacts, accepted evidence, execution authorization, publication and activation remain distinct. A completion receipt is validated for an exact transition; it cannot satisfy every later gate. These are paper contract requirements here, not claims of implemented enforcement.
 
-[AGENT-6](https://linear.app/ne3ko93/issue/AGENT-6/define-shared-permissions-and-governance-revision-decisions) owns shared permission rows and exact-revision governance decisions. [AGENT-7](https://linear.app/ne3ko93/issue/AGENT-7/define-handoff-context-and-outcome-contracts) owns handoff, context and outcome contracts. Reference accepted source rules while those drafts develop; reconcile their exact revisions before the affected definitions are accepted. This format does not fill unknown decisions, invent approval machinery or serialize runtime receipts. [LM; L6/L7.]
+Shared permission and exact-revision decision rules must be reconciled with handoff, context and outcome contracts before affected definitions are accepted. Use V3, Least privilege; V5, decision rights; and V6, context/receipt progression. This format does not invent authority or a runtime receipt schema.
 
-Needed starter methods can include source/reference verification, bounded drafting, independent behavioral testing, scoped artifact review, security assessment, and evidence/handoff preparation. Select only those needed by the definition and cite the governing responsibility. Record a verified existing Skill locator/version or **needed—not implemented**, with an owner/next action. These capability descriptions are not Skill IDs, implementations or permission grants. Milestone 2 owns reusable Skills/procedures. [L1/LM; V1; V8/V9.]
+Needed starter methods can include source/reference verification, bounded drafting, independent behavioral testing, scoped artifact review, security assessment, and evidence/handoff preparation. Select only those needed by the definition and cite the governing responsibility. Record a verified existing Skill locator/version or **needed—not implemented**, with an owner/next action. These capability descriptions are not Skill IDs, implementations or permission grants. Reusable Skills/procedures require separately scoped implementation. [V1; V8/V9.]
 
 ## Review and maintenance
 
@@ -184,7 +184,7 @@ Needed starter methods can include source/reference verification, bounded drafti
 5. **Changes:** When a source rule or parent changes, identify all affected Roles/Profiles, policy references, coverage entries and fixture expectations. Retain the changed source identity; update affected artifacts in the same review or explicitly linked work with an owner and readiness effect. Recheck references and semantics; repeat affected authoring/review trials. A material candidate change requires applicable renewed review/decision, not transferred approval.
 6. **Evidence:** Record the exact candidate, checks, failures/repairs, unresolved gaps and actual reviewer decisions at a durable evidence locator. Apply the baseline's human-reviewed GitHub PR requirement. Paper expectations remain separate from actual receipts, runtime tests, human acceptance and activation.
 
-The frozen authoring trial and independent example review passed their bounded documentation checks; see the [baseline evidence record](baseline.md#acceptance-evidence-and-readiness). Integrated acceptance remains open. This reusable format supplies no Role-specific answer key, Skill implementation or runtime test result. [Baseline, confirmed decisions and acceptance evidence; L6; RC-02/RC-07.]
+The [worked AGO example](examples/roles/agent-governance-officer.md) illustrates the format. It is a documentation artifact, not a packaged runtime Role. Its edited candidate needs separate review; no historical review transfers to changed bytes.
 
 ## Sources
 
@@ -192,9 +192,7 @@ Keys below resolve to stable IDs, titles, locators and verified retained content
 
 | Key | Sections supporting this format |
 | --- | --- |
-| L1 / AGENT-1 | Scope: Role/Profile fields, source-access boundary, exclusions; Acceptance Evidence. |
-| LM / Milestone 1 — Usable organization and governance draft | Ownership and shared rules; Dependencies and drafting overlap; Completion and limits. |
-| V0 / CURRENT-INTERPRETATION | Current interpretation; Later walkthrough context. |
+| V0 / CURRENT-INTERPRETATION | Current interpretation. |
 | V1 / SPEC-ORGANIZATION | Hierarchy rule; Coordination and separation rules; Authority and runtime boundary; selected owning-unit charter. |
 | V3 / SPEC-PRINCIPLES | Independent assurance; Evidence over confidence; Explicit ownership and handoffs; Least privilege; Policy before personality. |
 | V5 / RC-02 | Component responsibilities table; Change Publisher; Evidence/failure. |
@@ -202,7 +200,3 @@ Keys below resolve to stable IDs, titles, locators and verified retained content
 | V8 / DISC-L2719 | Decision: shared Test Developer authority and Profile narrowing. |
 | V9 / DISC-L2753 | Decision: shared Code Reviewer authority; Multi-domain aggregation rule. |
 | V11 / DISC-L2981 | Decision — detailed design deferred to a Spike. |
-| L6 / AGENT-6 | Permission/revision-decision fields; Acceptance Evidence. |
-| L7 / AGENT-7 | Minimum handoff fields; Acceptance Evidence. |
-
-**Delivery provenance only:** SPEC R07/R08/R19/R21 and D01–D03 informed this delivery. The baseline states the applicable audience, trial and PR decisions directly. SPEC and research reasoning are excluded from the fresh-author packet.

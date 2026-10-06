@@ -1,19 +1,19 @@
 # Task-workspace contract
 
-**Status: Local implementation and PR corrections are available. Exact-candidate local test and scoped review results are retained in E3/E4; earlier results do not validate changed code. Actual host/provider acceptance, exact-candidate human acceptance and runtime/Security certification remain open. [E3/E4]**
+**Local workflow guardrail.** The utility manages issue workspace creation, attachment, scoped readiness, archival and recovery. Installed-host trust/callback coverage and provider acceptance require separate evidence; protocol tests are not runtime or Security certification.
 
-AGENT-1 adds a local workflow guardrail: automatic issue workspace creation, attachment and readiness checks on supported Codex paths. Step 3 implements and tests this contract. It does not implement the Control Plane, authenticated Role authority, complete confidentiality, the paper reference checker or the full launcher.
+Host adapters call a shared lifecycle core for supported local task actions. It does not implement the Control Plane, authenticated Role authority, complete confidentiality, the paper reference checker or the full launcher.
 
 ## Scope and governing inputs
 
-The 2026-10-03 amendment in **SPEC**, current **L1/LM**, and the explicit workspace decisions govern this increment. Their identities and retained bytes are in [the baseline register](baseline.md). **V0** controls interpretation; **V2** supplies repository placement; **V6/RC-07** governs scoped context and verified archival; **RC-09** governs evidence/privacy. This document selects concrete local mechanics under that scope, not new organizational policy.
+**V0** controls governing interpretation; **V2** supplies repository placement; **V6/RC-07** governs scoped context and verified archival; **RC-09** governs evidence/privacy. Their direct records are in the [baseline register](baseline.md#governing-source-register). This document defines local mechanics, not new organizational authority.
 
 Additional reading routes, relative to the shared vault:
 
 - `Specifications/Runtime/Context Packages.md` (`GUIDE-CONTEXT`): minimum sufficient inputs, provenance and staged disclosure.
 - `Assurance/Conformance/R6-C03.md`, `R6-C04.md`, `R6-C11.md`, `R6-C13.md`: isolation, contract integrity, completion and evidence scenarios. These are defined expectations, not passed tests.
 
-The first supported platform is one local non-bare Git repository and its linked worktrees on macOS. Separate clones, remote hosts, synchronization, exposed services and background scheduling are excluded. Generic task use must not require this team's private vault. A2/R2, 8 provisional AGENT-1 points and 29 milestone points remain the planning baseline. A materially different host architecture requires visible re-estimation. [SPEC, L1, LM]
+The first supported platform is one local non-bare Git repository and its linked worktrees on macOS. Separate clones, remote hosts, synchronization, exposed services and background scheduling are excluded. Generic task use must not require this team's private vault. A different host/platform architecture needs its own scope and validation.
 
 ## Storage and identity
 
@@ -50,15 +50,15 @@ Required access is narrow: the assigned canonical issue directory, its `.control
 
 New-issue cleanup examines only explicitly registered candidate IDs for which the caller already has appropriate access. It does not require broad access to other issues. Inaccessible candidates are retained and reported as skipped; creation of an independent authorized issue can proceed.
 
-Existing manually shared workspaces, including AGENT-1, require `adopt`, not `create --force`. Under the issue lock, inventory and hash existing bytes, preserve roadmap format/content, assign existing note owners explicitly, and record adoption provenance. Do not synthesize old events. Unexpected files or unresolved ownership stop adoption for review. No startup path empties or reinitializes an existing directory.
+Existing manually shared workspaces require `adopt`, not `create --force`. Under the issue lock, inventory and hash existing bytes, preserve roadmap format/content, assign existing note owners explicitly, and record adoption provenance. Do not synthesize old events. Unexpected files or unresolved ownership stop adoption for review. No startup path empties or reinitializes an existing directory.
 
 ## Core interface and state
 
-Implement `src/agent_company/lifecycle/task_workspace.py` with a Python standard-library API and matching command interface. The reusable entry point is `execute(request: dict) -> dict`; CLI reads one bounded UTF-8 JSON object from stdin, or accepts exactly one `--request-json` argument, and emits one JSON object to stdout. The argument route makes bootstrap callable without shell redirection. Host-specific input never enters the core unchanged. Command names below are operations in the request, not shell fragments.
+The shared core is `src/agent_company/lifecycle/task_workspace.py`, with a Python standard-library API and matching command interface. The reusable entry point is `execute(request: dict) -> dict`; CLI reads one bounded UTF-8 JSON object from stdin, or accepts exactly one `--request-json` argument, and emits one JSON object to stdout. The argument route makes bootstrap callable without shell redirection. Host-specific input never enters the core unchanged. Command names below are operations in the request, not shell fragments.
 
 Every request has `schema_version: 1`, `operation`, `request_id` and explicit `worktree`. **Bootstrap exception:** `register` takes `main_worktree` and no `repo_id`; it creates or validates registration and returns the acquired `repo_id`. A pre-registration `diagnose` omits `repo_id` and returns `REGISTRATION_REQUIRED` or the stored identity. Every issue operation then supplies `repo_id`, `host`, `session_id`, and applicable `issue_id`, `participant_id`, `binding_generation`, `expected_revision` and operation arguments. IDs are opaque bounded strings except validated issue IDs; filesystem names derived from session IDs use SHA-256, never raw host identifiers. Persist idempotency by request ID plus canonical request digest. Same ID/same request returns the prior result; same ID/different request is rejected. Do not record arbitrary raw request bodies.
 
-Responses contain `ok`, `code`, identifiers, current `revision`, `binding_generation`, allowed reference descriptors and a bounded diagnostic/recovery action. No private note body is returned by status/diagnostic operations. Suggested CLI exits: `0` success, `2` invalid input, `3` conflict/not-ready, `4` I/O/provider/recovery failure. These exits are **not** the Codex hook wire protocol.
+Responses contain `ok`, `code`, identifiers, current `revision`, `binding_generation`, allowed reference descriptors and a bounded diagnostic/recovery action. No private note body is returned by status/diagnostic operations. Suggested CLI exits: `0` success, `2` invalid input, `3` conflict/not-ready, `4` I/O/provider/recovery failure. These exits are **not** a native host hook response protocol.
 
 | Operation | Required behavior |
 |---|---|
@@ -87,17 +87,17 @@ Keep three dimensions separate:
 - **Storage:** `absent → present → archive_pending → archive_verified → cleanup_pending → cleaned`. Any changed payload invalidates the verified snapshot. `cleaned → recovery_required → present` only after verified restore. Transaction uncertainty makes readiness false until recovery resolves it.
 - **Participant:** `unbound → attached → ready → detached`; a scope/binding change returns it to `attached`. Lost host signals yield `unknown`, never automatically `detached`. Reattachment uses a new generation and fences stale writes.
 
-Terminal recording for completed AGENT-1 requires references to exact human acceptance, actual required merge and completion of issue obligations. The utility validates supplied identities/evidence and provider status; it cannot manufacture or independently grant human acceptance. Terminal state still forbids ordinary task edits until explicit reopen, which invalidates cleanup eligibility. Cancellation preserves its recorded disposition/history. [SPEC, RC-07]
+Terminal recording for a completed issue requires references to exact human acceptance, actual required merge and completion of issue obligations. The utility validates supplied identities/evidence and provider status; it cannot manufacture or independently grant human acceptance. Terminal state still forbids ordinary task edits until explicit reopen, which invalidates cleanup eligibility. Cancellation preserves its recorded disposition/history.
 
 ## Ownership, context and participant lifetime
 
-One coordinator owns `roadmap.md`, shared summary and packet assignment. Participants own distinct named notes, recorded in control state, for example `context/step-03.md`. Every note/update carries author/participant, source references and digests, applicability, status, and superseded revision when relevant. No private reasoning is required. Ownership transfers are explicit, revision-checked and recorded.
+One coordinator owns `roadmap.md`, shared summary and packet assignment. Participants own distinct named notes, recorded in control state, for example `context/implementation.md`. Every note/update carries author/participant, source references and digests, applicability, status, and superseded revision when relevant. No private reasoning is required. Ownership transfers are explicit, revision-checked and recorded.
 
 Packet manifests list reference ID, source locator, content digest/version, authority class, required/optional status, inclusion reason and allowed reader/stage. Required governing sources remain independently retrievable; summaries do not replace them. Refresh allowed references on resume/compaction and after material source changes. A stale required reference denies readiness for affected work. A packet checksum does not prove semantic completeness. [RC-07, GUIDE-CONTEXT]
 
 Fresh-author and independent-review participants receive explicit allowlists. Do not expose the whole roadmap, events stream, archive, upstream author notes or research by default. An authorized factual safety notice can be added with provenance without disclosing upstream conclusions. Hook output contains only fixed control text, safe IDs and packet digests; task text is retrieved as data through scoped reads. Do not interpolate roadmap/note/prompt content into developer-level `additionalContext`.
 
-Host session identifiers are opaque. Root participant identity is `(repo_id, host, session_id, generation)`. A child also needs a verified distinct child identity and its own scope. Parent issue inheritance does not mean parent packet inheritance. Native SubagentStart supplies a parent session ID and child agent ID; the documented PreToolUse shape does not establish that child ID for later calls. **Do not guess the child from cwd, timing, agent type or transcript content.** Step 3 must verify an unambiguous installed-host mapping; see the integration gate below.
+Host session identifiers are opaque. Root participant identity is `(repo_id, host, session_id, generation)`. A child also needs a verified distinct child identity and its own scope. Parent issue inheritance does not mean parent packet inheritance. A child needs an unambiguous host-to-tool identity mapping before its scope can be trusted. Do not infer it from cwd, timing, agent type or transcript content. See the [host guide](host-hooks.md) for per-host child and coverage limitations.
 
 `Stop`/Interrupt are observations, not detachment. `SessionEnd` marks a session-end observation but does not prove children or shell processes ended. Track pending supported tool IDs and returned asynchronous execution handles. Explicit detachment requires no outstanding tools/children and a host confirmation or accountable coordinator reconciliation. A missing PID, expired heartbeat or elapsed time is insufficient. Unknown participants retain the issue and prevent cleanup. No recurring liveness service is introduced.
 
@@ -113,7 +113,7 @@ Out-of-band edits are unsupported concurrent writes. Detect manifest mismatch be
 
 ## Events and retention
 
-`events.jsonl` is a **local diagnostic stream**, not the full authority ledger. Write UTF-8 JSON, one complete newline-terminated object per event. The coordinated writer assigns sequence and identifiers. Required workspace-transition events commit with their local operation; optional host observations may fail without stopping unrelated work. [RC-09; SPEC event refinement]
+`events.jsonl` is a **local diagnostic stream**, not the full authority ledger. Write UTF-8 JSON, one complete newline-terminated object per event. The coordinated writer assigns sequence and identifiers. Required workspace-transition events commit with their local operation; optional host observations may fail without stopping unrelated work. [RC-09]
 
 Version 1 event fields:
 
@@ -135,7 +135,7 @@ For this increment, retain the complete bounded stream until verified archive an
 
 ## Archive provider boundary and recovery
 
-**Selected first bridge: foreground Codex connector calls plus deterministic local verification.** Python command hooks have no established access to this task's connector session. Do not invoke imagined Python MCP functions, scrape credentials or start a second Codex model from a hook.
+**Selected first bridge: foreground Codex connector calls plus deterministic local verification.** Python command hooks have no established access to the foreground connector session. Do not invoke imagined Python MCP functions, scrape credentials or start a second Codex model from a hook.
 
 The available tool declarations provide:
 
@@ -143,7 +143,7 @@ The available tool declarations provide:
 - `mcp__codex_apps__linear_get_document({id})` for read-back.
 - `mcp__codex_apps__linear_get_issue({id})` and `linear_list_documents` for identity/recovery lookup.
 
-Step 2 successfully read AGENT-1 and the milestone through those connectors. Save is declared callable but **no archive write/read-back round trip was performed**. The command-hook process cannot directly call these model tools. Current official hooks also describe `mcp_tool` handlers, and the installed generated configuration type includes them. That establishes a potential bridge, not a connected server name, sequencing facility or working archive transaction. Concurrent matching hooks cannot implement ordered save/read-back. [H1, E1]
+The command-hook process does not inherit the foreground connector session. Provider work is an explicit foreground operation, never an assumed hook-side transaction. Preserve data when a connector or required observation is unavailable.
 
 ### Concrete archive sequence
 
@@ -155,7 +155,7 @@ Step 2 successfully read AGENT-1 and the milestone through those connectors. Sav
 
 The archive document contains a readable outcome/goal/constraints/progress/blockers/source/handoff history plus a versioned structured manifest and reconstructable payload. For exactness, encode UTF-8 roadmap/context/event bytes in base64 inside a fenced JSON object. Each entry carries relative path, byte length, SHA-256 and disclosure scope. Digests use original bytes. Sensitive material must be excluded before export, not merely encoded. Research stays at its durable vault source; large external evidence needs a verified durable reference and scope.
 
-Use a conservative 256 KiB export-document limit as a **local implementation limit**, not a claimed Linear limit. Larger payloads require numbered issue documents plus a root manifest of document IDs/digests and read-back of every part. If the provider rejects size/content, preserve local data and return `ARCHIVE_PENDING`; never truncate or silently omit meaningful history. Step 3 must measure actual connector behavior and test multipart reconstruction.
+Use a conservative 256 KiB export-document limit as a **local implementation limit**, not a claimed Linear limit. Larger payloads require numbered issue documents plus a root manifest of document IDs/digests and read-back of every part. If the provider rejects size/content, preserve local data and return `ARCHIVE_PENDING`; never truncate or silently omit meaningful history. Validate actual connector behavior and multipart reconstruction separately from local provider fixtures.
 
 ### Cleanup and restore
 
@@ -173,31 +173,11 @@ Keep the tombstone, verified archive locator/manifest, terminal disposition, fin
 
 `restore` fetches the root and all parts through the same foreground bridge, validates every digest/path, and reconstructs in a staging directory. Reject duplicate paths, traversal, symlinks, unknown schema, incomplete parts and decompression/size abuse (base64 decoding has explicit bounds). Under lock, require the matching tombstone and no newer payload, publish restored data, append a new lifecycle generation and explicitly reopen. Preserve historical terminal evidence; never overwrite it as though the issue had always been active. Provider loss, tampering, missing tombstone or unknown history yields `RECOVERY_REQUIRED`.
 
-## Codex adapter contract
+## Host adapters
 
-Implement `src/agent_company/adapters/codex.py` as a thin JSON stdin/stdout adapter. Configure synchronous project hooks in `.codex/hooks.json`; no background handlers. Resolve the reviewed script from the Git worktree root with safe quoting and run from subdirectories correctly. Trust is required for both the project layer and exact hook definition. Do not install/trust broad global hooks or bypass trust. A changed hook definition requires legitimate review again. [H1]
+Native host configuration, event translation, trust and host-specific limitations are documented in [Host hooks](host-hooks.md). Adapters reuse the shared lifecycle core; they must not maintain a competing lifecycle or treat another host's JSON schema as native support.
 
-Use finite adapter deadlines shorter than host deadlines: ordinary hooks at most 5 seconds with a 10-second host timeout; lock waits at most 1 second. SessionEnd/Interrupt do bounded local observations only, within the host's short limit. No provider network work in a hook. Catch expected parsing/I/O/lock errors and emit the event's valid denial. An interpreter crash, missing script, timeout or disabled/untrusted hook cannot be made fail-closed by Python code that never runs.
-
-| Event / inputs | Adapter action and output |
-|---|---|
-| `SessionStart`: `session_id`, `cwd`, `source` (`startup/resume/clear/compact`) | Restore a known binding and validate scope; initial unknown session stays unbound. Return fixed setup/status text only. For unready or stale state, preserve its precise diagnostic and permit only the documented bootstrap recovery path; ordinary pre-tool denial remains required. Do not stop the lifecycle solely because acknowledgment or resume is needed. Never delete/create a guessed issue. |
-| `UserPromptSubmit`: above plus `turn_id`, `prompt` | For an unbound root, parse exactly one standalone `Task: <ID>` line or use pre-established explicit binding. No match stays unbound; multiple distinct/malformed declarations block. Bound sessions need no repeated declaration; a differing declaration requires explicit rebind. Do not search incidental issue mentions or retain the prompt. Return `decision:block`/`reason` on conflicts. |
-| `SubagentStart`: parent `session_id`, `agent_id`, `agent_type`, `turn_id` | Inherit issue; attach separate preassigned scope and generation. Missing child mapping/scope marks not-ready. `continue:false` does not stop this event; gate the spawn path beforehand and child tool path afterward only where identity is verified. |
-| `PreToolUse`: `session_id`, `cwd`, `turn_id`, `tool_name`, `tool_use_id`, `tool_input` | Resolve verified participant; run `ready` before every covered tool. Deny unknown/stale/mismatched bindings, failed setup, required-source/evidence failure, lock timeout or ambiguous child identity. Record pending supported operation before allow; do not record raw input. |
-| `PostToolUse`: tool identity and response | Extract only allowlisted completion/error codes and async handle identifiers; mark pending operations complete where actually complete. Never ingest full response into events. A post-hook cannot undo a tool effect. |
-| `PreCompact`, `PostCompact`, compact `SessionStart` | Preserve state and refresh permitted manifest references. Do not regenerate governance from conversation summaries. Missing callbacks cannot erase bindings. |
-| `Stop`, `Interrupt`, `SubagentStop`, `SessionEnd` | Record bounded observation and reconcile known operations. Do not infer issue completion or participant retirement from turn stop. No automatic archive/delete and no continuation loop. |
-
-**Pre-tool denial must be valid JSON and exit 0:**
-
-```json
-{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"TASK_WORKSPACE_NOT_READY: BINDING_MISSING. Supply one Task: ISSUE-ID binding."}}
-```
-
-Successful readiness returns `{}` with exit 0, leaving normal tool permissions intact. Never return a blanket permission approval. `PreToolUse` does not support `continue:false`, `stopReason`, `suppressOutput` or `permissionDecision:ask`; those can fail the hook while the tool proceeds. Exit 2/stderr is documented as a blocking route, but use the explicit JSON route consistently. [H1]
-
-Diagnostics distinguish `BINDING_MISSING`, `BINDING_CONFLICT`, `STALE_BINDING`, `SCOPE_MISSING`, `SOURCE_STALE`, `PERMISSION_REQUIRED`, `UNSAFE_PATH`, `BUSY`, `UNTRACKED_CHANGE`, `INTEGRITY_ERROR`, `RECOVERY_REQUIRED`, `ARCHIVE_PENDING` and `HOST_UNSUPPORTED`. Reasons contain safe IDs/codes and exact recovery instructions, never private task contents.
+A hook can deny a covered action only when the host actually invokes and honors it. Disabled/untrusted hooks, missing interpreters, timeout, malformed responses, uncovered paths and same-user filesystem access limit enforcement. Installed-host evidence is required separately for each host and version. Protocol fixtures do not establish that coverage or support for another operating system.
 
 ### Bootstrap exceptions
 
@@ -211,76 +191,17 @@ A sealed maintenance binding permits only the exact archive export/read-back/ver
 
 No general shell, file read/write, web search, MCP wildcard or “read-only command” exemption. A supported diagnostic path must explain the next action without recursively calling itself through the gate. PermissionRequest must not automatically grant permissions. Static hook control instructions may explain these routes but cannot promote arbitrary task data to instructions.
 
-### Historical Step 2 feasibility probes, gaps and fallback
+### Verification boundaries
 
-| Step 2 evidence as of 2026-10-03 [E1] | What it established then / did not establish |
-|---|---|
-| Installed `codex-cli 0.155.0-alpha.16.3`; `features list` reports `hooks stable true` | Binary/feature availability. Not that this desktop task loaded or trusted project hooks. |
-| `app-server generate-ts --experimental` exposes lifecycle/tool events, command and `mcp_tool` handler types, trust status and `McpServerToolCallParams` | Protocol feasibility. Not runtime event delivery or connector access from a hook. |
-| `codex app-server proxy` exits 1: default control socket does not exist | No usable default live-server bridge observed. Do not start a daemon or guess private sockets to bypass this. |
-| Linear issue/milestone reads succeeded; save/get document declarations available | Foreground connector route exists; archive creation and exact read-back remain untested. |
-| Official documentation [H1] | Trust, event shapes, disabled hooks, failure behavior and coverage. Documentation is not local desktop proof. |
+Local lifecycle checks must cover worktree sharing/isolation, identity/path validation, scoped context, concurrent writes, crash recovery, pending-operation retention, exact archive reconstruction and cleanup/restore races. Host checks must separately establish actual callback delivery, legitimate trust, allowed bootstrap, denied covered actions, async completion and child identity. Provider checks need real save/read-back and reconstruction in addition to local fixtures.
 
-Documented coverage includes Bash/unified exec, apply_patch, MCP and many local functions. Specialized paths may opt out. `write_stdin` does not rerun PreToolUse for a previously allowed command. Thus a shell opened while ready may accept later input without a fresh gate. Track it as live until closed; no rebind or cleanup while unresolved. Do not claim shell-content policy enforcement. Nested code-mode calls, app task tools, collaboration tools and child identity must be measured on this installed desktop.
+Retain exact candidate, inputs, failures, repairs, reviewer scope and limitations in the delivery record outside product documentation. Human-reviewed publication does not activate policy or replace exact governance authorization. See the [baseline publication rule](baseline.md#confirmed-authoring-and-publication-decisions).
 
-**Step 3 acceptance gate:** prove real desktop starts, explicit binding, resume, compaction, separate worktree attach and supported tool denial after legitimate hook trust. Prove child identity/scope before accepting native subagent support. Until then deny covered spawning that would create an unidentifiable child; do not claim a nonblocking SubagentStart output prevented it.
+## Usage
 
-If the host cannot supply usable child/tool events, use the delegated simpler-integration fallback: a minimal foreground launcher adapter calling the same core and starting separate explicitly bound Codex sessions with preassigned packets. Keep native subagents disabled on that supported path. This is a concrete fallback to validate, **not an implemented substitute or permission to mark native-subagent acceptance passed**. If hook execution or tool coverage prevents the required guardrail altogether, return the failed evidence to the master, revise the supported entry point/estimate, and validate a minimal launcher gate before proceeding with enforcement claims. Do not silently replace automation with a reminder or build the full product launcher.
-
-Disabled/untrusted hooks, script failures and uncovered tools remain host bypass limits. Same-user direct filesystem access can bypass local ownership/read filters. The supported workflow is cooperative and bounded; neither scoped links nor these hooks prove adversarial isolation. [H1, R6-C03]
-
-## Step 3 implementation and acceptance packet
-
-Owned implementation paths are `.gitignore`, `.codex/hooks.json`, `src/agent_company/lifecycle/task_workspace.py`, `src/agent_company/adapters/codex.py`, `src/agent_company/resources/task_workspace/`, `tests/lifecycle/` and `tests/adapters/`, plus implementation/evidence updates here. Preserve LICENSE. Keep host-neutral state/provider boundaries; no credentials, personal absolute paths or private-vault prerequisite in product code.
-
-Implement in this order:
-
-1. Registration, validation, adoption, locking and transaction recovery with temporary repositories.
-2. Create/attach/resume/binding, ownership and scoped packets; then events/checkpoints.
-3. Foreground archive export/read-back verification, cleanup and restore with fake-provider failure injection.
-4. Thin adapter and exact bootstrap grammar; then legitimate trusted-host integration and real connector round trip on an authorized disposable fixture.
-5. Independent tests/code review and security review of the exact candidate. Repair and repeat affected checks; do not report author's tests as independent review.
-
-Required behavior checks:
-
-| ID | Scenario and observable acceptance |
-|---|---|
-| T01 | Two processes/worktrees create the same issue concurrently: one canonical payload, both valid views, no lost bytes; different issues never share content/ownership. |
-| T02 | Invalid IDs, foreign clone, moved main root, traversal, hard links, symlink swaps and unexpected directories: explicit refusal; outside sentinel files unchanged. |
-| T03 | Same-session resume, new same-issue join, rebind and adoption: progress survives, stale generation rejected, no false empty restart. |
-| T04 | Concurrent roadmap/note writes with identical old revision: one wins and one conflicts; no lost update. Wrong-owner updates fail. |
-| T05 | Failure at transaction staging/flush/rename/state/event boundaries: deterministic recover-or-stop, exactly-once required event, no false readiness. |
-| T06 | Concurrent event append, interrupted tail, interior corruption, size cap and synthetic secret markers: complete ordered lines, defined recovery, no forbidden payloads. |
-| T07 | Required source stale/missing, packet change, trial/reviewer scopes: affected readiness denied; prohibited notes absent from returned references and hook context. Record physical-access limits. |
-| T08 | Active/blocked/in-review/unknown participation, open PR or pending exec: cleanup refuses. Inactive time alone changes nothing. |
-| T09 | Archive save failure, uncertain duplicate, mismatched parent, normalization, missing part, wrong digest, changed provider version and changed local bytes: retention; no successful cleanup. |
-| T10 | Attach/update racing cleanup; path swap; crash before/after quarantine: lock coordination and tombstone allow correct recovery; never delete another issue or whole root. |
-| T11 | Cleaned issue restore, corrupt archive, unavailable provider and repeated restore: verified history/new generation or explicit stop; never empty success. |
-| T12 | Actual desktop startup from root/subdirectory, Task binding, missing/conflicting ID, resume/compact, worktree and parent/child mapping: record exact delivered events, outputs and side-effect sentinels. |
-| T13 | Covered Bash/patch/MCP/local function/nested code-mode paths; async exec/write_stdin; untrusted/modified/disabled hooks, wrong JSON, timeout, missing interpreter and thrown error: record which calls were blocked and which ran. Expected host failure-open cases are limitations, never passes for fail-closed claims. |
-| T14 | Exact bootstrap operations pass; shell metacharacters/wrappers/mixed commands/provider substitution fail. No broad permission approval. |
-| T15 | Real foreground Linear archive save + independent get, exact reconstruction and restore. Verify document parent/identity and multipart handling. A mock alone cannot pass provider integration. |
-| T16 | Tracked reusable assets remain trackable; `.task` and narrow OS metadata ignore patterns behave in root/nested examples. Product/config files remain eligible. |
-
-Retain candidate SHA, platform/binary version, trusted hook hash, supported-tool matrix, fixture inputs, exact allowed packets, results, failures, repairs and limitations. Independent Test Developer/Code Reviewer and Internal Security coverage are required for executable behavior; add Product Security for shipped framework behavior. Exposed services remain excluded; introducing them changes coverage. These labels refer to required assurance subjects, not fabricated Role execution receipts. [SPEC, LM, V8–V11]
-
-Human-reviewed PR into main remains mandatory. [PR #1](https://github.com/njalexander93/agent-company/pull/1) is published. The active main ruleset was inspected; classic branch-protection visibility remains restricted. Recheck actual candidate-specific gates at publication and before merge. This contract, local tests, provider writes and later merge do not activate policy or replace exact-candidate human acceptance. [R23; shared-vault `Assurance/AGENT-1 Publication Evidence.md`]
-
-## Evidence locators
-
-- **H1:** [Official OpenAI Hooks documentation](https://learn.chatgpt.com/docs/hooks), fetched 2026-10-03: trust/configuration, tool coverage, common/event inputs/outputs, MCP hooks and failure limitations.
-- **E1 (historical Step 2):** Shared-vault archive `Sources/Task Context/2026-10-03 - AGENT-1 Step 02 Evidence.zip`, SHA-256 `4ce113d1760d3d792e9d92e769eb572690c026be82ce82e127b961f821c6efbd`. Members `step-02.md`, `proxy.txt`, `protocol/` and `retention-manifest.json` retain the original contract handoff, failed proxy output and generated schemas. These are feasibility evidence for contract commit `7a9f8dc`, not final32 runtime acceptance. Archive retrieval and every retained member digest were verified after the temporary handoff was consumed.
-- **E2 (historical implementation/provider evidence):** Shared-vault note `Assurance/AGENT-1 Step 03 Implementation Evidence.md` and archive `Sources/Task Context/2026-10-03 - AGENT-1 Step 03 Evidence.zip`, SHA-256 `65a0ad53ce21a29eab36120f0bfb25ae4b5798152cc9f8a72524d6f932a58df3`. The source candidate is `119896b`; its retained real provider fixture predates the first frozen implementation. Neither is final32 provider acceptance.
-- **E3 (final32 local evidence):** Shared-vault note `Assurance/AGENT-1 Step 03 Rollover Evidence.md` and archive `Sources/Task Context/2026-10-03 - AGENT-1 Step 03 Rollover Evidence.zip`, SHA-256 `ac98dd347fbb36b546dc85c8ca3fe83387950d567a96f2ba54df630ceacafa16`. Members `candidate-hashes.json`, `independent-tests.txt`, `reviews.md` and `current-handoff.md` identify `32b5f2d5b637c9cd2edd18011306fa775b5c8ef8`, 54 passing tests and scoped review dispositions. The archive is retained and readable; consumed task handoffs are not required for retrieval.
-- **E4 (PR review corrections):** Shared-vault note `Assurance/AGENT-1 PR Review Corrections.md` retains the startup/compaction recovery, async completion and Finder metadata findings, exact repaired candidates, failed/passing regressions, independent review and integration results. It also records the documentation-only equivalence checks and the separate archive-fixture repair. These changed core/adapter bytes require fresh host validation; E3 and the earlier isolated host fixture do not establish it.
-- **L1/LM, SPEC, V0/V2/V6/V8–V11, RC-09:** [baseline source register](baseline.md), including retained Step 1 archive identities. Supporting sources remain in the shared vault; this document does not duplicate their authority.
-
-
-## Candidate usage and measured capabilities
-
-Complete the [Python 3.14.8 and Poetry setup](development.md), then run `make check`
+Complete the [Python and Poetry setup](development.md), then run `make check`
 from the repository root. Tests create temporary non-bare repositories and linked worktrees. They do
-not clean or adopt this active issue. Python's standard library is the only
+not clean or adopt an active task workspace. Python's standard library is the only
 runtime dependency. The first platform remains macOS/POSIX (`fcntl` and directory
 file descriptors); Windows ignore rules do not imply a Windows runtime port.
 
@@ -314,11 +235,7 @@ file descriptors); Windows ignore rules do not imply a Windows runtime port.
    This checks supplied evidence; it does not independently authenticate a human
    decision or provider response. Cancellation records an explicit separate outcome.
 
-For a bootstrap command, construct the exact argument vector below with
-`shlex.join`; pass it directly to Bash/unified exec with explicit `login:false` and `shell:"/bin/sh"`. Omitted login or another shell is denied.
-The adapter compares that canonical shell spelling and checks the embedded
-worktree, session and issue. Shell wrappers, redirection, additional commands,
-substitution and alternate interpreters are rejected.
+Construct the core CLI argument vector below with `shlex.join`. Pass it through the native host's documented bootstrap tool route in the [host guide](host-hooks.md). That guide owns shell/tool field requirements; the core request still binds the exact worktree, host, session and issue. Wrappers, redirection, substitutions and unrelated commands are not bootstrap exceptions.
 
 ```python
 repository_root = Path(absolute_repository_root)
@@ -328,7 +245,7 @@ argv = [python_path, absolute_core_path, "--request-json", json.dumps(request)]
 command = shlex.join(argv)
 ```
 
-The startup prompt accepts exactly one standalone `Task: ISSUE-ID` line. It
+The startup prompt accepts exactly one standalone `Task: <issue-id>` line, for example `Task: ISSUE-1`. It
 records only that identity. A packet/coordinator assignment is still explicit;
 no startup callback infers one from a chat title or grants coordinator ownership.
 One-time registration can include an explicit `startup` assignment with exactly
@@ -336,11 +253,7 @@ One-time registration can include an explicit `startup` assignment with exactly
 automatically creates the workspace and installs that preassigned packet. A new
 session joining an existing issue automatically attaches only when the coordinator
 already assigned it a packet. No hidden packet or coordinator role is inferred.
-Automatic setup is tested through direct adapter calls; desktop delivery remains
-an acceptance gate. The foreground-session fallback
-uses the same explicit bindings and packet checks; no full launcher is shipped.
-Native child scope is not accepted. Covered native spawning is denied by the
-adapter until an unambiguous child-to-tool identity is demonstrated.
+Native adapters use explicit bindings and packets; installed-host callback delivery must be verified separately. No full launcher is shipped. See the [host guide](host-hooks.md) for child/spawn restrictions; no unverified child identity may inherit readiness.
 
 The pre-readiness command allowlist is operation-specific. It includes the
 original `diagnose/register/bind/adopt/resume/restore` routes plus scoped `read` and
@@ -454,107 +367,13 @@ state. The manifest, archive locator/version, ownership, participant fencing and
 tombstone survive. Cleanup recovery resumes only the exact verified quarantine
 intent. It never recursively removes the task root.
 
-### Host acceptance status
+### Host limitations
 
-The adapter's direct subprocess tests exercise the actual JSON wire entry point
-and strict CLI gate. They do **not** establish that the desktop loaded or trusted
-these hooks. `.codex/hooks.json` is a synchronous project candidate; no global hook
-settings or hook-trust bypass is used. Review/trust is still required for the
-exact project candidate before a real desktop side-effect test.
+Follow the [host guide](host-hooks.md) for native configuration, event coverage and trust. Direct adapter subprocess tests do not prove that an installed host loaded the candidate or invoked its callbacks. Child identity, async association and provider observations must be demonstrated on the actual supported path; otherwise retain explicit denial or uncertainty.
 
-| Surface | Current evidence / limitation |
-| --- | --- |
-| Core and direct adapter | Temporary-repository tests cover sharing, fencing, source scopes, recovery, provider fixtures, retention and bootstrap denial. |
-| Bash/patch/MCP/local functions | Adapter emits documented explicit PreToolUse denial. Installed desktop callback delivery remains unverified. |
-| Native children/task tools | No verified child-to-tool identity; covered spawning is denied. This does not prove uncovered paths are stopped. |
-| Nested code-mode tools | No installed desktop trace. Concealed provider arguments do not receive archive exceptions. |
-| Async exec / `write_stdin` | Pending handles retain participation; unknown completion stays pending. Official docs say later stdin does not get a fresh pre-hook. |
-| Disabled/untrusted/modified hooks | Official docs say hooks are skipped; no fail-closed claim. |
-| Missing interpreter, timeout, malformed output, thrown process error | Host can fail open. Python cannot deny when it never runs. Direct adapter catches expected failures, which is a narrower fact. |
-| Stop/Interrupt/SessionEnd | Bounded optional observations; no inferred terminal state or participant retirement, provider work or deletion. |
+OS metadata ignores do not imply runtime support on those operating systems. The utility uses macOS/POSIX filesystem mechanisms; other operating systems require their own implementation and validation.
 
-T12/T13 require actual desktop evidence, not simulated event objects. T15 requires
-real save/get/reconstruction evidence in addition to provider fixtures. Independent
-security review and exact-candidate human acceptance remain separate gates.
-
-OS ignore references: GitHub's maintained [macOS](https://github.com/github/gitignore/blob/main/Global/macOS.gitignore),
-[Windows](https://github.com/github/gitignore/blob/main/Global/Windows.gitignore), and
-[Linux](https://github.com/github/gitignore/blob/main/Global/Linux.gitignore) templates.
-The selected subset excludes broad installer, shortcut, backup and hidden-file
-patterns. Tests confirm root/nested metadata ignores and product/config eligibility.
-
-
-### Historical implementation and provider evidence [E2]
-
-The first frozen candidate was `cea8b17b0dc53f6b68aec7090ded5e11dc766bca`.
-Independent test work added 11 tests and found two defects: interrupted recovery
-could overwrite changed bytes when the roadmap disappeared, and optional event
-loss was not counted at the size cap. Both were reproduced and repaired before
-the first commit. Later Standards, Spec and Internal Security reviews found
-checkpoint/provenance archive loss, rebind idempotency, permission diagnostics,
-automatic entry, completion validation, overly broad bootstrap, external-edit
-reconciliation, lifecycle observations, shell options and cleaned-archive reads.
-Author regression tests cover the repairs; final independent disposition belongs
-with the exact final candidate, not this initial report.
-
-A pre-first-commit development encoder used a real foreground Linear fixture in an isolated temporary repository, issue
-parent `AGENT-1` resolved by `linear_get_issue` to its immutable UUID, two numbered
-parts and a root index. Independent `linear_get_document` calls returned the same
-structured bytes despite Markdown heading normalization and removal of a trailing
-newline. Save responses were truncated and therefore were not used as read-back.
-The provider returned an issue identifier, not its UUID; the foreground bridge
-retained the explicit get-issue mapping. `updatedAt` differed between save and get,
-so the index used the independent get versions. Fresh reads before cleanup matched.
-Local cleanup and restore preserved the original roadmap SHA-256.
-
-Retained disposable test documents (not the live roadmap or issue completion):
-
-- [Part 1](https://linear.app/ne3ko93/document/disposable-test-evidence-agent-1-snapshot-e2724ca69d3c)
-- [Part 2](https://linear.app/ne3ko93/document/disposable-test-evidence-agent-1-snapshot-eed143b35bd5)
-- [Index](https://linear.app/ne3ko93/document/disposable-test-evidence-agent-1-snapshot-460c0d944e2c)
-
-That fixture deliberately used a 4 KiB raw chunk to exercise multipart save/get;
-it does not measure Linear's maximum document size. The production default is
-64 KiB and the document cap is local. No uncertain-save response or provider
-size rejection was induced on the real service; those retention cases use local
-fixtures and remain explicitly distinct from provider behavior.
-
-A read-only `codex app-server --stdio` hooks-list probe failed before initialization:
-`failed to initialize sqlite state runtime under .../.codex`. The sandbox did not
-grant global state writes. No hook trust was changed, no daemon started, and no
-host callback was observed. This failed probe establishes no desktop gate coverage.
-
-
-The subsequent frozen candidate `3d1f8fac3a7d44c0b3e635ed14a5f1935cdf4cb8`
-passed 35 tests independently in the Spec and Internal Security reviews. Those
-reviews then reproduced unfinished startup packet recovery, terminal reconciliation
-and unreachable recovery commands. Later repairs add direct adapter regressions
-for those cases. A Product Security review of `cea8b17` confirmed a 278-part export
-was refused by the old 258-observation verifier limit; the limit now matches the
-32 MiB export bound. Export idempotency retains a reference to immutable snapshot-addressed local
-export bytes, not repeated response bodies in state; transactions are size-checked
-before publication. These intermediate reviews are historical; final32's bounded
-local Product Security assessment is complete with no unresolved concrete finding.
-The final32 evidence records Standards, scoped Spec and Internal Security reviews
-alongside 54 passing independent tests. This local review completion does not
-establish live host/provider acceptance, human acceptance or runtime/Security
-certification. [E3]
-
-A second disposable provider upload using readable-history fragments was rejected
-by automatic approval review. It produced no provider document. The earlier links
-above therefore validate the earlier encoder and compatible reconstruction, not
-the final encoder's provider round trip. No retry or indirect upload was attempted.
-Approval for the exact stable synthetic export must precede that remaining test.
-
-
-The unchanged pending `119896b` unsegmented export was regenerated and parsed
-locally by final32 with exact snapshot/part/file digests. That compatibility check
-uses synthetic observations and is not a provider round trip. Final32's segmented
-archives add retained event files and receipt lineage; that live provider case
-remains separately unverified. [E3]
-
-
-### PR review recovery and metadata corrections
+### Recovery and completion semantics
 
 SessionStart, PreCompact and PostCompact retain precise readiness/error codes in
 bounded recovery context. They do not terminate the session merely because it
@@ -584,6 +403,4 @@ Verified issue cleanup validates the entire remaining tree before unlinking thos
 narrow metadata entries alongside the verified payload. It never recursively
 removes a metadata directory or follows a metadata link.
 
-These repairs change core/adapter bytes. The earlier final32 test count and host
-fixture identity do not establish acceptance of the new candidate. Actual host,
-provider, native-child and human acceptance remain open.
+Host, provider and native-child behavior requires exact-version validation. Local checks do not authenticate a human decision or prove runtime enforcement.
