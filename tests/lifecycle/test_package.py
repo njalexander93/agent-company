@@ -5,8 +5,8 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from agent_company.adapters import codex as hook
 
+from agent_company.adapters import codex as hook
 from tests.support import ROOT, Fixture
 
 pytestmark = pytest.mark.integration
