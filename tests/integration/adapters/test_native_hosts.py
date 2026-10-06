@@ -158,6 +158,72 @@ def test_native_admission_records_actual_tool_before_continuation(native: Native
     assert len(keys) == 3
 
 
+@pytest.mark.parametrize("native", ["claude"], indirect=True)
+@pytest.mark.parametrize("event_name", ["PreCompact", "PostCompact"])
+@pytest.mark.parametrize("acknowledged", [False, True])
+def test_claude_compaction_preserves_authority_and_pending_work(
+    native: NativeCase, event_name: str, acknowledged: bool
+) -> None:
+    """Keep compaction advisory and use supported events for context and tool gating.
+
+    Args:
+        native: Claude-specific disposable repository fixture.
+        event_name: Documented compaction event to observe.
+        acknowledged: Whether the assigned packet remains acknowledged at compaction.
+
+    Raises:
+        AssertionError: Compaction settles work, grants authority or claims injected context.
+    """
+    # Admit real work before optionally invalidating its participant's acknowledgment.
+    host, case = native
+    case.create()
+    case.ready()
+    assert_decision(host, dispatch(host, native_event(host, case, "PreToolUse")), True)
+    if not acknowledged:
+        case.call(
+            "scope",
+            expected_revision=case.state()["revision"],
+            target_participant=case.base["coordinator"],
+            packet=[],
+        )
+    before = case.state()["participants"][case.base["coordinator"]]
+    assert "actual-tool" in before["pending"]
+    assert bool(before["ack"]) is acknowledged
+    # Use compaction wire fields without a tool result or completion identifier.
+    event: JsonObject = {
+        "hook_event_name": event_name,
+        "session_id": "coordinator",
+        "cwd": str(case.root),
+        "trigger": "manual",
+    }
+    if event_name == "PreCompact":
+        event["custom_instructions"] = "Retain the task's outstanding work."
+    else:
+        event["compact_summary"] = "The task still has outstanding work."
+    assert dispatch(host, event) == {}
+    # An observation must preserve both pending evidence and existing authority.
+    state = case.state()
+    after = state["participants"][case.base["coordinator"]]
+    assert after == before
+    assert state["disposition"] == "active"
+    # SessionStart is the supported context route after compaction.
+    context = dispatch(host, {**event, "hook_event_name": "SessionStart", "source": "compact"})
+    output = context["hookSpecificOutput"]
+    assert output["hookEventName"] == "SessionStart"
+    assert "permissionDecision" not in output
+    if acknowledged:
+        assert "Task binding checked" in output["additionalContext"]
+    else:
+        assert "TASK_WORKSPACE_NOT_READY" in output["additionalContext"]
+        assert "acknowledge" in output["additionalContext"]
+    # Later tool admission must still enforce the actual acknowledgment state.
+    response = dispatch(host, native_event(host, case, "PreToolUse", tool_use_id="later-tool"))
+    assert_decision(host, response, acknowledged)
+    pending = case.state()["participants"][case.base["coordinator"]]["pending"]
+    assert pending["actual-tool"] == before["pending"]["actual-tool"]
+    assert ("later-tool" in pending) is acknowledged
+
+
 @pytest.mark.parametrize("binding", ["missing", "malformed", "other_host"])
 def test_native_denies_unusable_binding(native: NativeCase, binding: str) -> None:
     """Reject missing, corrupt or foreign-host authority before recording tool work.
