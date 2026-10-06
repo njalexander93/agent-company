@@ -60,6 +60,32 @@ The implementation's choices below are intentionally narrower than those host pr
    Wrappers, chaining, redirection, alternate interpreters, conflicting worktrees, and
    cross-host/session bootstrap requests receive no recovery exemption.
 
+### Codex bootstrap tool input
+
+The Codex adapter accepts only `Bash` or `exec_command` for bootstrap. Supply the canonical
+command from step 4 as `command` (Bash) or `cmd` (exec_command). Explicitly set `login: false`
+and `shell: "/bin/sh"`. Run without a TTY and omit the `tty` field entirely; even `tty: false`
+is outside the accepted field allowlist.
+
+For example, the `exec_command` tool input must have this shape, replacing the placeholder
+with the exact command from step 4:
+
+```json
+{
+  "cmd": "<canonical lifecycle command from step 4>",
+  "login": false,
+  "shell": "/bin/sh"
+}
+```
+
+The only accepted input fields are `command`, `cmd`, `login`, `shell`, `workdir`,
+`yield_time_ms`, `max_output_tokens`, `sandbox_permissions`, `justification`, and `prefix_rule`.
+Use one command field. These requirements come from the
+[Codex bootstrap parser](../src/agent_company/adapters/codex.py); they do not change host
+permission requirements. Claude and Cursor use their own native tool-input shapes.
+
+### Claude foreground Bash
+
 Claude's project settings set `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`. The
 [official environment reference](https://code.claude.com/docs/en/env-vars#variables) documents
 that this disables automatic backgrounding, the background tool parameter, and Ctrl+B.
@@ -79,8 +105,17 @@ These rules are implemented in `adapters/common.py`, `adapters/claude.py`, and `
 | Shell completion | Successful Bash result with string stdout/stderr, `interrupted: false`, and no async markers | Successful Shell result with integer `exitCode` and no async markers |
 | Ambiguous shell result/failure | Retain pending operation and report recovery | Same; booleans are not exit codes |
 | Child/provider/background tools | Deny unsupported tool names and observed child/background identities | Same; `subagentStart` also denies; remote sessions denied |
-| Session/compaction | Advisory context; no false readiness grant | Advisory context only |
+| Session start | Advisory recovery/readiness context; no readiness grant | Advisory context only |
+| Compaction | PreCompact/PostCompact observations only; no context or decision output | Advisory context only |
 | Stop/session end | Optional observation only | Optional observation only; no automatic follow-up |
+
+Claude discards `systemMessage` and `continue` from both compaction events.
+[PreCompact](https://code.claude.com/docs/en/hooks#precompact) supports blocking, but this
+adapter adds no compaction blocking policy.
+[PostCompact](https://code.claude.com/docs/en/hooks#postcompact) has no decision control.
+Handled compaction events return `{}`, including identity/observation failures. Recovery
+context uses `SessionStart` or normal pre-tool denials; compaction never grants readiness
+or settles pending tools. Existing malformed-input and process-failure exits still apply.
 
 The tool IDs used for pending work are supplied by the host. Generated request UUIDs are
 transaction identities, never substitutes for missing session or tool IDs. Exact completion retries

@@ -23,6 +23,9 @@ def failure(name: str, code: str) -> core.JSONObject:
     Returns:
         Claude's event-specific response without a permission grant.
     """
+    # Compaction diagnostics cannot deliver recovery context through these events.
+    if name in {"PreCompact", "PostCompact"}:
+        return {}
     message = common.recovery(code, HOST)
     if name == "PreToolUse":
         return {
@@ -64,15 +67,17 @@ def handle(event: core.JSONObject) -> core.JSONObject:
         if name == "UserPromptSubmit":
             return common.prompt(observed, HOST)
         # Lifecycle context preserves recovery access without granting tool readiness.
-        if name in {"SessionStart", "PostCompact"}:
+        if name == "SessionStart":
             return {
                 "hookSpecificOutput": {
                     "hookEventName": name,
                     "additionalContext": common.native_context(observed, HOST),
                 }
             }
-        if name == "PreCompact":
-            return {"systemMessage": common.native_context(observed, HOST)}
+        # Compaction is observation-only; recovery arrives at SessionStart or pre-tool denial.
+        if name in {"PreCompact", "PostCompact"}:
+            common.native_observe(observed, HOST)
+            return {}
         # Endings are observations, not settlement, acceptance, or cleanup triggers.
         if name in {"Stop", "SessionEnd"}:
             common.native_observe(observed, HOST)
