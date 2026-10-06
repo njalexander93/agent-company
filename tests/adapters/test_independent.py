@@ -7,9 +7,9 @@ import json
 import shlex
 
 import pytest
+
 from agent_company.adapters import codex as hook
 from agent_company.lifecycle import task_workspace as w
-
 from tests.support import Fixture
 
 pytestmark = pytest.mark.integration

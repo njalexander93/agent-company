@@ -12,8 +12,8 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from agent_company.lifecycle import task_workspace as w
 
+from agent_company.lifecycle import task_workspace as w
 from tests.support import ROOT, Fixture, call_process
 
 pytestmark = pytest.mark.integration
