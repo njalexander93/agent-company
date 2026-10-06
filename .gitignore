@@ -86,6 +86,8 @@ docs/_build/
 !.vscode/extensions.json
 .vscode-test/
 .history/
+# Per-user Claude settings; shared project hooks stay tracked.
+/.claude/settings.local.json
 .idea/
 *.sw?
 .spyderproject
