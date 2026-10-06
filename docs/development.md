@@ -27,6 +27,48 @@ reproduction; change and review the lock deliberately when updating dependencies
 after switching to this layout or creating a new worktree. Source edits then use
 the same package import without copying files into the environment.
 
+## Local commit checks
+
+Humans and agents use the same setup. After selecting the worktree interpreter,
+run these commands from the repository root:
+
+```sh
+poetry sync                       # also available as make install
+poetry run pre-commit install
+poetry run pre-commit run --all-files
+```
+
+The tracked configuration alone does not install a Git hook. Install it in each
+clone without `--overwrite` or changes to global `core.hooksPath`. Linked
+worktrees normally share the Git hooks directory, so installation affects those
+worktrees too; each still needs its own configured environment.
+See [pre-commit installation](https://pre-commit.com/#usage) and
+[Git worktree details](https://git-scm.com/docs/git-worktree#_details).
+
+The three hooks in [the local configuration](../.pre-commit-config.yaml) reuse
+the locked Poetry tools and [project rules](../pyproject.toml):
+
+- Ruff lint and format checks examine staged Python files under `src/` and
+  `tests/` at commit time. They do not fix, format or stage files.
+- Mypy runs `make type-check` on every commit, including deletion-only changes.
+  It receives no staged filenames and checks the whole configured `src/` scope.
+- Tests and coverage run through `make check` before review, outside automatic
+  pre-commit.
+
+For commit checks, the framework temporarily hides unstaged tracked edits and
+restores them afterward. The setup command `--all-files` checks matching files
+in the working tree; it is not a staged-only check.
+See [pre-commit staged-content behavior](https://pre-commit.com/#pre-commit).
+
+If a check fails, fix the reported problem, review the diff, stage only intended
+changes and retry. Use `make format` explicitly when formatting is needed.
+Run `make check` before requesting review even when the commit hooks pass.
+
+An intentional bypass such as `git commit --no-verify` is not acceptance. Record
+its reason and any failures in the review handoff, then complete `make check`.
+Local hooks provide feedback; they do not enforce merges or install required
+server checks. See [Git's pre-commit contract](https://git-scm.com/docs/githooks#_pre_commit).
+
 ## Source layout
 
 ```text
