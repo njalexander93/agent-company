@@ -6,7 +6,7 @@ requires-python = "==3.14.8"
 dependencies = []
 
 [tool.poetry]
-package-mode = false
+packages = [{ include = "agent_company", from = "src" }]
 requires-poetry = "==2.4.2"
 
 [tool.poetry.group.lint.dependencies]
@@ -18,6 +18,10 @@ mypy = "==2.3.1"
 [tool.poetry.group.test.dependencies]
 pytest = "==9.1.1"
 pytest-cov = "==7.1.0"
+
+[build-system]
+requires = ["poetry-core==2.4.1"]
+build-backend = "poetry.core.masonry.api"
 
 # Shared tooling policy follows Lemello's backend pyproject.toml.
 # Application dependencies and asynchronous test plugins are not used here.
@@ -39,8 +43,8 @@ indent-style = "space"
 
 [tool.mypy]
 python_version = "3.14"
-mypy_path = "."
-files = ["operations", "adapters"]
+mypy_path = "src"
+files = ["src"]
 explicit_package_bases = true
 exclude = ['(?x)( ^\./tests/ | ^tests/ )']
 namespace_packages = true
@@ -62,7 +66,7 @@ ignore_errors = true
 minversion = "9.0"
 addopts = "-v --strict-config --strict-markers --import-mode=importlib"
 testpaths = ["tests"]
-pythonpath = ["."]
+pythonpath = ["src", "."]
 markers = [
     "unit: mark a test as a unit test.",
     "integration: mark a test as an integration test.",
@@ -70,7 +74,7 @@ markers = [
 
 [tool.coverage.run]
 branch = true
-source = ["operations", "adapters"]
+source = ["agent_company"]
 omit = ["*/__init__.py"]
 
 [tool.coverage.report]

@@ -24,6 +24,7 @@ import uuid
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager
 from datetime import datetime, timezone
+from importlib import resources
 from pathlib import Path
 from typing import Any, NotRequired, TypedDict
 
@@ -2000,9 +2001,9 @@ def operate(store: Store, issue: Issue, request: JSONObject) -> JSONObject:
             state["adoption"] = {"inventory": manifest(files), "evidence": request["evidence"]}
             state["seq"], state["head"] = validate_history(files)
         else:
-            # Initialize a new roadmap from the repository template and start an empty event stream.
-            template = (
-                Path(__file__).resolve().parents[2] / "core/templates/task-workspace/roadmap.md"
+            # Initialize from the packaged roadmap and start an empty event stream.
+            template = resources.files("agent_company").joinpath(
+                "resources/task_workspace/roadmap.md"
             )
             files = {
                 "roadmap.md": template.read_text().replace("{{issue_id}}", issue.id).encode(),

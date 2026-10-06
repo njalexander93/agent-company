@@ -13,10 +13,9 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import NoReturn
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from operations.memory import task_workspace as core
+from agent_company.lifecycle import task_workspace as core
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 
 BOOTSTRAP_FIELDS = {
     "diagnose": set(),
@@ -51,7 +50,7 @@ COMMON_FIELDS = {
     "binding_generation",
     "expected_revision",
 }
-LIFECYCLE = ROOT / "operations/memory/task_workspace.py"
+LIFECYCLE = ROOT / "src/agent_company/lifecycle/task_workspace.py"
 PYTHON = str(ROOT / ".venv" / "bin" / "python")
 
 
