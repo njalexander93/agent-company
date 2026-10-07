@@ -1,0 +1,86 @@
+[project]
+name = "agent-company"
+version = "0.1.0"
+description = "Agent Company definitions and local task workspace tooling"
+requires-python = ">=3.12,<3.15"
+dependencies = []
+
+[tool.poetry]
+packages = [{ include = "agent_company", from = "src" }]
+requires-poetry = "==2.4.2"
+
+[tool.poetry.group.lint.dependencies]
+ruff = "==0.16.4"
+pre-commit = "4.6.2"
+
+[tool.poetry.group.types.dependencies]
+mypy = "==2.3.1"
+
+[tool.poetry.group.test.dependencies]
+pytest = "==9.1.1"
+pytest-cov = "==7.1.0"
+
+[build-system]
+requires = ["poetry-core==2.4.1"]
+build-backend = "poetry.core.masonry.api"
+
+# Shared tooling policy follows Lemello's backend pyproject.toml.
+# Application dependencies and asynchronous test plugins are not used here.
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+fix = true
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "D", "G"]
+ignore = ["D205", "D200"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.mypy]
+python_version = "3.12"
+mypy_path = "src"
+files = ["src"]
+explicit_package_bases = true
+exclude = ['(?x)( ^\./tests/ | ^tests/ )']
+namespace_packages = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+ignore_missing_imports = true
+strict_optional = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_return_any = true
+
+# Preserve Lemello's production-only mypy scope; tests still carry annotations.
+[[tool.mypy.overrides]]
+module = "tests.*"
+ignore_errors = true
+
+[tool.pytest.ini_options]
+minversion = "9.0"
+addopts = "-v --strict-config --strict-markers --import-mode=importlib"
+testpaths = ["tests"]
+pythonpath = ["src", "."]
+markers = [
+    "unit: mark a test as a unit test.",
+    "integration: mark a test as an integration test.",
+]
+
+[tool.coverage.run]
+branch = true
+relative_files = true
+context = "${AGENT_COMPANY_COVERAGE_CONTEXT-local}"
+source = ["agent_company"]
+omit = ["*/__init__.py"]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+skip_covered = true

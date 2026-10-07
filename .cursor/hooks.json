@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": "git -c alias.task-workspace-hook=!./src/agent_company/adapters/launch.sh task-workspace-hook cursor",
+        "timeout": 10
+      }
+    ],
+    "beforeSubmitPrompt": [
+      {
+        "command": "git -c alias.task-workspace-hook=!./src/agent_company/adapters/launch.sh task-workspace-hook cursor",
+        "timeout": 10,
+        "failClosed": true
+      }
+    ],
+    "preToolUse": [
+      {
+        "command": "git -c alias.task-workspace-hook=!./src/agent_company/adapters/launch.sh task-workspace-hook cursor",
+        "timeout": 10,
+        "failClosed": true
+      }
+    ],
+    "postToolUse": [
+      {
+        "command": "git -c alias.task-workspace-hook=!./src/agent_company/adapters/launch.sh task-workspace-hook cursor",
+        "timeout": 10
+      }
+    ],
+    "postToolUseFailure": [
+      {
+        "command": "git -c alias.task-workspace-hook=!./src/agent_company/adapters/launch.sh task-workspace-hook cursor",
+        "timeout": 10
+      }
+    ],
+    "preCompact": [
+      {
+        "command": "git -c alias.task-workspace-hook=!./src/agent_company/adapters/launch.sh task-workspace-hook cursor",
+        "timeout": 10
+      }
+    ],
+    "stop": [
+      {
+        "command": "git -c alias.task-workspace-hook=!./src/agent_company/adapters/launch.sh task-workspace-hook cursor",
+        "timeout": 10
+      }
+    ],
+    "sessionEnd": [
+      {
+        "command": "git -c alias.task-workspace-hook=!./src/agent_company/adapters/launch.sh task-workspace-hook cursor",
+        "timeout": 10
+      }
+    ],
+    "subagentStart": [
+      {
+        "command": "git -c alias.task-workspace-hook=!./src/agent_company/adapters/launch.sh task-workspace-hook cursor",
+        "timeout": 10,
+        "failClosed": true
+      }
+    ]
+  }
+}

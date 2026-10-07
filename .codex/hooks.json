@@ -1,0 +1,137 @@
+{
+  "description": "Local task workspace guardrail. Review exact hooks before trust; see docs/runtime/task-workspace.md for coverage limits.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "git -c alias.task-workspace-hook=!./src/agent_company/adapters/launch.sh task-workspace-hook codex",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "git -c alias.task-workspace-hook=!./src/agent_company/adapters/launch.sh task-workspace-hook codex",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "git -c alias.task-workspace-hook=!./src/agent_company/adapters/launch.sh task-workspace-hook codex",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "git -c alias.task-workspace-hook=!./src/agent_company/adapters/launch.sh task-workspace-hook codex",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "git -c alias.task-workspace-hook=!./src/agent_company/adapters/launch.sh task-workspace-hook codex",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "git -c alias.task-workspace-hook=!./src/agent_company/adapters/launch.sh task-workspace-hook codex",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "git -c alias.task-workspace-hook=!./src/agent_company/adapters/launch.sh task-workspace-hook codex",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "git -c alias.task-workspace-hook=!./src/agent_company/adapters/launch.sh task-workspace-hook codex",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "git -c alias.task-workspace-hook=!./src/agent_company/adapters/launch.sh task-workspace-hook codex",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "git -c alias.task-workspace-hook=!./src/agent_company/adapters/launch.sh task-workspace-hook codex",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Interrupt": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "git -c alias.task-workspace-hook=!./src/agent_company/adapters/launch.sh task-workspace-hook codex",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "git -c alias.task-workspace-hook=!./src/agent_company/adapters/launch.sh task-workspace-hook codex",
+            "timeout": 3
+          }
+        ]
+      }
+    ]
+  }
+}
