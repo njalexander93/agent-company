@@ -38,6 +38,7 @@ INVALID_HANDLE = P(-1).value
 READ = 0x80000000
 WRITE = 0x40000000
 READ_CONTROL = 0x00020000
+LIST_DIRECTORY = 0x00000001
 REPARSE = 0x400
 DIRECTORY = 0x10
 MOUNT_POINT = 0xA0000003
@@ -217,11 +218,17 @@ def information(handle: int, *, directory: bool, reparse: bool = False) -> FileI
 
 def open_handle(
     path: Path,
-    access: int = READ_CONTROL,
+    access: int = READ_CONTROL | LIST_DIRECTORY,
     disposition: int = 3,
     security: SecurityAttributes | None = None,
 ) -> int:
-    """Open the entry itself and prevent rename/deletion while this handle exists."""
+    """Open the entry itself with sharing-enforced access, retaining its path boundary.
+
+    READ_CONTROL alone is metadata access and does not participate in sharing
+    checks. Directory pins also need FILE_LIST_DIRECTORY (FILE_READ_DATA).
+    See MS-FSA 2.1.5.1.2.2: https://learn.microsoft.com/en-us/openspecs/
+    windows_protocols/ms-fsa/8c0e3f4f-0729-49f4-a14d-7f7add593819 .
+    """
     handle = CreateFile(
         extended(path),
         access,

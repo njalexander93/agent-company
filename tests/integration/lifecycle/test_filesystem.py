@@ -168,6 +168,11 @@ def test_windows_case_alias_and_pinned_ancestor(tmp_path: Path) -> None:
                 pinned.write("NOTE.md", b"bad")
             with pytest.raises(OSError):
                 (root / "pinned").rename(root / "moved")
+            with pinned.child("nested", True) as nested:
+                nested.write("inside.md", b"contained")
+                with pytest.raises(OSError):
+                    (root / "pinned").rename(root / "substituted")
+                assert nested.read("inside.md") == b"contained"
             assert pinned.read("note.md") == b"safe"
         (root / "pinned").rename(root / "moved")
         assert (root / "moved/note.md").read_bytes() == b"safe"

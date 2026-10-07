@@ -46,10 +46,9 @@ class IndependentContractTests(Fixture):
         self.create()
         foreign = Path(self.temp.name).resolve() / "foreign"
         self.git("clone", "-q", str(self.root), str(foreign))
-        (foreign / ".task").mkdir(mode=0o700)
-        (foreign / ".task/.repository.json").write_bytes(
-            (self.root / ".task/.repository.json").read_bytes()
-        )
+        # Keep fixture permissions valid so this reaches the repository identity check.
+        with w.Directory.absolute(foreign) as root, root.child(".task", True) as task:
+            task.write(".repository.json", (self.root / ".task/.repository.json").read_bytes())
         # Snapshot the canonical roadmap before attempting foreign resume.
         before = (self.root / ".task/TEST-1/roadmap.md").read_bytes()
         # Require repository mismatch and preservation of the canonical bytes.

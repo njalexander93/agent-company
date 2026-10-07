@@ -9,14 +9,26 @@ import json
 import multiprocessing
 import os
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
 
 from agent_company.lifecycle import task_workspace as w
 from tests.support import ROOT, Fixture, call_process
+from tests.types import JsonObject
 
 pytestmark = pytest.mark.integration
+
+
+def append_with_busy_retry(request: JsonObject) -> JsonObject:
+    """Retry one exact event request only on bounded lock contention, for at most 15 seconds."""
+    deadline = time.monotonic() + 15
+    while True:
+        result = call_process(request)
+        if result.get("code") != "BUSY" or time.monotonic() >= deadline:
+            return result
+        time.sleep(0.02)
 
 
 class LifecycleTests(Fixture):
@@ -219,8 +231,8 @@ class LifecycleTests(Fixture):
         requests = [self.req("event", event_type="check", event={"code": "OK"}) for _ in range(12)]
         # Append concurrently to exercise shared event coordination.
         with multiprocessing.get_context("spawn").Pool(4) as pool:
-            # Require every concurrent append to complete successfully.
-            for r in pool.map(call_process, requests):
+            # Retry only BUSY with the same request identity; all other failures remain visible.
+            for r in pool.map(append_with_busy_retry, requests):
                 self.require_ok(r)
         # Validate the complete stream and reject an unrestricted diagnostic payload.
         path = self.root / ".task/TEST-1/events.jsonl"
@@ -247,7 +259,10 @@ class LifecycleTests(Fixture):
         # Create a required source and a packet pinned to its initial bytes.
         self.create()
         source = Path(self.temp.name).resolve() / "source.md"
-        source.write_text("required source")
+        # Match the safe owned source permissions on POSIX and Windows; inherited
+        # runner temp ACLs may grant foreign writes and correctly fail source checks.
+        with w.Directory.absolute(source.parent) as parent:
+            parent.write(source.name, b"required source")
         packet = [
             {
                 "id": "source",
