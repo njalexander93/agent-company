@@ -101,6 +101,16 @@ error policy then applies; do not assume exit 2. Once the launcher starts, missi
 environment or Python process failure maps to exit 2. Cursor's configured
 `failClosed` gates still apply. See the native failure semantics above.
 
+When manually wrapping a hook in PowerShell `-Command`, append
+`exit $LASTEXITCODE` to preserve its native exit status. A bare wrapper converts
+native exit 2 to outer exit 1; those are different host outcomes. The platform
+tests check both cases separately. See Microsoft's
+[PowerShell process exit rules](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_powershell_exe#-command).
+This test wrapper does not change the project hook commands or prove an installed
+host's shell behavior. Claude's documented default uses Git Bash when installed;
+this checkout requires Git for Windows. See Claude's
+[command hook fields](https://code.claude.com/docs/en/hooks#command-hook-fields).
+
 A supervisor reads bounded input and executes the selected adapter in a child
 process. At the deadline it kills and waits for that worker before returning a
 failure response. A timed-out worker cannot continue lifecycle writes after the
