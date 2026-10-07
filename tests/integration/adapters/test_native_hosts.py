@@ -7,7 +7,6 @@ https://prod.cursor.com/docs/hooks. Inputs use each host's documented field name
 import copy
 import json
 import os
-import shlex
 import shutil
 import subprocess
 from collections.abc import Iterator
@@ -16,8 +15,9 @@ from typing import Literal, cast
 
 import pytest
 
-from agent_company.adapters import claude, codex, cursor
+from agent_company.adapters import claude, codex, common, cursor
 from agent_company.lifecycle import task_workspace as core
+from tests.platform_support import link_directory, shell_command, unlink_directory
 from tests.support import ROOT, Fixture
 from tests.types import JsonObject, JsonValue
 
@@ -267,8 +267,8 @@ def test_native_bootstrap_uses_exact_command_and_matching_identity(native: Nativ
     # Record the explicit native task assignment required by the recovery command gate.
     dispatch(host, native_event(host, case, "UserPromptSubmit", prompt="Task: TEST-1"))
     request = case.req("read", coordinator=None)
-    command = shlex.join(
-        [codex.PYTHON, str(codex.LIFECYCLE), "--request-json", json.dumps(request)]
+    command = common.bootstrap_command(
+        request, {"claude": claude.HOST, "cursor": cursor.HOST}[host]
     )
     event = native_event(
         host,
@@ -284,7 +284,7 @@ def test_native_bootstrap_uses_exact_command_and_matching_identity(native: Nativ
         command + "; true",
         command + " && true",
         command + " > output",
-        command.replace(shlex.quote(codex.PYTHON), "python3", 1),
+        command.replace(codex.PYTHON, "python3", 1),
     ):
         changed = {**event, "tool_input": {"command": altered}}
         assert_decision(host, dispatch(host, changed), False)
@@ -296,8 +296,8 @@ def test_native_bootstrap_uses_exact_command_and_matching_identity(native: Nativ
         ("issue_id", "OTHER-2"),
     ):
         changed_request = {**request, field: value}
-        changed_command = shlex.join(
-            [codex.PYTHON, str(codex.LIFECYCLE), "--request-json", json.dumps(changed_request)]
+        changed_command = common.bootstrap_command(
+            changed_request, {"claude": claude.HOST, "cursor": cursor.HOST}[host]
         )
         assert_decision(
             host, dispatch(host, {**event, "tool_input": {"command": changed_command}}), False
@@ -618,22 +618,28 @@ def test_native_process_rejects_invalid_or_oversized_json(host: NativeHost, payl
     assert "Traceback" not in result.stderr
 
 
-@pytest.mark.parametrize("host", ["claude", "cursor"])
+@pytest.mark.parametrize("host", ["claude", "cursor", "codex"])
+@pytest.mark.parametrize(
+    "shell", ["cmd.exe", "powershell.exe", "pwsh.exe"] if os.name == "nt" else ["/bin/sh"]
+)
 def test_native_config_quotes_checkout_and_reports_missing_environment(
-    host: NativeHost, tmp_path: Path
+    host: Literal["claude", "cursor", "codex"], shell: str, tmp_path: Path
 ) -> None:
     """Run actual checked-in hook commands under quoted roots and missing local interpreters.
 
     Args:
         host: Native configuration to inspect and execute.
+        shell: Actual host shell; Windows runners must provide PowerShell 5.1 and 7.
         tmp_path: Disposable directory for a nested Git checkout with shell metacharacters.
 
     Raises:
         AssertionError: Quoting fails, native denial is lost or missing setup fails silently.
     """
     # Select the checked-in pre-tool command without translating or rewriting its shell text.
-    if host == "claude":
-        config = json.loads((ROOT / ".claude/settings.json").read_text())
+    assert shutil.which(shell) is not None, f"Required native shell missing: {shell}"
+    if host in {"claude", "codex"}:
+        config_path = ".claude/settings.json" if host == "claude" else ".codex/hooks.json"
+        config = json.loads((ROOT / config_path).read_text())
         command = config["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
     # Cursor additionally requires fail-closed configuration at the permission boundary.
     else:
@@ -647,13 +653,11 @@ def test_native_config_quotes_checkout_and_reports_missing_environment(
     subprocess.run(["git", "init", "-q", str(root)], check=True)
     nested = root / "nested" / "directory"
     nested.mkdir(parents=True)
-    script = root / "src/agent_company/adapters" / (host + ".py")
-    script.parent.mkdir(parents=True)
-    shutil.copyfile(ROOT / "src/agent_company/adapters" / (host + ".py"), script)
-    (root / ".venv").symlink_to(ROOT / ".venv", target_is_directory=True)
+    shutil.copytree(ROOT / "src", root / "src", ignore=shutil.ignore_patterns("__pycache__"))
+    link_directory(root / ".venv", ROOT / ".venv")
     # Use missing registration to obtain a native denial without mutating a live task.
     event: JsonObject = {
-        "hook_event_name": "PreToolUse" if host == "claude" else "preToolUse",
+        "hook_event_name": "preToolUse" if host == "cursor" else "PreToolUse",
         "session_id": "isolated",
         "conversation_id": "isolated",
         "workspace_roots": [str(root)],
@@ -664,33 +668,57 @@ def test_native_config_quotes_checkout_and_reports_missing_environment(
     }
     environment = os.environ.copy()
     environment.pop("CURSOR_VERSION", None)
-    result = subprocess.run(
-        command,
-        shell=True,
-        executable="/bin/sh",
+    # Each configured command must locate its checkout from both root and nested host cwd.
+    for cwd in (root, nested):
+        result = subprocess.run(
+            shell_command(shell, command),
+            cwd=cwd,
+            input=json.dumps(event),
+            text=True,
+            capture_output=True,
+            env=environment,
+            timeout=10,
+        )
+        assert result.returncode == 0, result.stderr
+        assert_decision(
+            "cursor" if host == "cursor" else "claude", json.loads(result.stdout), False
+        )
+    extra = subprocess.run(
+        shell_command(shell, command + " extra"),
         cwd=nested,
-        input=json.dumps(event),
+        input="{}",
         text=True,
         capture_output=True,
         env=environment,
+        timeout=10,
     )
-    assert result.returncode == 0, result.stderr
-    assert_decision(host, json.loads(result.stdout), False)
+    assert extra.returncode == 2
     # Remove only the disposable interpreter link and require a useful blocking setup error.
-    (root / ".venv").unlink()
+    unlink_directory(root / ".venv")
     missing = subprocess.run(
-        command,
-        shell=True,
-        executable="/bin/sh",
+        shell_command(shell, command),
         cwd=nested,
         input=json.dumps(event),
         text=True,
         capture_output=True,
         env=environment,
+        timeout=10,
     )
     assert missing.returncode == 2
     assert "TASK_WORKSPACE_SETUP_REQUIRED" in missing.stderr
     assert "Poetry" in missing.stderr
+    if host == "claude":
+        imported = subprocess.run(
+            shell_command(shell, command),
+            cwd=nested,
+            input="not JSON",
+            text=True,
+            capture_output=True,
+            env={**environment, "CURSOR_VERSION": "fixture"},
+            timeout=10,
+        )
+        assert imported.returncode == 0
+        assert imported.stdout == imported.stderr == ""
 
 
 def test_claude_foreground_shell_retains_ambiguous_results_then_settles(

@@ -3,12 +3,12 @@
 Provider observations are fixtures: these tests make no provider/desktop acceptance claim.
 """
 
-import json
-import shlex
+import os
 
 import pytest
 
 from agent_company.adapters import codex as hook
+from agent_company.adapters import common
 from agent_company.lifecycle import task_workspace as w
 from tests.support import Fixture
 
@@ -66,16 +66,13 @@ class IndependentContractTests(Fixture):
         for changes in ({"session_id": "foreign"}, {"issue_id": "TEST-2"}, {"operation": "update"}):
             changed = {**request, **changes}
             event["tool_input"] = {
-                "cmd": shlex.join(
-                    [hook.PYTHON, str(hook.LIFECYCLE), "--request-json", json.dumps(changed)]
-                ),
+                "cmd": common.bootstrap_command(changed, "codex"),
                 "login": False,
+                "shell": "powershell.exe" if os.name == "nt" else "/bin/sh",
             }
             self.assertFalse(hook.bootstrap(event))
         # Construct shell variants from the same request for rejection checks.
-        command = shlex.join(
-            [hook.PYTHON, str(hook.LIFECYCLE), "--request-json", json.dumps(request)]
-        )
+        command = common.bootstrap_command(request, "codex")
         # Reject wrappers, pipelines, backgrounding and environment prefixes.
         for bad in (
             command + "\ntrue",
@@ -84,7 +81,11 @@ class IndependentContractTests(Fixture):
             command + " &",
             "X=1 " + command,
         ):
-            event["tool_input"] = {"cmd": bad, "login": False}
+            event["tool_input"] = {
+                "cmd": bad,
+                "login": False,
+                "shell": "powershell.exe" if os.name == "nt" else "/bin/sh",
+            }
             self.assertFalse(hook.bootstrap(event))
         # Verify permission callbacks never grant host permissions.
         self.assertEqual(hook.handle({"hook_event_name": "PermissionRequest"}), {})

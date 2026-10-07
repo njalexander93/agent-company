@@ -56,7 +56,7 @@ jobs:
               [sys.executable, '-m', 'pip', 'install', '--disable-pip-version-check', 'poetry==2.4.2'],
               ['poetry', 'env', 'use', sys.executable],
               ['poetry', 'sync'],
-              ['poetry', 'run', 'python', 'scripts/dev.py', 'check', '--evidence-dir', str(evidence)],
+              ['poetry', 'run', 'python', 'scripts/dev.py', 'check', '--evidence-dir', str(evidence), '--platform-coverage'],
           ]
           for index, command in enumerate(commands):
               result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -71,6 +71,55 @@ jobs:
         with:
           name: agent-1-${{ matrix.os }}-${{ github.sha }}
           path: ${{ runner.temp }}/agent-1-platform-evidence
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
+
+  combined-coverage:
+    needs: native
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.14.8'
+          architecture: x64
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: agent-1-*-${{ github.sha }}
+          path: ${{ runner.temp }}/agent-1-native-inputs
+      - name: Enforce combined native coverage
+        shell: python
+        env:
+          INPUTS: ${{ runner.temp }}/agent-1-native-inputs
+          OUTPUT: ${{ runner.temp }}/agent-1-combined-coverage
+        run: |
+          import os, pathlib, subprocess, sys
+          output = pathlib.Path(os.environ['OUTPUT'])
+          output.mkdir(parents=True, exist_ok=True)
+          commands = [
+              [sys.executable, '-m', 'pip', 'install', '--disable-pip-version-check', 'poetry==2.4.2'],
+              ['poetry', 'env', 'use', sys.executable],
+              ['poetry', 'sync'],
+              ['poetry', 'run', 'python', 'scripts/combine_coverage.py', os.environ['INPUTS'],
+               '--output-dir', str(output)],
+          ]
+          for index, command in enumerate(commands):
+              result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                      text=True, encoding='utf-8', errors='replace')
+              (output / f'command-{index}.log').write_text(result.stdout, encoding='utf-8')
+              print(result.stdout, flush=True)
+              if result.returncode:
+                  sys.exit(result.returncode)
+      - name: Retain combined gate evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: agent-1-combined-${{ github.sha }}
+          path: ${{ runner.temp }}/agent-1-combined-coverage
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7

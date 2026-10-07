@@ -117,7 +117,16 @@ def main() -> int:
         "task", nargs="?", default="help", choices=[*COMMANDS, "help", "clean", "check", "ci"]
     )
     parser.add_argument("--evidence-dir", type=Path)
+    parser.add_argument(
+        "--platform-coverage",
+        action="store_true",
+        help="Collect one OS for the combined gate; requires evidence output.",
+    )
     args = parser.parse_args()
+    if args.platform_coverage and (
+        not args.evidence_dir or args.task not in {"check", "test", "ci"}
+    ):
+        parser.error("--platform-coverage requires check/test/ci and --evidence-dir")
     if args.task == "help":
         print("Tasks: " + ", ".join([*COMMANDS, "clean", "check", "ci"]))
         return 0
@@ -134,6 +143,11 @@ def main() -> int:
     if evidence:
         evidence.mkdir(parents=True, exist_ok=True)
     environment = os.environ.copy()
+    if args.platform_coverage:
+        environment["AGENT_COMPANY_COVERAGE_CONTEXT"] = (
+            platform.system() + "-" + platform.python_version()
+        )
+        manifest["coverage_gate"] = "pending native Windows + Linux combination"
     if evidence:
         environment["COVERAGE_FILE"] = str(evidence / ".coverage")
     for task in tasks:
@@ -146,6 +160,8 @@ def main() -> int:
                         f"--cov-report=xml:{evidence / 'coverage.xml'}",
                     ]
                 )
+            if args.platform_coverage and task == "test":
+                command.append("--cov-fail-under=0")
             print(" ".join(command), flush=True)
             started = time.monotonic()
             try:

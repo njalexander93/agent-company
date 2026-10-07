@@ -75,6 +75,8 @@ markers = [
 
 [tool.coverage.run]
 branch = true
+relative_files = true
+context = "${AGENT_COMPANY_COVERAGE_CONTEXT-local}"
 source = ["agent_company"]
 omit = ["*/__init__.py"]
 

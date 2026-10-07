@@ -5,13 +5,14 @@ provider acceptance, human approval or adversarial runtime isolation.
 """
 
 import json
-import shlex
+import os
 import subprocess
 from pathlib import Path
 
 import pytest
 
 from agent_company.adapters import codex as hook
+from agent_company.adapters import common
 from tests.support import Fixture
 
 pytestmark = pytest.mark.integration
@@ -37,18 +38,25 @@ class LifecycleTests(Fixture):
         request = self.req(
             "diagnose", repo_id=None, issue_id=None, issue_uuid=None, coordinator=None
         )
-        command = shlex.join(
-            [hook.PYTHON, str(hook.LIFECYCLE), "--request-json", json.dumps(request)]
-        )
+        command = common.bootstrap_command(request, "codex")
         # Admit and execute the supported bootstrap command.
         event.update(
             hook_event_name="PreToolUse",
             tool_name="Bash",
             tool_use_id="test",
-            tool_input={"command": command, "login": False, "shell": "/bin/sh"},
+            tool_input={
+                "command": command,
+                "login": False,
+                "shell": "powershell.exe" if os.name == "nt" else "/bin/sh",
+            },
         )
         self.assertEqual(hook.handle(event), {})
-        result = subprocess.run(command, shell=True, cwd=self.root, capture_output=True, text=True)
+        shell = (
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command]
+            if os.name == "nt"
+            else ["/bin/sh", "-c", command]
+        )
+        result = subprocess.run(shell, cwd=self.root, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         # Reject command chaining, wrappers, redirection and alternate interpreters.
         for bad in [
@@ -56,7 +64,7 @@ class LifecycleTests(Fixture):
             "env " + command,
             command + " > output",
             command + " && true",
-            command.replace(shlex.quote(hook.PYTHON), "python3", 1),
+            command.replace(hook.PYTHON, "python3", 1),
         ]:
             event["tool_input"]["command"] = bad
             self.assertFalse(hook.bootstrap(event))

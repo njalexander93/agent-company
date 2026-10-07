@@ -1,12 +1,12 @@
 """Author regression tests for independently reported findings; not independent review."""
 
-import json
-import shlex
+import os
 from unittest import mock
 
 import pytest
 
 from agent_company.adapters import codex as hook
+from agent_company.adapters import common
 from agent_company.lifecycle import task_workspace as w
 from tests.support import Fixture
 from tests.types import JsonObject
@@ -67,32 +67,50 @@ class ReviewRegressions(Fixture):
         request = self.req(
             "diagnose", repo_id=None, issue_id=None, issue_uuid=None, coordinator=None
         )
-        command = shlex.join(
-            [hook.PYTHON, str(hook.LIFECYCLE), "--request-json", json.dumps(request)]
-        )
+        command = common.bootstrap_command(request, "codex")
         event.update(
             hook_event_name="PreToolUse",
             tool_name="Bash",
-            tool_input={"command": command, "login": False, "shell": "/bin/sh"},
+            tool_input={
+                "command": command,
+                "login": False,
+                "shell": "powershell.exe" if os.name == "nt" else "/bin/sh",
+            },
         )
         # Confirm the canonical bootstrap route is admitted.
         self.assertTrue(hook.bootstrap(event))
+        # Each tool owns one command field; ambiguity and the other tool's field must deny.
+        for tool, field, foreign_field in (
+            ("Bash", "command", "cmd"),
+            ("exec_command", "cmd", "command"),
+        ):
+            event["tool_name"] = tool
+            controls = {"login": False, "shell": "powershell.exe" if os.name == "nt" else "/bin/sh"}
+            event["tool_input"] = {**controls, field: command}
+            self.assertTrue(hook.bootstrap(event))
+            for bad in ({field: command, foreign_field: command}, {foreign_field: command}):
+                event["tool_input"] = {**controls, **bad}
+                self.assertFalse(hook.bootstrap(event))
+        event["tool_name"] = "Bash"
         # Reject missing login control, a different shell and an extra tool field.
         for change in [
             {"login": None},
             {"shell": "/tmp/unreviewed-shell"},
             {"environment": {"X": "value"}},
         ]:
-            event["tool_input"] = {"command": command, "login": False, "shell": "/bin/sh", **change}
+            event["tool_input"] = {
+                "command": command,
+                "login": False,
+                "shell": "powershell.exe" if os.name == "nt" else "/bin/sh",
+                **change,
+            }
             self.assertFalse(hook.bootstrap(event))
         # Reject an unknown lifecycle request field even with valid shell options.
         request["arbitrary"] = "field"
         event["tool_input"] = {
-            "command": shlex.join(
-                [hook.PYTHON, str(hook.LIFECYCLE), "--request-json", json.dumps(request)]
-            ),
+            "command": common.bootstrap_command(request, "codex"),
             "login": False,
-            "shell": "/bin/sh",
+            "shell": "powershell.exe" if os.name == "nt" else "/bin/sh",
         }
         self.assertFalse(hook.bootstrap(event))
 
@@ -220,21 +238,21 @@ class ReviewRegressions(Fixture):
             request = self.req(
                 operation, coordinator=None, expected_revision=self.state()["revision"], **fields
             )
-            command = shlex.join(
-                [hook.PYTHON, str(hook.LIFECYCLE), "--request-json", json.dumps(request)]
-            )
+            command = common.bootstrap_command(request, "codex")
             event = {
                 "hook_event_name": "PreToolUse",
                 "cwd": str(self.root),
                 "session_id": "coordinator",
                 "tool_name": "Bash",
                 "tool_use_id": operation,
-                "tool_input": {"command": command, "login": False, "shell": "/bin/sh"},
+                "tool_input": {
+                    "command": command,
+                    "login": False,
+                    "shell": "powershell.exe" if os.name == "nt" else "/bin/sh",
+                },
             }
             self.assertEqual(hook.handle(event), {})
             # Add an unsupported field and require the bootstrap exception to close.
             request["unknown_field"] = "no"
-            event["tool_input"]["command"] = shlex.join(
-                [hook.PYTHON, str(hook.LIFECYCLE), "--request-json", json.dumps(request)]
-            )
+            event["tool_input"]["command"] = common.bootstrap_command(request, "codex")
             self.assertFalse(hook.bootstrap(event))

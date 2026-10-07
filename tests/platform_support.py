@@ -56,3 +56,20 @@ def unlink_directory(link: Path) -> None:
         link.unlink()
     else:
         raise ValueError(f"Refusing to unlink an ordinary fixture directory: {link}")
+
+
+def shell_command(shell: str, command: str) -> list[str]:
+    """Execute an exact host command through its native shell without rewriting it.
+
+    Args:
+        shell: Explicit test shell, required to exist on the selected native runner.
+        command: Checked-in hook command or canonical bootstrap command.
+
+    Returns:
+        Subprocess argv for the selected real shell.
+    """
+    if shell in {"powershell.exe", "pwsh.exe"}:
+        return [shell, "-NoProfile", "-NonInteractive", "-Command", command]
+    if shell == "cmd.exe":
+        return [shell, "/d", "/c", command]
+    return [shell, "-c", command]
