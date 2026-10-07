@@ -6,6 +6,7 @@ checks report explicit skips elsewhere; a POSIX run never certifies that backend
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -212,3 +213,72 @@ def test_windows_noncanonical_roots_are_rejected(path: str) -> None:
     """Reject network/device/drive-relative/traversal roots before store access."""
     with pytest.raises(core.WorkspaceError, match="UNSAFE_PATH"):
         core.Directory.absolute(path)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Requires native Windows cross-process sharing")
+def test_windows_competing_process_cannot_redirect_held_ancestor(tmp_path: Path) -> None:
+    """Fence leaf/ancestor replacement and keep writes away from an outside junction target."""
+    root = tmp_path.resolve()
+    ancestor, outside = root / "ancestor", root / "outside"
+    with core.Directory.absolute(root) as directory:
+        with directory.child("ancestor", True) as parent, parent.child("leaf", True) as leaf:
+            leaf.write("note.md", b"original")
+        with directory.child("outside", True) as target, target.child("leaf", True) as target_leaf:
+            target_leaf.write("note.md", b"outside sentinel")
+        # Only the leaf handle remains: its own retained chain must pin the ancestor.
+        with core.Directory.absolute(ancestor / "leaf") as leaf:
+            identity = leaf.identity
+            script = """
+import json
+import sys
+import subprocess
+from pathlib import Path
+from tests.platform_support import link_directory
+ancestor, outside = map(Path, sys.argv[1:])
+result = {}
+for label, source in [('leaf', ancestor / 'leaf'), ('ancestor', ancestor)]:
+    moved = source.with_name(source.name + '-moved')
+    try:
+        source.rename(moved)
+    except OSError:
+        result[label + '_rename_denied'] = True
+    else:
+        result[label + '_rename_denied'] = False
+        if label == 'leaf':
+            moved.rename(source)
+try:
+    link_directory(ancestor, outside)
+except (OSError, subprocess.CalledProcessError):
+    result['junction_denied'] = True
+else:
+    result['junction_denied'] = False
+print(json.dumps(result))
+"""
+            observed = subprocess.run(
+                [sys.executable, "-c", script, str(ancestor), str(outside)],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            result = json.loads(observed.stdout)
+            # Attempt a normal write after the competing substitution, then check both trees.
+            try:
+                leaf.write("note.md", b"updated original")
+            except (core.WorkspaceError, OSError):
+                result["write_succeeded"] = False
+            else:
+                result["write_succeeded"] = True
+            assert (outside / "leaf/note.md").read_bytes() == b"outside sentinel"
+            assert sorted(p.name for p in (outside / "leaf").iterdir()) == ["note.md"]
+            assert result == {
+                "leaf_rename_denied": True,
+                "ancestor_rename_denied": True,
+                "junction_denied": True,
+                "write_succeeded": True,
+            }
+            with core.Directory.absolute(ancestor / "leaf") as reopened:
+                assert reopened.identity == identity
+                assert reopened.read("note.md") == b"updated original"
+        ancestor.rename(root / "released")
+        assert (root / "released/leaf/note.md").read_bytes() == b"updated original"
