@@ -58,17 +58,22 @@ def unlink_directory(link: Path) -> None:
         raise ValueError(f"Refusing to unlink an ordinary fixture directory: {link}")
 
 
-def shell_command(shell: str, command: str) -> list[str]:
-    """Execute an exact host command through its native shell without rewriting it.
+def shell_command(shell: str, command: str, *, preserve_native_exit: bool = False) -> list[str]:
+    """Execute a host command with optional test-only native exit propagation.
 
     Args:
         shell: Explicit test shell, required to exist on the selected native runner.
         command: Checked-in hook command or canonical bootstrap command.
+        preserve_native_exit: Append PowerShell exit propagation for launcher-status assertions.
 
     Returns:
         Subprocess argv for the selected real shell.
     """
     if shell in {"powershell.exe", "pwsh.exe"}:
+        # Bare -Command normalizes nonzero native codes to 1. This is harness-only.
+        # https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_powershell_exe
+        if preserve_native_exit:
+            command += "; exit $LASTEXITCODE"
         return [shell, "-NoProfile", "-NonInteractive", "-Command", command]
     if shell == "cmd.exe":
         return [shell, "/d", "/c", command]

@@ -684,7 +684,7 @@ def test_native_config_quotes_checkout_and_reports_missing_environment(
             "cursor" if host == "cursor" else "claude", json.loads(result.stdout), False
         )
     extra = subprocess.run(
-        shell_command(shell, command + " extra"),
+        shell_command(shell, command + " extra", preserve_native_exit=True),
         cwd=nested,
         input="{}",
         text=True,
@@ -693,10 +693,24 @@ def test_native_config_quotes_checkout_and_reports_missing_environment(
         timeout=10,
     )
     assert extra.returncode == 2
+    assert extra.stdout == ""
+    if shell in {"powershell.exe", "pwsh.exe"}:
+        # Document the unmodified -Command wrapper separately from actual launcher exit 2.
+        bare = subprocess.run(
+            shell_command(shell, command + " extra"),
+            cwd=nested,
+            input="{}",
+            text=True,
+            capture_output=True,
+            env=environment,
+            timeout=10,
+        )
+        assert bare.returncode == 1
+        assert bare.stdout == ""
     # Remove only the disposable interpreter link and require a useful blocking setup error.
     unlink_directory(root / ".venv")
     missing = subprocess.run(
-        shell_command(shell, command),
+        shell_command(shell, command, preserve_native_exit=True),
         cwd=nested,
         input=json.dumps(event),
         text=True,
@@ -707,6 +721,20 @@ def test_native_config_quotes_checkout_and_reports_missing_environment(
     assert missing.returncode == 2
     assert "TASK_WORKSPACE_SETUP_REQUIRED" in missing.stderr
     assert "Poetry" in missing.stderr
+    assert missing.stdout == ""
+    if shell in {"powershell.exe", "pwsh.exe"}:
+        bare_missing = subprocess.run(
+            shell_command(shell, command),
+            cwd=nested,
+            input=json.dumps(event),
+            text=True,
+            capture_output=True,
+            env=environment,
+            timeout=10,
+        )
+        assert bare_missing.returncode == 1
+        assert "TASK_WORKSPACE_SETUP_REQUIRED" in bare_missing.stderr
+        assert bare_missing.stdout == ""
     if host == "claude":
         imported = subprocess.run(
             shell_command(shell, command),
@@ -719,6 +747,20 @@ def test_native_config_quotes_checkout_and_reports_missing_environment(
         )
         assert imported.returncode == 0
         assert imported.stdout == imported.stderr == ""
+    # Failure before the launcher starts is Git/shell discovery failure, not hook exit 2.
+    (root / "src/agent_company/adapters/launch.sh").unlink()
+    absent_launcher = subprocess.run(
+        shell_command(shell, command, preserve_native_exit=True),
+        cwd=nested,
+        input=json.dumps(event),
+        text=True,
+        capture_output=True,
+        env=environment,
+        timeout=10,
+    )
+    assert absent_launcher.returncode in {127, 128}
+    assert "launch.sh" in absent_launcher.stderr
+    assert absent_launcher.stdout == ""
 
 
 def test_claude_foreground_shell_retains_ambiguous_results_then_settles(
