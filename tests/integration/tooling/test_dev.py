@@ -216,3 +216,56 @@ def test_command_stream_retains_partial_output_before_child_exit(tmp_path: Path)
     assert process.returncode == 0, error
     assert output == "partial done\n"
     assert log.read_text() == output
+
+
+def test_command_stream_normalizes_split_crlf_and_preserves_raw_log(tmp_path: Path) -> None:
+    """Keep split UTF-8 and CRLF intact without double Windows console translation.
+
+    Args:
+        tmp_path: Disposable raw log and synchronization signal.
+
+    Raises:
+        AssertionError: Forwarding corrupts Unicode, adds newlines or changes logged bytes.
+    """
+    log = tmp_path / "crlf.log"
+    release = tmp_path / "release"
+    newline_release = tmp_path / "newline-release"
+    child = (
+        "import sys,time; from pathlib import Path\n"
+        "sys.stdout.buffer.write(b'caf\\xc3'); sys.stdout.flush()\n"
+        f"while not Path({str(release)!r}).exists(): time.sleep(0.01)\n"
+        "sys.stdout.buffer.write(b'\\xa9\\r'); sys.stdout.flush()\n"
+        f"while not Path({str(newline_release)!r}).exists(): time.sleep(0.01)\n"
+        "sys.stdout.buffer.write(b'\\n'); sys.stdout.flush()\n"
+    )
+    # Explicit Windows newline translation reproduces the boundary on every native OS.
+    parent = (
+        "import os,sys; from pathlib import Path; from scripts.dev import run_command; "
+        "sys.stdout.reconfigure(encoding='utf-8', newline='\\r\\n'); "
+        f"raise SystemExit(run_command({[sys.executable, '-c', child]!r}, "
+        f"os.environ.copy(), Path({str(log)!r})))"
+    )
+    with subprocess.Popen(
+        [sys.executable, "-c", parent],
+        cwd=dev.ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    ) as process:
+        try:
+            deadline = time.monotonic() + 5
+            while (not log.exists() or not log.read_bytes()) and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert log.read_bytes() == b"caf\xc3"
+            assert process.poll() is None
+            release.touch()
+            deadline = time.monotonic() + 5
+            while log.read_bytes() != "café\r".encode("utf-8") and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert log.read_bytes() == "café\r".encode("utf-8")
+        finally:
+            release.touch()
+            newline_release.touch()
+        output, error = process.communicate(timeout=10)
+    assert process.returncode == 0, error
+    assert output == "café\r\n".encode("utf-8")
+    assert log.read_bytes() == output

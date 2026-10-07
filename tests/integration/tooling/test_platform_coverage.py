@@ -37,7 +37,7 @@ def test_combination_normalizes_windows_paths_and_preserves_contexts(tmp_path: P
     )
     coverage.combine(files, strict=True, keep=True)
     data = coverage.get_data()
-    assert data.measured_files() == {"src/agent_company/lifecycle/task_workspace.py"}
+    assert data.measured_files() == {str(Path("src/agent_company/lifecycle/task_workspace.py"))}
     assert data.measured_contexts() == {"synthetic-posix", "synthetic-windows"}
     assert all(Path(path).exists() for path in files)
 

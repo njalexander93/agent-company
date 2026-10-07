@@ -3,6 +3,7 @@
 import argparse
 import codecs
 import hashlib
+import io
 import json
 import os
 import platform
@@ -159,7 +160,11 @@ def run_command(command: list[str], environment: dict[str, str], log: Path | Non
             ) as process,
         ):
             assert process.stdout is not None
-            decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+            # Normalize child newlines before the console applies its native translation.
+            # The incremental decoder also handles CRLF split across pipe reads.
+            decoder = io.IncrementalNewlineDecoder(
+                codecs.getincrementaldecoder("utf-8")(errors="replace"), translate=True
+            )
             while chunk := os.read(process.stdout.fileno(), 65536):
                 stream.write(chunk)
                 stream.flush()
