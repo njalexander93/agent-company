@@ -61,9 +61,9 @@ def run(
         core.require(len(raw) <= INPUT_LIMIT, "SIZE_LIMIT")
         event = core.strict_json(raw)
         core.require(isinstance(event, dict), "INVALID_REQUEST")
-        name = event.get("hook_event_name", "")
-        core.require(isinstance(name, str), "INVALID_REQUEST")
-        name = core.token(name)
+        event_name = event.get("hook_event_name", "")
+        core.require(isinstance(event_name, str), "INVALID_REQUEST")
+        name = core.token(event_name)
         # File entry points use __main__; the source filename still identifies the host.
         module = handler.__module__.rsplit(".", 1)[-1]
         if module == "__main__":
