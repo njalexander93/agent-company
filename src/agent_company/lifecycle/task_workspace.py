@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Local, cooperative issue workspaces. No network calls or runtime authority.
 
-All store access uses no-follow directory descriptors. A persistent flock fences
+All store access uses the platform no-follow filesystem boundary. A persistent OS lock fences
 supported writers; a durable roll-forward intent couples payload, events and state.
 See docs/runtime/task-workspace.md for the public request contract and
 docs/runtime/task-workspace-usage.md for host limitations.
@@ -12,22 +12,21 @@ from __future__ import annotations
 import argparse
 import base64
 import copy
-import fcntl
 import hashlib
 import json
-import os
 import re
-import stat
 import subprocess
 import sys
-import time
 import uuid
-from collections.abc import Callable, Iterator
-from contextlib import ExitStack, contextmanager
+from collections.abc import Callable
+from contextlib import ExitStack
 from datetime import datetime, timezone
 from importlib import resources
 from pathlib import Path
 from typing import Any, NotRequired, TypedDict
+
+from agent_company.lifecycle._errors import WorkspaceError, require
+from agent_company.lifecycle._filesystem import Directory as NativeDirectory
 
 MAX_REQUEST = 96 * 1024 * 1024
 MAX_FILE = 16 * 1024 * 1024
@@ -160,41 +159,6 @@ class ExportDocuments(TypedDict):
 
     snapshot: str
     parts: list[DocumentRequest]
-
-
-class WorkspaceError(Exception):
-    """Represent a bounded workspace failure without embedding task content."""
-
-    def __init__(
-        self, code: str, action: str = "Inspect the assigned workspace; preserve its bytes."
-    ) -> None:
-        """Store the public diagnostic code and safe recovery instruction.
-
-        Args:
-            code: Public bounded diagnostic code.
-            action: Safe recovery instruction to attach to the diagnostic.
-        """
-        # Initialize the bounded public diagnostic and recovery instruction.
-        self.code, self.action = code, action
-        super().__init__(code)
-
-
-def require(condition: object, code: str = "INVALID_REQUEST", action: str | None = None) -> None:
-    """Stop an operation when its required boundary condition is false.
-
-    Args:
-        condition: Required predicate for continuing the operation.
-        code: Public bounded diagnostic code.
-        action: Safe recovery instruction to attach to the diagnostic.
-
-    Raises:
-        WorkspaceError: If the condition does not hold.
-    """
-    # Reject the failed precondition with its public diagnostic.
-    if not condition:
-        raise WorkspaceError(
-            code, action or "Inspect the request and retry with explicit identities."
-        )
 
 
 def canonical(value: object) -> bytes:
@@ -386,289 +350,16 @@ def strict_json(data: bytes | str) -> Any:
         raise WorkspaceError("INVALID_REQUEST") from None
 
 
-class Directory:
-    """Hold an owned no-follow directory descriptor for bounded filesystem operations."""
-
-    def __init__(self, fd: int, private: bool = False) -> None:
-        """Validate and retain an opened directory descriptor and its identity.
-
-        Args:
-            fd: Already opened directory file descriptor; owned by this handle.
-            private: Whether to reject group/world-writable directory permissions.
-
-        Raises:
-            WorkspaceError: If ownership, type or required private permissions are unsafe.
-        """
-        self.fd = fd
-        s = os.fstat(fd)
-        require(stat.S_ISDIR(s.st_mode) and s.st_uid == os.getuid(), "UNSAFE_PATH")
-        require(not private or not s.st_mode & 0o022, "UNSAFE_PATH")
-        self.identity = [s.st_dev, s.st_ino]
-
-    @classmethod
-    def absolute(cls, path: str | Path) -> Directory:
-        """Open each absolute-path component without following symlinks.
-
-        Args:
-            path: Path to validate or access within the stated filesystem boundary.
-
-        Returns:
-            A validated Directory whose descriptor the caller must close.
-
-        Raises:
-            WorkspaceError: If the path or directory identity is unsafe.
-            OSError: If any component cannot be opened.
-        """
-        # Reject relative traversal before opening the absolute directory chain.
-        path = Path(path)
-        require(path.is_absolute() and ".." not in path.parts, "UNSAFE_PATH")
-        fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            # Open each component without following links; retain only the current descriptor.
-            for name in path.parts[1:]:
-                nxt = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
-                os.close(fd)
-                fd = nxt
-            return cls(fd)
-        except BaseException:
-            os.close(fd)
-            raise
-
-    def close(self) -> None:
-        """Release this directory descriptor.
-
-        Raises:
-            OSError: If the descriptor cannot be closed.
-        """
-        os.close(self.fd)
-
-    def __enter__(self) -> Directory:
-        """Expose the directory to a context-managed operation.
-
-        Returns:
-            This directory handle.
-        """
-        return self
-
-    def __exit__(self, *args: object) -> None:
-        """Close the descriptor when the directory context ends.
-
-        Args:
-            args: Context-manager exception triple, ignored during descriptor cleanup.
-
-        Raises:
-            OSError: If descriptor cleanup fails.
-        """
-        self.close()
-
-    def exists(self, name: str) -> bool:
-        """Check entry presence without following a final symlink.
-
-        Args:
-            name: Direct entry name relative to the opened directory.
-
-        Returns:
-            Whether a directory entry exists.
-
-        Raises:
-            OSError: If inspection fails for a reason other than absence.
-        """
-        try:
-            os.stat(name, dir_fd=self.fd, follow_symlinks=False)
-            return True
-        except FileNotFoundError:
-            return False
-
-    def child(self, name: str, create: bool = False, private: bool = True) -> Directory:
-        """Open or create one direct child directory without following links.
-
-        Args:
-            name: Direct entry name relative to the opened directory.
-            create: Whether an absent child directory may be created.
-            private: Whether to reject group/world-writable directory permissions.
-
-        Returns:
-            A validated child Directory owned by the caller.
-
-        Raises:
-            WorkspaceError: If the child name or directory is unsafe.
-            OSError: If creation or opening fails.
-        """
-        require("/" not in name and name not in {"", ".", ".."}, "UNSAFE_PATH")
-        # Create a private child if absent; validate existing children through the same open below.
-        if create:
-            try:
-                os.mkdir(name, 0o700, dir_fd=self.fd)
-                os.fsync(self.fd)
-            except FileExistsError:
-                pass
-        return Directory(
-            os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=self.fd), private
-        )
-
-    def read(self, name: str, limit: int = MAX_REQUEST) -> bytes:
-        """Read a bounded owned regular file without following links.
-
-        Args:
-            name: Direct entry name relative to the opened directory.
-            limit: Maximum allowed file or decoded byte count.
-
-        Returns:
-            The complete validated file bytes.
-
-        Raises:
-            WorkspaceError: If type, ownership, link count, permissions or size are unsafe.
-            OSError: If the entry cannot be opened or read.
-        """
-        # Open without following links or blocking on a substituted special file.
-        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=self.fd)
-        try:
-            s = os.fstat(fd)
-            require(
-                stat.S_ISREG(s.st_mode)
-                and s.st_nlink == 1
-                and s.st_uid == os.getuid()
-                and not s.st_mode & 0o022,
-                "UNSAFE_PATH",
-            )
-            require(s.st_size <= limit, "SIZE_LIMIT")
-            # Read one extra byte to catch growth beyond the size checked above.
-            with os.fdopen(fd, "rb", closefd=False) as stream:
-                result = stream.read(limit + 1)
-            require(len(result) <= limit, "SIZE_LIMIT")
-            return result
-        finally:
-            os.close(fd)
+class Directory(NativeDirectory):
+    """Add canonical lifecycle JSON to the platform filesystem boundary."""
 
     def json(self, name: str) -> Any:
-        """Read a safe file and decode strict JSON from its bytes.
-
-        Args:
-            name: Direct entry name relative to the opened directory.
-
-        Returns:
-            The decoded JSON value.
-
-        Raises:
-            WorkspaceError: If the file or JSON is invalid.
-            OSError: If the file cannot be read.
-        """
+        """Read a bounded safe file and decode strict JSON."""
         return strict_json(self.read(name))
 
-    def write(self, name: str, data: bytes) -> None:
-        """Publish bytes through a flushed private temporary file and atomic replacement.
-
-        Args:
-            name: Direct entry name relative to the opened directory.
-            data: Exact input bytes to inspect or transform.
-
-        Raises:
-            WorkspaceError: If the entry name or existing destination is unsafe.
-            OSError: If publication, flushing or cleanup fails.
-        """
-        require("/" not in name and name not in {"", ".", ".."}, "UNSAFE_PATH")
-        # Validate any existing entry before reusing or replacing it.
-        if self.exists(name):
-            self.read(name)  # Refuse links/special files before replacement.
-        # Stage bytes in an exclusively created private file before replacing the destination.
-        temp = ".write-" + uuid.uuid4().hex
-        fd = os.open(
-            temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=self.fd
-        )
-        try:
-            with os.fdopen(fd, "wb", closefd=False) as stream:
-                stream.write(data)
-                stream.flush()
-                os.fsync(fd)
-            # Publish only flushed bytes, then make the directory update durable.
-            os.replace(temp, name, src_dir_fd=self.fd, dst_dir_fd=self.fd)
-            os.fsync(self.fd)
-        finally:
-            os.close(fd)
-            # Remove any unpublished temporary file after closing its descriptor.
-            if self.exists(temp):
-                os.unlink(temp, dir_fd=self.fd)
-
     def put(self, name: str, value: object) -> None:
-        """Publish a value as canonical JSON through the safe file writer.
-
-        Args:
-            name: Direct entry name relative to the opened directory.
-            value: Value to validate or encode under this helper's contract.
-
-        Raises:
-            WorkspaceError: If destination validation fails.
-            OSError: If publication fails.
-        """
+        """Publish canonical JSON through the platform atomic file writer."""
         self.write(name, canonical(value))
-
-    def unlink(self, name: str) -> None:
-        """Remove a direct entry and flush the containing directory.
-
-        Args:
-            name: Direct entry name relative to the opened directory.
-
-        Raises:
-            OSError: If removal or directory flushing fails.
-        """
-        os.unlink(name, dir_fd=self.fd)
-        os.fsync(self.fd)
-
-    @contextmanager
-    def lock(self, name: str = "lock", timeout: float = 1.0) -> Iterator[None]:
-        """Hold a bounded exclusive flock on a persistent safe lock file.
-
-        Args:
-            name: Direct entry name relative to the opened directory.
-            timeout: Maximum seconds to wait for lock acquisition.
-
-        Returns:
-            A context manager that yields while the issue lock is held.
-
-        Raises:
-            WorkspaceError: If the lock is unsafe or its deadline expires.
-            OSError: If lock-file access fails.
-        """
-        # Set the monotonic deadline for bounded lock acquisition.
-        end = time.monotonic() + timeout
-        # Retry until success or the bounded deadline is reached.
-        while True:
-            try:
-                fd = os.open(
-                    name, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=self.fd
-                )
-                os.fsync(self.fd)
-                break
-            except FileExistsError:
-                try:
-                    fd = os.open(name, os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=self.fd)
-                    break
-                except FileNotFoundError:
-                    require(time.monotonic() < end, "BUSY")
-        try:
-            s = os.fstat(fd)
-            require(
-                stat.S_ISREG(s.st_mode)
-                and s.st_nlink == 1
-                and s.st_uid == os.getuid()
-                and not s.st_mode & 0o022,
-                "UNSAFE_PATH",
-            )
-            # Set the monotonic deadline for bounded lock acquisition.
-            end = time.monotonic() + timeout
-            # Retry until success or the bounded deadline is reached.
-            while True:
-                try:
-                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    break
-                except BlockingIOError:
-                    require(
-                        time.monotonic() < end, "BUSY", "Retry after the current writer finishes."
-                    )
-                    time.sleep(0.01)
-            yield
-        finally:
-            os.close(fd)
 
 
 def git(path: str | Path, *args: str) -> str:
@@ -686,7 +377,12 @@ def git(path: str | Path, *args: str) -> str:
     """
     # Query Git with separate arguments and a bounded runtime.
     result = subprocess.run(
-        ["git", "-C", str(path), *args], capture_output=True, text=True, timeout=2, check=False
+        ["git", "-C", str(path), *args],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=2,
+        check=False,
     )
     require(result.returncode == 0, "REPOSITORY_MISMATCH")
     return result.stdout.strip()
@@ -711,7 +407,7 @@ def repository(path: str | Path) -> tuple[Path, Path, list[Path]]:
     common = Path(git(root, "rev-parse", "--path-format=absolute", "--git-common-dir"))
     trees = [
         Path(line[9:])
-        for line in git(root, "worktree", "list", "--porcelain").splitlines()
+        for line in git(root, "worktree", "list", "--porcelain", "-z").split("\0")
         if line.startswith("worktree ")
     ]
     require(root in trees, "REPOSITORY_MISMATCH")
@@ -933,19 +629,7 @@ class Store:
         if str(self.root) == self.registration["main"]:
             return
         target = str(Path(self.registration["main"]) / ".task" / issue)
-        # Validate any existing entry before reusing or replacing it.
-        if not self.local.exists(issue):
-            try:
-                os.symlink(target, issue, dir_fd=self.local.fd)
-                os.fsync(self.local.fd)
-            except FileExistsError:
-                pass
-        # Require the worktree view to be exactly the intended symlink, then validate its target.
-        s = os.stat(issue, dir_fd=self.local.fd, follow_symlinks=False)
-        require(
-            stat.S_ISLNK(s.st_mode) and os.readlink(issue, dir_fd=self.local.fd) == target,
-            "UNSAFE_PATH",
-        )
+        self.local.issue_view(issue, target)
         with self.task.child(issue):
             pass
 
@@ -993,7 +677,7 @@ def inventory(directory: Directory, require_roadmap: bool = True) -> PayloadFile
     """
     result = {}
     # Inspect only direct issue entries under the opened directory descriptor.
-    for name in os.listdir(directory.fd):
+    for name in directory.names():
         # Validate narrow metadata entries before excluding them from task content.
         if os_metadata(name):
             directory.read(name, MAX_FILE)
@@ -1002,7 +686,7 @@ def inventory(directory: Directory, require_roadmap: bool = True) -> PayloadFile
         if name == "context":
             with directory.child(name, private=False) as context:
                 # Validate each direct context entry without descending into arbitrary directories.
-                for note in os.listdir(context.fd):
+                for note in context.names():
                     # Validate narrow metadata entries before excluding them from task content.
                     if os_metadata(note):
                         context.read(note, MAX_FILE)
@@ -1204,7 +888,7 @@ class Issue:
             payload.child("context", True, private=False).close()
             require(manifest(inventory(payload)) == state["files"], "RECOVERY_REQUIRED")
             state["directory_identity"] = payload.identity
-            os.fsync(payload.fd)
+            payload.flush()
         # Publish state only after payload durability; remove the intent last so recovery can retry.
         fault("payload-flush")
         self.control.put("state.json", state)
@@ -1843,15 +1527,13 @@ def finish_cleanup(issue: Issue) -> None:
                 and manifest(inventory(payload)) == intent["files"],
                 "UNTRACKED_CHANGE",
             )
-        os.rename(issue.id, name, src_dir_fd=task.fd, dst_dir_fd=control.fd)
-        os.fsync(task.fd)
-        os.fsync(control.fd)
+        task.rename_directory(issue.id, control, name)
         fault("quarantine")
     # Resume deletion only inside the recorded quarantine with the original directory identity.
     if control.exists(name):
         with control.child(name, private=False) as payload:
             require(payload.identity == intent["directory_identity"], "UNSAFE_PATH")
-            names = os.listdir(payload.fd)
+            names = payload.names()
             require(
                 all(
                     n in {"roadmap.md", "events.jsonl", "context"}
@@ -1868,7 +1550,7 @@ def finish_cleanup(issue: Issue) -> None:
                     with payload.child("context", private=False) as context:
                         # Validate each direct context entry without
                         # descending into arbitrary directories.
-                        for note in os.listdir(context.fd):
+                        for note in context.names():
                             remaining["context/" + note] = context.read(note, MAX_FILE)
                 else:
                     remaining[entry] = payload.read(entry, MAX_FILE)
@@ -1890,10 +1572,9 @@ def finish_cleanup(issue: Issue) -> None:
                 fault("delete:" + path)
             # Remove the context directory only after all validated entries have been unlinked.
             if payload.exists("context"):
-                os.rmdir("context", dir_fd=payload.fd)
-            os.fsync(payload.fd)
-        os.rmdir(name, dir_fd=control.fd)
-        os.fsync(control.fd)
+                payload.rmdir("context")
+            payload.flush()
+        control.rmdir(name)
     # Publish the cleaned tombstone after durable removal of the quarantined payload.
     state = intent["state"]
     state["storage"] = "cleaned"
@@ -1906,7 +1587,7 @@ def finish_cleanup(issue: Issue) -> None:
     state.pop("outcome_history", None)
     state.pop("provenance", None)
     # Discard local export copies after the independent provider archive has been verified.
-    for name in os.listdir(control.fd):
+    for name in control.names():
         if re.fullmatch(r"export-[0-9a-f]{64}\.json", name):
             control.read(name)  # Refuse substituted links/special files before pruning.
             control.unlink(name)
