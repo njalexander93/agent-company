@@ -44,7 +44,15 @@ def test_combination_normalizes_windows_paths_and_preserves_contexts(tmp_path: P
 
 @pytest.mark.parametrize(
     "defect",
-    ["missing-platform", "wrong-sha", "failed-tests", "dirty", "changed-source", "changed-commit"],
+    [
+        "missing-platform",
+        "wrong-sha",
+        "failed-tests",
+        "dirty",
+        "changed-source",
+        "changed-commit",
+        "different-bytes",
+    ],
 )
 def test_native_evidence_rejects_incomplete_or_mismatched_inputs(
     tmp_path: Path, defect: str
@@ -76,7 +84,6 @@ def test_native_evidence_rejects_incomplete_or_mismatched_inputs(
                 {"task": "test", "exit_code": 0},
             ],
         }
-        host = {"sha": "candidate", "system": system}
         if system == "Windows":
             if defect == "wrong-sha":
                 manifest["sha"] = "another-candidate"
@@ -86,10 +93,125 @@ def test_native_evidence_rejects_incomplete_or_mismatched_inputs(
                 manifest["end_tracked_digest"] = "after"
             elif defect == "changed-commit":
                 manifest["end_sha"] = "another-candidate"
+            elif defect == "different-bytes":
+                manifest["tracked_digest"] = manifest["end_tracked_digest"] = "other"
             elif defect == "dirty":
                 manifest["status"] = " M source.py"
         (root / "manifest.json").write_text(json.dumps(manifest))
-        (root / "host.json").write_text(json.dumps(host))
         (root / ".coverage").write_bytes(b"not used: provenance must fail first")
     with pytest.raises(ValueError):
-        verified_inputs(tmp_path, "candidate")
+        verified_inputs(tmp_path, "candidate", "before")
+
+
+@pytest.mark.parametrize("mutation", ["none", "dirty-policy", "dirty-source", "during-report"])
+def test_collector_to_combiner_fences_checkout_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
+) -> None:
+    """Exercise collection and real reporting in a disposable Git checkout.
+
+    Args:
+        tmp_path: Disposable source and synthetic platform evidence.
+        monkeypatch: Scoped collector commands and platform labels; never native evidence.
+        mutation: Policy or source mutation before or during report generation.
+
+    Raises:
+        AssertionError: Collection requires a sidecar or changed bytes receive acceptance.
+    """
+    import os
+    import subprocess
+    import sys
+
+    from scripts import combine_coverage, dev
+
+    root = tmp_path / "checkout"
+    root.mkdir()
+    source = root / "sample.py"
+    source.write_text("value = 1\n", encoding="utf-8")
+    policy = root / "pyproject.toml"
+    policy.write_text("[tool.coverage.report]\nfail_under = 80\n", encoding="utf-8")
+    (root / ".gitattributes").write_text("* text=auto eol=lf\n", encoding="utf-8")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    for command in (
+        ["init", "-q"],
+        ["add", "."],
+        [
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "-qm",
+            "fixture",
+        ],
+    ):
+        subprocess.run(["git", *command], cwd=root, check=True, capture_output=True)
+    monkeypatch.chdir(root)
+    monkeypatch.setattr(dev, "ROOT", root)
+    monkeypatch.setattr(combine_coverage, "ROOT", root)
+    monkeypatch.setattr(dev, "CHECKS", ["test"])
+    monkeypatch.setattr(dev, "COMMANDS", {"test": [[sys.executable, "-c", "pass"]]})
+    artifacts = tmp_path / "artifacts"
+    # Only labels and check commands are synthetic. The collector writes its actual schema.
+    for system in ("Windows", "Linux"):
+        monkeypatch.setattr(
+            dev,
+            "identity",
+            lambda system=system: {
+                **dev.checkout_state(),
+                "system": system,
+            },
+        )
+        evidence = artifacts / system
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "dev.py",
+                "check-local",
+                "--evidence-dir",
+                str(evidence),
+            ],
+        )
+        assert dev.main() == 0
+        data = CoverageData(basename=str(evidence / ".coverage"))
+        data.add_lines({str(source): {1}})
+        data.write()
+        assert not (evidence / "host.json").exists()
+    initial = dev.checkout_state()
+    assert len(verified_inputs(artifacts, initial["sha"], initial["tracked_digest"])) == 2
+    output = tmp_path / "combined"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "combine_coverage.py",
+            str(artifacts),
+            "--output-dir",
+            str(output),
+        ],
+    )
+    if mutation == "dirty-policy":
+        policy.write_text("[tool.coverage.report]\nfail_under = 0\n", encoding="utf-8")
+    elif mutation == "dirty-source":
+        source.write_text("value = 2\n", encoding="utf-8")
+    elif mutation == "during-report":
+        original = Coverage.report
+
+        def changing_report(self: Coverage, *args: object, **kwargs: object) -> float:
+            """Mutate tracked policy after the real report reads its configuration."""
+            result = original(self, *args, **kwargs)
+            policy.write_text("[tool.coverage.report]\nfail_under = 0\n", encoding="utf-8")
+            return result
+
+        monkeypatch.setattr(Coverage, "report", changing_report)
+    if mutation.startswith("dirty"):
+        with pytest.raises(ValueError, match="must be clean"):
+            combine_coverage.main()
+        assert not (output / "combined.json").exists()
+    else:
+        assert combine_coverage.main() == (1 if mutation == "during-report" else 0)
+        result = json.loads((output / "combined.json").read_text())
+        assert result["required_percent"] == 80
+        assert result["passed"] is (mutation == "none")
+        assert result["candidate_unchanged"] is (mutation == "none")
