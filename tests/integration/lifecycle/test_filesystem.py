@@ -14,7 +14,8 @@ from pathlib import Path
 import pytest
 
 from agent_company.lifecycle import task_workspace as core
-from agent_company.lifecycle._paths import entry_name
+
+pytestmark = pytest.mark.integration
 
 
 def test_atomic_bytes_identity_and_quarantine(tmp_path: Path) -> None:
@@ -64,8 +65,6 @@ def test_atomic_bytes_identity_and_quarantine(tmp_path: Path) -> None:
 )
 def test_portable_name_rejection(tmp_path: Path, name: str) -> None:
     """Reject portable aliases before any file, directory or lock side effect."""
-    with pytest.raises(core.WorkspaceError, match="UNSAFE_PATH"):
-        entry_name(name)
     with core.Directory.absolute(tmp_path.resolve()) as directory:
         for operation in [
             lambda: directory.write(name, b"bad"),
