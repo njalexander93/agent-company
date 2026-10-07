@@ -18,7 +18,7 @@ Runtime metadata accepts **Python >=3.12,<3.15**. The reproducible development i
 3. On Windows, pass the quoted path to `python.exe` to `poetry env use`.
    Use a local NTFS checkout. On Linux and macOS, use a local filesystem with
    the permissions and locking described in the [workspace contract](task-workspace.md#registration-and-validation).
-4. Run `poetry run python scripts/dev.py check` before requesting review.
+4. Run `poetry run python scripts/dev.py check-local` before requesting review.
    Tests require Git. Make is optional; the Python command works across platforms.
 
 `poetry.toml` selects `.venv/` inside each worktree. Task data is shared by issue;
@@ -56,7 +56,7 @@ the locked Poetry tools and [project rules](../../pyproject.toml):
   `tests/` and `scripts/` at commit time. They do not fix, format or stage files.
 - Mypy runs `poetry run python scripts/dev.py type-check` on every commit, including deletion-only changes.
   It receives no staged filenames and checks the whole configured `src/` scope.
-- Tests and coverage run through `poetry run python scripts/dev.py check` before review, outside automatic
+- Tests and coverage run through `poetry run python scripts/dev.py check-local` before review, outside automatic
   pre-commit.
 
 For commit checks, the framework temporarily hides unstaged tracked edits and
@@ -67,11 +67,11 @@ See [pre-commit staged-content behavior](https://pre-commit.com/#pre-commit).
 
 If a check fails, fix the reported problem, review the diff, stage only intended
 changes and retry. Use `poetry run python scripts/dev.py format` explicitly when
-formatting is needed. Run the full `check` command before requesting review even
+formatting is needed. Run `check-local` before requesting review even
 when the commit hooks pass.
 
 An intentional bypass such as `git commit --no-verify` is not acceptance. Record
-its reason and any failures in the review handoff, then complete the full `check` command.
+its reason and any failures in the review handoff, then complete `check-local` and the required platform validation.
 Local hooks provide feedback; they do not enforce merges or install required
 server checks. See [Git's pre-commit contract](https://git-scm.com/docs/githooks#_pre_commit).
 
@@ -134,7 +134,8 @@ two shared settings/recommendation files.
 | `make test-unit` | Run `tests/unit` without imposing aggregate coverage on the subset. |
 | `make test-integration` | Run `tests/integration` without a subset coverage gate. |
 | `make test` | Pytest, branch-aware coverage and the configured 80% coverage floor. |
-| `make check` or `make ci` | Configuration, formatting, lint, types and tests. |
+| `make check-local` | Configuration, formatting, lint, types and all tests on this OS; save coverage for combination. |
+| `make check` or `make ci` | Strict single-run checks, including the whole-package 80% coverage floor. |
 | `make format` | Apply Ruff formatting. Review the resulting diff. |
 | `make build` | Build a local wheel under `dist/`; no upload or release. |
 | `make clean` | Remove generated build/test/tool output and Python caches; keep `.venv/` and `.task/`. |
@@ -144,6 +145,21 @@ command in the table, use `poetry run python scripts/dev.py <target>` on Windows
 or when Make is unavailable. The same command implementation runs on every OS. Pytest uses strict configuration/markers and
 importlib collection; tests carry `unit` or `integration` markers. Tests use
 temporary repositories and do not adopt or clean an active task workspace.
+
+Use `check-local` for daily development. It stores logs, tests and coverage in
+ignored `.coverage.local/` and explicitly reports that the combined coverage gate
+is pending. `--evidence-dir <path>` chooses another output directory. A failing
+test or changed checkout still fails the command.
+
+POSIX cannot execute the Windows backend, so its single-run whole-package
+coverage can fall below 80% even when every applicable test passes. The strict
+`check`, `ci` and `test` commands retain that floor; they do not silently omit the
+other platform's code. Acceptance requires successful native Windows and Linux
+runs from the same unchanged commit, then
+`poetry run python scripts/combine_coverage.py <artifact-directory> --output-dir <output>`.
+The combination verifies the source revision, clean start/end state and successful
+test results before applying the configured 80% floor to the complete package.
+It preserves each platform's original data and coverage context.
 
 Mypy checks production code, not test annotations. Runtime validation still checks untrusted JSON; annotations do not validate incoming data.
 

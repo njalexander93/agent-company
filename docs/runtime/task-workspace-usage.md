@@ -2,8 +2,8 @@
 
 ## Usage
 
-Complete the [Python and Poetry setup](development.md), then run `make check`
-from the repository root. Without Make, run `poetry run python scripts/dev.py check`.
+Complete the [Python and Poetry setup](development.md), then run `make check-local`
+from the repository root. Without Make, run `poetry run python scripts/dev.py check-local`.
 Tests create temporary non-bare repositories and linked worktrees. They do not clean
 or adopt an active task workspace. Python's standard library is the only runtime
 dependency. Use the platform filesystem requirements in the
