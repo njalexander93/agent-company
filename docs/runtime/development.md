@@ -47,8 +47,8 @@ is removed, reinstall from a retained checkout with a configured environment.
 See [pre-commit installation](https://pre-commit.com/#usage) and
 [Git worktree details](https://git-scm.com/docs/git-worktree#_details).
 
-The three hooks in [the local configuration](../.pre-commit-config.yaml) reuse
-the locked Poetry tools and [project rules](../pyproject.toml):
+The three hooks in [the local configuration](../../.pre-commit-config.yaml) reuse
+the locked Poetry tools and [project rules](../../pyproject.toml):
 
 - Ruff lint and format checks examine staged Python files under `src/` and
   `tests/` at commit time. They do not fix, format or stage files.
@@ -148,4 +148,4 @@ CI/release-pipeline and branch-rule integration remain separate work. Local resu
 
 ## Hook interpreter and trust
 
-Complete environment setup before reviewing or trusting project hooks. Follow [Host hooks](host-hooks.md) for each native configuration, interpreter requirements and trust behavior. Use the [workspace bootstrap](task-workspace.md#explicit-setup-and-bootstrap) for the shared lifecycle interface. A local test pass or rebuilt environment does not grant hook trust or prove installed-host callback delivery.
+Complete environment setup before reviewing or trusting project hooks. Follow [Host hooks](host-hooks.md) for each native configuration, interpreter requirements and trust behavior. Use the [workspace bootstrap](task-workspace-usage.md#explicit-setup-and-bootstrap) for the shared lifecycle interface. A local test pass or rebuilt environment does not grant hook trust or prove installed-host callback delivery.

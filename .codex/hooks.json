@@ -1,5 +1,5 @@
 {
-  "description": "Local task workspace guardrail. Review exact hooks before trust; see docs/task-workspace.md for coverage limits.",
+  "description": "Local task workspace guardrail. Review exact hooks before trust; see docs/runtime/task-workspace.md for coverage limits.",
   "hooks": {
     "SessionStart": [
       {

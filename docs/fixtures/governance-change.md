@@ -8,9 +8,9 @@ This case adds one evidence requirement to an internal Issue Delivery Manager co
 
 | Input | Exact identity / use |
 | --- | --- |
-| Product guidance | [Baseline](../baseline.md), [map](../team-map.md), [coverage](../role-coverage.md) and [format](../definition-format.md). Pin their containing Git commit when using this case. They are authoring guidance, not accepted runtime contracts. |
+| Product guidance | [Baseline](../framework/baseline.md), [map](../framework/team-map.md), [coverage](../framework/role-coverage.md) and [format](../authoring/definition-format.md). Pin their containing Git commit when using this case. They are authoring guidance, not accepted runtime contracts. |
 | Parent execution gap | The permitted retained inputs do not provide a separately versioned approved Initiative roadmap/Epic plan, their exact human decisions or a Wave Admission Record. If the walkthrough advances to actual plan authorization/admission, Issue Planner must retrieve these through Product Planning and Human Leadership. Stop that transition until exact inputs exist. This gap does **not** prevent bounded paper authoring. |
-| Definition gaps | See the [coverage record](../role-coverage.md). Incomplete definitions/shared contracts must be resolved for their operational use; bounded authoring can proceed. The AGO worked example is not a loading input or execution prerequisite. |
+| Definition gaps | See the [coverage record](../framework/role-coverage.md). Incomplete definitions/shared contracts must be resolved for their operational use; bounded authoring can proceed. The AGO worked example is not a loading input or execution prerequisite. |
 
 Pin the [public governing rules](#governing-rules-for-this-case) and permitted Company inputs at exact revisions. Refresh affected sources before acceptance; record changed identities and reconcile meaning. Hash equality proves content identity, not acceptance.
 
@@ -24,7 +24,7 @@ The following labels identify **scenario records defined by this text**, not rea
 | `G-CAND-1` | Same contract plus **one required completion-evidence table**: for every required governing input, give registered source ID, pinned revision/content identity and a status of verified-current, missing, stale or conflicting. Any missing/stale/conflicting required input identifies the affected stopped transition and escalation destination. The table contains references/status, never raw secrets or upstream private reasoning. |
 | `G-REQ-1` | Hypothetical Human Leadership requirement to add exactly that table in one candidate contract. It is a proposed scenario premise; no real human authorization is claimed. Before actual work, replace it with authenticated exact-scope requirements and authorization. |
 
-**Mechanism:** Direct versioned candidate Role-contract authorship, already supported by the [governance ownership rule](../baseline.md#governance-and-technical-ownership). The baseline supplies [source pinning](../baseline.md#source-authority-and-retrieval), [evidence and stale-input rules](../baseline.md#handoffs-and-outcomes); the delta makes their application explicit in one Role's completion evidence. It introduces no new field-resolution algorithm, schema, technical validator, loader or live-policy edit. Do not invent a machine manifest field or assume an implementation exists. If an eventual runtime cannot carry this evidence through its existing contract mechanism, stop and separately scope Tooling Engineer work.
+**Mechanism:** Direct versioned candidate Role-contract authorship, already supported by the [governance ownership rule](../framework/baseline.md#governance-and-technical-ownership). The baseline supplies [source pinning](../framework/baseline.md#source-authority-and-retrieval), [evidence and stale-input rules](../framework/baseline.md#handoffs-and-outcomes); the delta makes their application explicit in one Role's completion evidence. It introduces no new field-resolution algorithm, schema, technical validator, loader or live-policy edit. Do not invent a machine manifest field or assume an implementation exists. If an eventual runtime cannot carry this evidence through its existing contract mechanism, stop and separately scope Tooling Engineer work.
 
 ## Governing rules for this case
 
@@ -32,12 +32,12 @@ Use only the assignment's permitted sections and pin their repository revision. 
 
 | Public rule | Application |
 | --- | --- |
-| [Authority and Role boundaries](../baseline.md#authority-and-role-boundaries) | No authority from tools/access; human-reserved decisions and dependent stops. |
-| [Source integrity](../baseline.md#source-authority-and-retrieval) | Exact accessible identities, approved revisions and conflict handling. |
-| [Governance/technical ownership](../baseline.md#governance-and-technical-ownership) | Candidate governance versus technical implementation and exact activation. |
-| [Assurance ownership](../baseline.md#assurance-ownership) and [permitted context](../baseline.md#context-and-independent-assurance) | Independent tests/reviews, applicable Security subjects and staged disclosure. |
-| [Handoffs/outcomes](../baseline.md#handoffs-and-outcomes) and [publication](../baseline.md#authoring-and-publication-rules) | Separate receipts, human decisions, publication, merge and effectiveness. |
-| [Planning/Waves](../baseline.md#planning-and-wave-boundaries) and [team map](../team-map.md) | Parent planning, actual admission, coordination and retrospective boundaries. |
+| [Authority and Role boundaries](../framework/baseline.md#authority-and-role-boundaries) | No authority from tools/access; human-reserved decisions and dependent stops. |
+| [Source integrity](../framework/baseline.md#source-authority-and-retrieval) | Exact accessible identities, approved revisions and conflict handling. |
+| [Governance/technical ownership](../framework/baseline.md#governance-and-technical-ownership) | Candidate governance versus technical implementation and exact activation. |
+| [Assurance ownership](../framework/baseline.md#assurance-ownership) and [permitted context](../framework/baseline.md#context-and-independent-assurance) | Independent tests/reviews, applicable Security subjects and staged disclosure. |
+| [Handoffs/outcomes](../framework/baseline.md#handoffs-and-outcomes) and [publication](../framework/baseline.md#authoring-and-publication-rules) | Separate receipts, human decisions, publication, merge and effectiveness. |
+| [Planning/Waves](../framework/baseline.md#planning-and-wave-boundaries) and [team map](../framework/team-map.md) | Parent planning, actual admission, coordination and retrospective boundaries. |
 
 ## Expected transitions — not observations
 
@@ -52,7 +52,7 @@ Use only the assignment's permitted sections and pin their repository revision. 
 
 ## Applicability and owned open work
 
-These dispositions resolve the selected delta against [coverage entries 01–22 and four Profiles](../role-coverage.md). Confirm supporting participation before operational use; these expectations are not acceptance.
+These dispositions resolve the selected delta against [coverage entries 01–22 and four Profiles](../framework/role-coverage.md). Confirm supporting participation before operational use; these expectations are not acceptance.
 
 | Actor/scope | Disposition for G-1 |
 | --- | --- |

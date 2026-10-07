@@ -3,7 +3,8 @@
 
 All store access uses no-follow directory descriptors. A persistent flock fences
 supported writers; a durable roll-forward intent couples payload, events and state.
-See docs/task-workspace.md for the public request contract and host limitations.
+See docs/runtime/task-workspace.md for the public request contract and
+docs/runtime/task-workspace-usage.md for host limitations.
 """
 
 from __future__ import annotations

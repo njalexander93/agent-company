@@ -8,11 +8,11 @@ Specify one local, read-only Role/Profile reference check before an agent-loadin
 
 | Input | Exact identity / use |
 | --- | --- |
-| Product guidance | [Baseline](../baseline.md), [map](../team-map.md), [coverage](../role-coverage.md) and [format](../definition-format.md). Pin their containing Git commit when using this case. They are authoring guidance, not accepted runtime contracts. |
+| Product guidance | [Baseline](../framework/baseline.md), [map](../framework/team-map.md), [coverage](../framework/role-coverage.md) and [format](../authoring/definition-format.md). Pin their containing Git commit when using this case. They are authoring guidance, not accepted runtime contracts. |
 | Precise execution gap | No separately versioned approved Initiative roadmap/Epic plan, their exact human decisions or Wave Admission Record is supplied by these retained inputs. Product Planning must retrieve the applicable exact records and Human Leadership decisions before actual plan authorization/admission. Stop that transition, not this bounded paper draft or bounded authoring. |
-| Definition gaps | See the [coverage record](../role-coverage.md). Incomplete definitions/shared contracts must be resolved for their operational use; bounded authoring can proceed. The AGO worked example is not a loading input or execution prerequisite. |
+| Definition gaps | See the [coverage record](../framework/role-coverage.md). Incomplete definitions/shared contracts must be resolved for their operational use; bounded authoring can proceed. The AGO worked example is not a loading input or execution prerequisite. |
 
-Use the [source retrieval rules](../baseline.md#source-authority-and-retrieval) for exact permitted bytes. A readable file/digest does not prove authority. Refresh affected inputs before acceptance and reconcile changed versions.
+Use the [source retrieval rules](../framework/baseline.md#source-authority-and-retrieval) for exact permitted bytes. A readable file/digest does not prove authority. Refresh affected inputs before acceptance and reconcile changed versions.
 
 ## Hypothetical baseline and candidate identities
 
@@ -25,7 +25,7 @@ These names pin **paper scenario records in this revision**, not existing files 
 | `T-DATA-1` | The bounded example inventory and selections below. Unlisted objects are absent; no actual Role files are created. These identifiers are deliberately synthetic and carry no Role authority. |
 | `T-TEST-SPEC-1` | Reserved identity for a future independently authored behavioral test specification. **Absent**, not a completed test artifact or a prewritten test implementation. |
 
-Rule basis: [governance/technical ownership](../baseline.md#governance-and-technical-ownership) assigns loading/validation to Tooling Engineer without governance authority; [source integrity](../baseline.md#source-authority-and-retrieval) requires approved revisions and stops on missing/ambiguous references; [context rules](../baseline.md#context-and-independent-assurance) distinguish structural validity from prose completeness. The diagnostic labels below are **fixture-local vocabulary**, not a final runtime schema.
+Rule basis: [governance/technical ownership](../framework/baseline.md#governance-and-technical-ownership) assigns loading/validation to Tooling Engineer without governance authority; [source integrity](../framework/baseline.md#source-authority-and-retrieval) requires approved revisions and stops on missing/ambiguous references; [context rules](../framework/baseline.md#context-and-independent-assurance) distinguish structural validity from prose completeness. The diagnostic labels below are **fixture-local vocabulary**, not a final runtime schema.
 
 ### T-DATA-1: exact example reference facts
 
@@ -58,12 +58,12 @@ Use only the assignment's permitted sections and pin their repository revision. 
 
 | Public rule | Application |
 | --- | --- |
-| [Authority and Role boundaries](../baseline.md#authority-and-role-boundaries) | No authority from tools/access; human-reserved decisions and dependent stops. |
-| [Source integrity](../baseline.md#source-authority-and-retrieval) | Exact accessible identities, approved revisions and conflict handling. |
-| [Governance/technical ownership](../baseline.md#governance-and-technical-ownership) | Candidate governance versus technical implementation and exact activation. |
-| [Assurance ownership](../baseline.md#assurance-ownership) and [permitted context](../baseline.md#context-and-independent-assurance) | Independent tests/reviews, applicable Security subjects and staged disclosure. |
-| [Handoffs/outcomes](../baseline.md#handoffs-and-outcomes) and [publication](../baseline.md#authoring-and-publication-rules) | Separate receipts, human decisions, publication, merge and effectiveness. |
-| [Planning/Waves](../baseline.md#planning-and-wave-boundaries) and [team map](../team-map.md) | Parent planning, actual admission, coordination and retrospective boundaries. |
+| [Authority and Role boundaries](../framework/baseline.md#authority-and-role-boundaries) | No authority from tools/access; human-reserved decisions and dependent stops. |
+| [Source integrity](../framework/baseline.md#source-authority-and-retrieval) | Exact accessible identities, approved revisions and conflict handling. |
+| [Governance/technical ownership](../framework/baseline.md#governance-and-technical-ownership) | Candidate governance versus technical implementation and exact activation. |
+| [Assurance ownership](../framework/baseline.md#assurance-ownership) and [permitted context](../framework/baseline.md#context-and-independent-assurance) | Independent tests/reviews, applicable Security subjects and staged disclosure. |
+| [Handoffs/outcomes](../framework/baseline.md#handoffs-and-outcomes) and [publication](../framework/baseline.md#authoring-and-publication-rules) | Separate receipts, human decisions, publication, merge and effectiveness. |
+| [Planning/Waves](../framework/baseline.md#planning-and-wave-boundaries) and [team map](../framework/team-map.md) | Parent planning, actual admission, coordination and retrospective boundaries. |
 
 ## Expected transitions — not observations
 
@@ -74,11 +74,11 @@ Use only the assignment's permitted sections and pin their repository revision. 
 5. **Review scoped artifacts:** Independent Code Reviewer / Platform Artifact reviews the exact technical candidate, test specification and loading/report boundary within explicitly assigned scope. Independent Internal Security Reviewer examines local input trust, path scope, information exposure and absence of unauthorized effects. Separate required scopes must all be covered; a component pass is not whole-change or security approval. Findings return to the authorized author.
 6. **Publish exact candidate:** After required evidence and applicable exact human decisions, Change Publisher uses permitted fixed Git machinery for the validated candidate only. Human-reviewed GitHub PR and human-controlled merge remain mandatory. Semantic edits/conflict resolution return to Tooling Engineer or Test Developer; reidentify and rereview changed candidates. Missing evidence cannot become a publication/merge pass.
 7. **Release handoff:** Hand off the exact published revision, baseline comparison, declared scope, independent evidence and unresolved limitations to the authorized consuming-workflow owner through Issue Delivery Manager. The permitted result of this fixture is a paper specification handoff. Installation, actual loading or shipping would need their own authorized delivery contract, concrete recipient/target, compatibility evidence and applicable security coverage. No release, activation or runtime gate is claimed.
-8. **Record outcome and retrospective input:** Issue Delivery Manager records actual status and exact evidence, including blocked/failed/cancelled outcomes. Apply the baseline’s [receipt progression](../baseline.md#handoffs-and-outcomes); publication does not substitute for other gates. Retrospective Facilitator receives permitted factual outcomes, correction history and unresolved gaps for independent retrospective input. Human Leadership separately decides material changes and any successor-Wave start.
+8. **Record outcome and retrospective input:** Issue Delivery Manager records actual status and exact evidence, including blocked/failed/cancelled outcomes. Apply the baseline’s [receipt progression](../framework/baseline.md#handoffs-and-outcomes); publication does not substitute for other gates. Retrospective Facilitator receives permitted factual outcomes, correction history and unresolved gaps for independent retrospective input. Human Leadership separately decides material changes and any successor-Wave start.
 
 ## Applicability and owned open work
 
-Resolve selected triggers against the [coverage Roles and four Profiles](../role-coverage.md), without creating a second Role inventory. Confirm supporting participation and supply an authorized bounded assignment before any triggered use.
+Resolve selected triggers against the [coverage Roles and four Profiles](../framework/role-coverage.md), without creating a second Role inventory. Confirm supporting participation and supply an authorized bounded assignment before any triggered use.
 
 | Actor/scope | Disposition for T-1 |
 | --- | --- |

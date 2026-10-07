@@ -81,7 +81,7 @@ with the exact command from step 4:
 The only accepted input fields are `command`, `cmd`, `login`, `shell`, `workdir`,
 `yield_time_ms`, `max_output_tokens`, `sandbox_permissions`, `justification`, and `prefix_rule`.
 Use one command field. These requirements come from the
-[Codex bootstrap parser](../src/agent_company/adapters/codex.py); they do not change host
+[Codex bootstrap parser](../../src/agent_company/adapters/codex.py); they do not change host
 permission requirements. Claude and Cursor use their own native tool-input shapes.
 
 ### Claude foreground Bash

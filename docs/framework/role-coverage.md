@@ -4,25 +4,25 @@
 
 ## Reading the record
 
-- **G — governance change, G-1:** [internal Company Issue Delivery Manager completion-evidence table](fixtures/governance-change.md#selected-hypothetical-delta), using existing candidate-contract authorship. Prose-only: no technical change or runtime-behavior claim.
-- **T — tooling change, T-1:** [local internal-use read-only reference-check specification](fixtures/tooling-change.md#hypothetical-baseline-and-candidate-identities). Independent behavioral-test specification, Platform Artifact review and Internal Security are required; no checker or tests are implemented/run by this fixture.
+- **G — governance change, G-1:** [internal Company Issue Delivery Manager completion-evidence table](../fixtures/governance-change.md#selected-hypothetical-delta), using existing candidate-contract authorship. Prose-only: no technical change or runtime-behavior claim.
+- **T — tooling change, T-1:** [local internal-use read-only reference-check specification](../fixtures/tooling-change.md#hypothetical-baseline-and-candidate-identities). Independent behavioral-test specification, Platform Artifact review and Internal Security are required; no checker or tests are implemented/run by this fixture.
 - **Required:** the selected path must account for this responsibility or its required input/output. This does not claim an agent has executed it. Separately approved execution-plan and decision records must be supplied as detailed below. A new parent planning lane is conditional on a material amendment.
 - **Conditional:** participation is required if the stated trigger occurs. A pending applicability decision is not a pass. Resolve it before taking the affected route; if an applicable specialist/input is unavailable, stop that route.
 - **Outside:** no action is selected for this fixture's stated scope. This does not remove a POC obligation. Scope expansion requires revised coverage and estimates before claiming coverage.
 
-The two fixtures share correction, authority-conflict and missing/stale-input variations; they are not additional fixtures. **Workspace automation is separate implemented scope** with its own applicable tooling, test, code and security coverage in [the task-workspace contract](task-workspace.md). It is not a third paper fixture or proof of runtime Role execution. Shipped framework behavior still triggers Product Security, and exposed surfaces trigger External Security.
+The two fixtures share correction, authority-conflict and missing/stale-input variations; they are not additional fixtures. **Workspace automation is separate implemented scope** with its own applicable tooling, test, code and security coverage in [the task-workspace contract](../runtime/task-workspace.md). It is not a third paper fixture or proof of runtime Role execution. Shipped framework behavior still triggers Product Security, and exposed surfaces trigger External Security.
 
 **Entry convention:** Each numbered entry records kind/parent, public rule, separate G/T participation, bounded responsibility, artifact → next destination, and definition gap/owner/action. Team links give organizational placement; they confer no line or approval authority. All entries inherit the stop and readiness rules below. A missing runtime definition does not erase the accepted Role responsibility; operational use still requires an exact applicable definition and assignment.
 
 ## Selected context and applicability
 
-**Paper context:** Use the selected [G inputs](fixtures/governance-change.md#real-governing-context-and-starting-inputs) or [T inputs](fixtures/tooling-change.md#real-governing-context-and-starting-inputs). Neither case supplies operational plan authorization.
+**Paper context:** Use the selected [G inputs](../fixtures/governance-change.md#real-governing-context-and-starting-inputs) or [T inputs](../fixtures/tooling-change.md#real-governing-context-and-starting-inputs). Neither case supplies operational plan authorization.
 
 **Execution inputs not supplied:** separately versioned approved Initiative roadmap/Epic plan, their exact human authorization decisions and a Wave Admission Record. Product Planning must retrieve applicable exact records and Human Leadership decisions before actual plan authorization/admission; stop that transition until supplied. No execution-plan approval, human start or Wave admission is inferred from paper context. This gap does not block bounded paper drafting or the fresh-author trial.
 
-Selected supporting dispositions are in [G-1 applicability](fixtures/governance-change.md#applicability-and-owned-open-work) and [T-1 applicability](fixtures/tooling-change.md#applicability-and-owned-open-work). Entries below adopt those **paper expectations**, not execution approval. Neither fixture selects Leadership Advisor advice, Triager diagnostic triage or Software Architect proposals. Both exclude setup/migration, a research Spike, product implementation, infrastructure and deployment. Confirm supporting participation and resolve bounded inputs/destinations in the assignment before any triggered use.
+Selected supporting dispositions are in [G-1 applicability](../fixtures/governance-change.md#applicability-and-owned-open-work) and [T-1 applicability](../fixtures/tooling-change.md#applicability-and-owned-open-work). Entries below adopt those **paper expectations**, not execution approval. Neither fixture selects Leadership Advisor advice, Triager diagnostic triage or Software Architect proposals. Both exclude setup/migration, a research Spike, product implementation, infrastructure and deployment. Confirm supporting participation and resolve bounded inputs/destinations in the assignment before any triggered use.
 
-Use the [shared format](definition-format.md#completeness-and-gaps) to distinguish untriggered conditions from missing required inputs. “Conditional — not triggered” below preserves the expansion rule while recording why it does not apply to G-1/T-1. It is not a completed specialist assignment.
+Use the [shared format](../authoring/definition-format.md#completeness-and-gaps) to distinguish untriggered conditions from missing required inputs. “Conditional — not triggered” below preserves the expansion rule while recording why it does not apply to G-1/T-1. It is not a completed specialist assignment.
 
 ## Canonical Role inventory
 
@@ -49,7 +49,7 @@ Staff placement is directly beneath Human Leadership, not a Department or Team. 
 - **Kind/parent:** Role; Company-level staff.
 - **Participation:** G: Required — candidate governance authorship. T: Conditional — not triggered in T-1; no declarative Role/Profile, permission or context change. Such a change triggers separately scoped AGO authorship; synthetic reference stubs are test data, not governance candidates.
 - **Responsibility / handoff:** Author scoped candidate governance from human-set requirements; cannot edit active authority governing its lane, self-approve or activate. Versioned candidate → independent Code Reviewer (Agent Capability Artifact) and applicable Security review, then exact human decision/publication and separate trusted activation boundary. New technical behavior → separately scoped Tooling Engineer.
-- **Definition / gap / next action:** A [worked example](examples/roles/agent-governance-officer.md) illustrates this responsibility. It is not a runtime Role, and its exact content requires independent review.
+- **Definition / gap / next action:** A [worked example](../examples/agent-governance-officer.md) illustrates this responsibility. It is not a runtime Role, and its exact content requires independent review.
 
 ### Product Planning Team — 6 Roles
 
@@ -223,7 +223,7 @@ All four are selected Profile references, not new Roles or installed runtime def
 
 The selected full-definition set contains 12 Roles: Initiative Planner, Epic Planner, Issue Planner, Plan Reviewer, Issue Delivery Manager, Retrospective Facilitator, Tooling Engineer, Test Developer, Code Reviewer, Agent Governance Officer, Internal Security Reviewer and Change Publisher. The other 10 accepted Roles remain supporting references for these fixtures. This selection does not remove their responsibilities elsewhere.
 
-Only the [worked AGO example](examples/roles/agent-governance-officer.md) is included as a complete authoring example. It is not a packaged runtime definition. Review and acceptance must identify its exact revision. Actual runtime resources belong under `src/agent_company/resources/roles/` and are not supplied by this record.
+Only the [worked AGO example](../examples/agent-governance-officer.md) is included as a complete authoring example. It is not a packaged runtime definition. Review and acceptance must identify its exact revision. Actual runtime resources belong under `src/agent_company/resources/roles/` and are not supplied by this record.
 
 Incomplete definitions do not block bounded authoring. They do block claims of operational readiness where the selected path requires their exact inputs, authority, context or evidence contracts.
 
@@ -245,4 +245,4 @@ Apply the shared [authority](baseline.md#authority-and-role-boundaries) and [out
 
 ## Shared rules
 
-Apply the baseline’s [authority](baseline.md#authority-and-role-boundaries), [assurance](baseline.md#assurance-ownership), [context](baseline.md#context-and-independent-assurance) and [handoff/outcome](baseline.md#handoffs-and-outcomes) rules. Company-specific inputs must satisfy the [source contract](definition-format.md#source-reference-contract).
+Apply the baseline’s [authority](baseline.md#authority-and-role-boundaries), [assurance](baseline.md#assurance-ownership), [context](baseline.md#context-and-independent-assurance) and [handoff/outcome](baseline.md#handoffs-and-outcomes) rules. Company-specific inputs must satisfy the [source contract](../authoring/definition-format.md#source-reference-contract).

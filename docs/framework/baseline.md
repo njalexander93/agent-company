@@ -1,10 +1,10 @@
 # Authoring baseline
 
-This guide defines the scope and source conventions for writing compatible Role/Profile definitions. Start with the [authoring route](README.md). The documents describe governance; reading, publishing or loading them grants no execution authority.
+This guide defines the scope and source conventions for writing compatible Role/Profile definitions. Start with the [authoring route](../README.md). The documents describe governance; reading, publishing or loading them grants no execution authority.
 
 ## Purpose and revision
 
-A definition must make responsibility, authority, required inputs, owned outputs, independence, evidence and handoffs traceable. Use the [shared format](definition-format.md), [team map](team-map.md) and [coverage record](role-coverage.md).
+A definition must make responsibility, authority, required inputs, owned outputs, independence, evidence and handoffs traceable. Use the [shared format](../authoring/definition-format.md), [team map](team-map.md) and [coverage record](role-coverage.md).
 
 Identify a candidate by its full Git commit and file path/set. Record governing source revisions separately. A branch name is not an immutable revision, and a hash embedded in its own file cannot identify that file's final bytes. Changed guidance or source inputs require affected reference and semantic review; repeat affected authoring checks when necessary.
 
@@ -12,21 +12,21 @@ Identify a candidate by its full Git commit and file path/set. Record governing 
 
 | Fixture | Bounded purpose | Expected trace, not performed actions |
 | --- | --- | --- |
-| [Governance change G-1](fixtures/governance-change.md) | G-BASE-1 → G-CAND-1 adds one completion-evidence table to a hypothetical internal Company Issue Delivery Manager contract: each required source’s ID, pinned revision/content identity and verified-current/missing/stale/conflicting status, with affected stopped transition and escalation destination. References/status only; no raw secrets or private reasoning. | Planning and delivery coordination; Agent Governance Officer candidate authorship; independent artifact/security review; exact human decision; publication and distinct activation handoff; recorded outcome and retrospective input. |
-| [Tooling change T-1](fixtures/tooling-change.md) | T-BASE-1 → T-CAND-1 specifies a read-only report for the selected Role, selected Profile and canonical parent against the pinned T-DATA-1 inventory. Expected findings cover missing targets, stale parent revision and wrong identity. No repair, acquisition or execution; T-TEST-SPEC-1 remains future independent output. | Tooling Engineer ownership; independent tests and scoped review; applicable security; exact-candidate publication/release handoff; recorded outcome and retrospective input. |
+| [Governance change G-1](../fixtures/governance-change.md) | G-BASE-1 → G-CAND-1 adds one completion-evidence table to a hypothetical internal Company Issue Delivery Manager contract: each required source’s ID, pinned revision/content identity and verified-current/missing/stale/conflicting status, with affected stopped transition and escalation destination. References/status only; no raw secrets or private reasoning. | Planning and delivery coordination; Agent Governance Officer candidate authorship; independent artifact/security review; exact human decision; publication and distinct activation handoff; recorded outcome and retrospective input. |
+| [Tooling change T-1](../fixtures/tooling-change.md) | T-BASE-1 → T-CAND-1 specifies a read-only report for the selected Role, selected Profile and canonical parent against the pinned T-DATA-1 inventory. Expected findings cover missing targets, stale parent revision and wrong identity. No repair, acquisition or execution; T-TEST-SPEC-1 remains future independent output. | Tooling Engineer ownership; independent tests and scoped review; applicable security; exact-candidate publication/release handoff; recorded outcome and retrospective input. |
 
 Both fixtures model internal, local work as paper cases. Correction, authority conflict and missing/stale inputs are variations within them. Expected outcomes are not observations, receipts, approvals or runtime proof.
 
 Neither fixture supplies an approved Initiative roadmap/Epic plan, exact human authorization or Wave Admission Record. Product Planning and Human Leadership must supply those before an actual authorization/admission transition. Stop that transition; bounded authoring can continue. See [Planning and Wave boundaries](#planning-and-wave-boundaries).
 
-The pack does not supply a full Role catalog, implemented Skills, the reference checker, final machine schemas, runtime loaders, distribution packaging or general runtime authority enforcement. The separate [task-workspace utility](task-workspace.md) has its own implementation and host limitations. Expanding either fixture into shipped behavior, exposed surfaces, setup or infrastructure requires revised scope and applicable specialist coverage.
+The pack does not supply a full Role catalog, implemented Skills, the reference checker, final machine schemas, runtime loaders, distribution packaging or general runtime authority enforcement. The separate [task-workspace utility](../runtime/task-workspace.md) has its own implementation and host limitations. Expanding either fixture into shipped behavior, exposed surfaces, setup or infrastructure requires revised scope and applicable specialist coverage.
 
 ## Working locations and ownership
 
-- **Public rules:** This baseline, the [team map](team-map.md), [coverage record](role-coverage.md) and [shared format](definition-format.md) provide the rules needed to author definitions. Company-specific assignments add their own accessible governing material.
-- **Guidance and examples:** `docs/` contains documentation. The [worked AGO example](examples/roles/agent-governance-officer.md) illustrates authoring; it is not a packaged runtime Role.
+- **Public rules:** This baseline, the [team map](team-map.md), [coverage record](role-coverage.md) and [shared format](../authoring/definition-format.md) provide the rules needed to author definitions. Company-specific assignments add their own accessible governing material.
+- **Guidance and examples:** `docs/` contains documentation. The [worked AGO example](../examples/agent-governance-officer.md) illustrates authoring; it is not a packaged runtime Role.
 - **Future runtime assets:** Actual runtime Role resources belong under `src/agent_company/resources/roles/` in the packaged build. This location does not supply a loader or activate a Role. Do not duplicate the example there.
-- **Working context:** The registered main worktree owns `.task/<issue-id>/`; participating worktrees expose issue-specific views under the [workspace contract](task-workspace.md). Links confer no filesystem permission.
+- **Working context:** The registered main worktree owns `.task/<issue-id>/`; participating worktrees expose issue-specific views under the [workspace contract](../runtime/task-workspace.md). Links confer no filesystem permission.
 - **Delivery evidence:** Keep project tracking, research, conversations, private reasoning and exact-candidate review history in access-controlled delivery records. These are not public product rules or default author/reviewer inputs.
 
 ## Authoring and publication rules
@@ -58,7 +58,7 @@ For each required governing input:
 3. Pin the approved immutable revision or retain exact bytes with a verified content digest and retrieval route. A mutable branch/tag is insufficient. A digest without accessible retained content is insufficient.
 4. If content changes, retain the required version or reconcile the new version before relying on it. Missing, stale, inaccessible, ambiguous or conflicting inputs stop the dependent conclusion; identify the recovery owner or human decision needed.
 
-Use the [definition source-reference contract](definition-format.md#source-reference-contract) for authoring fields. Public framework rules resolve to repository sections at a pinned revision. Company-specific rules may use a Company-owned accessible register with the same fields. Register membership does not authorize reading every entry.
+Use the [definition source-reference contract](../authoring/definition-format.md#source-reference-contract) for authoring fields. Public framework rules resolve to repository sections at a pinned revision. Company-specific rules may use a Company-owned accessible register with the same fields. Register membership does not authorize reading every entry.
 
 ## Context and independent assurance
 
@@ -120,18 +120,18 @@ Account for provider-observed usage and the Controller's own commitments. Cross-
 
 ## Setup boundary
 
-Reuse existing service identities and access for integrations; no separate Agent Company account, enrollment ceremony or human-authentication system is supplied. Setup requires usable access to Linear, GitHub and the Obsidian knowledge integration; connection/setup investigation covers all three and remains separately scoped. Protected permission grants, exact human decisions and exceptional recovery remain explicit. The [development guide](development.md) covers the implemented contributor environment, not complete Company onboarding or an end-user installer.
+Reuse existing service identities and access for integrations; no separate Agent Company account, enrollment ceremony or human-authentication system is supplied. Setup requires usable access to Linear, GitHub and the Obsidian knowledge integration; connection/setup investigation covers all three and remains separately scoped. Protected permission grants, exact human decisions and exceptional recovery remain explicit. The [development guide](../runtime/development.md) covers the implemented contributor environment, not complete Company onboarding or an end-user installer.
 
 ## Evidence and privacy
 
 Raw secrets remain outside Agent Roles; exact-operation use occurs through a separately trusted broker. Human authentication material, signing roots, recovery/override controls and enforcement internals remain sealed. Neither a Company grant nor convenient tool access can override a Framework prohibition. Send non-secret rule references and the blocked effect to the required decision authority.
 
-Evidence retains exact subject, governing revisions, attributable actor, decision/action, outcome certainty and causal/supporting references under its disclosure scope. Provider objects are editable projections/archives, not execution authority. A durable archive preserves meaningful readable and structured history. Verify write and read-back against registered identities before local cleanup. Exclude sensitive material before export. The [task-workspace contract](task-workspace.md#archive-provider-boundary-and-recovery) defines the implemented local archive mechanics and their limits.
+Evidence retains exact subject, governing revisions, attributable actor, decision/action, outcome certainty and causal/supporting references under its disclosure scope. Provider objects are editable projections/archives, not execution authority. A durable archive preserves meaningful readable and structured history. Verify write and read-back against registered identities before local cleanup. Exclude sensitive material before export. The [task-workspace contract](../runtime/task-workspace.md#archive-provider-boundary-and-recovery) defines the implemented local archive mechanics and their limits.
 
 ## Interpretation and limitations
 
 - These are normative documentation rules, not proof of implemented enforcement, runtime isolation, accepted definitions or certification. A document's publication does not authorize an operational lane.
 - The [team map](team-map.md) defines placement; [coverage](role-coverage.md) records the 22 Roles, four selected Profiles and known definition gaps. Detailed Security taxonomy and complete runtime definitions remain unfinished.
-- The [worked example](examples/roles/agent-governance-officer.md) is an authoring aid, not an installed Role. Review always applies to exact bytes; record dispositions outside product examples.
-- Workspace protocol tests do not establish installed-host callback delivery, trust, provider round trips, other operating-system support or final acceptance. See [task-workspace limitations](task-workspace.md).
-- The repository's [LICENSE](../LICENSE) governs this checkout. A local build does not establish installer, release-pipeline or distribution readiness.
+- The [worked example](../examples/agent-governance-officer.md) is an authoring aid, not an installed Role. Review always applies to exact bytes; record dispositions outside product examples.
+- Workspace protocol tests do not establish installed-host callback delivery, trust, provider round trips, other operating-system support or final acceptance. See [task-workspace limitations](../runtime/task-workspace.md).
+- The repository's [LICENSE](../../LICENSE) governs this checkout. A local build does not establish installer, release-pipeline or distribution readiness.

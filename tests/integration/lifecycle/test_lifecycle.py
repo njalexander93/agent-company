@@ -418,7 +418,7 @@ class LifecycleTests(Fixture):
             "$RECYCLE.BIN/file",
         ]
         kept = [
-            "docs/task-workspace.md",
+            "docs/runtime/task-workspace.md",
             ".codex/hooks.json",
             "src/agent_company/resources/task_workspace/roadmap.md",
             "nested/product.ini",
