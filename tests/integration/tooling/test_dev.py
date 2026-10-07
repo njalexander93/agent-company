@@ -1,6 +1,8 @@
 """Check portable validation evidence and bounded cleanup using disposable directories."""
 
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -57,7 +59,9 @@ def test_check_stops_on_failure_and_records_real_subprocess_result(
     evidence = tmp_path / "evidence with spaces"
     marker = tmp_path / "must-not-exist"
     monkeypatch.setattr(dev, "ROOT", tmp_path)
-    monkeypatch.setattr(dev, "identity", lambda: {"fixture_identity": True})
+    state = {"sha": "fixture", "status": "", "tracked_digest": "fixture"}
+    monkeypatch.setattr(dev, "identity", lambda: dict(state))
+    monkeypatch.setattr(dev, "checkout_state", lambda: dict(state))
     monkeypatch.setattr(dev, "CHECKS", ["first", "second"])
     monkeypatch.setattr(
         dev,
@@ -77,3 +81,94 @@ def test_check_stops_on_failure_and_records_real_subprocess_result(
     assert len(manifest["commands"]) == 1
     assert manifest["commands"][0]["exit_code"] == 7
     assert (evidence / manifest["commands"][0]["log"]).read_text() == "retained failure\n"
+
+
+def test_validation_rejects_source_changes_during_a_successful_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Mark a passing command diagnostic-only when its tracked input changes during execution.
+
+    Args:
+        tmp_path: Disposable Git checkout and separate evidence directory.
+        monkeypatch: Scoped command plan and Git environment isolation.
+
+    Raises:
+        AssertionError: Changed source retains valid candidate evidence.
+    """
+    root = tmp_path / "checkout"
+    root.mkdir()
+    source = root / "source.py"
+    source.write_text("original\n")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    for args in (
+        ["init", "-q"],
+        ["add", "source.py"],
+        [
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "-qm",
+            "fixture",
+        ],
+    ):
+        subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+    monkeypatch.setattr(dev, "ROOT", root)
+    monkeypatch.setattr(dev, "identity", dev.checkout_state)
+    monkeypatch.setattr(dev, "CHECKS", ["mutation"])
+    monkeypatch.setattr(
+        dev,
+        "COMMANDS",
+        {
+            "mutation": [
+                [
+                    sys.executable,
+                    "-c",
+                    "from pathlib import Path; Path('source.py').write_text('changed\\n')",
+                ]
+            ]
+        },
+    )
+    evidence = tmp_path / "evidence"
+    monkeypatch.setattr(sys, "argv", ["dev.py", "check", "--evidence-dir", str(evidence)])
+    assert dev.main() == 1
+    manifest = json.loads((evidence / "manifest.json").read_text())
+    assert manifest["commands"][0]["exit_code"] == 0
+    assert manifest["sha"] == manifest["end_sha"]
+    assert manifest["status"] == "" and manifest["end_status"]
+    assert manifest["tracked_digest"] != manifest["end_tracked_digest"]
+    assert manifest["candidate_unchanged"] is False
+
+
+@pytest.mark.parametrize("task", ["check", "check-local"])
+def test_local_collection_is_explicit_and_does_not_weaken_full_check(
+    task: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Keep aggregate enforcement on ordinary checks and label local collection as pending.
+
+    Args:
+        task: Ordinary acceptance check or explicit local-only check.
+        tmp_path: Disposable evidence output directory.
+        monkeypatch: Scoped command runner fixture and fixed checkout identity.
+
+    Raises:
+        AssertionError: Default checking bypasses the floor or local collection claims acceptance.
+    """
+    state = {"sha": "fixture", "status": "", "tracked_digest": "fixture"}
+    monkeypatch.setattr(dev, "ROOT", tmp_path)
+    monkeypatch.setattr(dev, "identity", lambda: dict(state))
+    monkeypatch.setattr(dev, "checkout_state", lambda: dict(state))
+    monkeypatch.setattr(dev, "CHECKS", ["test"])
+    monkeypatch.setattr(
+        dev, "COMMANDS", {"test": [[sys.executable, "-c", "print('fixture check')"]]}
+    )
+    evidence = tmp_path / "evidence"
+    monkeypatch.setattr(sys, "argv", ["dev.py", task, "--evidence-dir", str(evidence)])
+    assert dev.main() == 0
+    manifest = json.loads((evidence / "manifest.json").read_text())
+    command = manifest["commands"][0]["command"]
+    assert ("--cov-fail-under=0" in command) is (task == "check-local")
+    assert ("coverage_gate" in manifest) is (task == "check-local")
+    assert manifest["candidate_unchanged"] is True

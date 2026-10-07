@@ -33,7 +33,12 @@ def verified_inputs(directory: Path, sha: str) -> list[str]:
         if (
             manifest.get("sha") != sha
             or host.get("sha") != sha
-            or manifest.get("status")
+            or manifest.get("status") != ""
+            or manifest.get("end_sha") != sha
+            or manifest.get("end_status") != ""
+            or manifest.get("candidate_unchanged") is not True
+            or not manifest.get("tracked_digest")
+            or manifest.get("tracked_digest") != manifest.get("end_tracked_digest")
             or not commands
             or any(command["exit_code"] != 0 for command in commands)
             or not any(command["task"] == "test" for command in commands)

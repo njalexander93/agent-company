@@ -40,6 +40,19 @@ def test_hook_bounds_malformed_and_open_stdin(
     assert malformed.returncode == status, malformed.stderr
     assert isinstance(json.loads(malformed.stdout), dict)
     assert "Traceback" not in malformed.stderr
+    # Invalid event-name types must never escape failure rendering as unhashable keys.
+    for event_name in ([], {}, None, 1):
+        invalid = subprocess.run(
+            argv,
+            input=json.dumps({"hook_event_name": event_name}),
+            capture_output=True,
+            text=True,
+            timeout=6,
+        )
+        assert invalid.returncode == status, invalid.stdout + invalid.stderr
+        assert isinstance(json.loads(invalid.stdout), dict)
+        assert "INVALID_REQUEST" in invalid.stdout
+        assert "Traceback" not in invalid.stderr
     # Keep stdin open after a partial envelope. The supervisor must exit without waiting for EOF.
     with subprocess.Popen(
         argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE

@@ -42,7 +42,10 @@ def test_combination_normalizes_windows_paths_and_preserves_contexts(tmp_path: P
     assert all(Path(path).exists() for path in files)
 
 
-@pytest.mark.parametrize("defect", ["missing-platform", "wrong-sha", "failed-tests", "dirty"])
+@pytest.mark.parametrize(
+    "defect",
+    ["missing-platform", "wrong-sha", "failed-tests", "dirty", "changed-source", "changed-commit"],
+)
 def test_native_evidence_rejects_incomplete_or_mismatched_inputs(
     tmp_path: Path, defect: str
 ) -> None:
@@ -63,6 +66,11 @@ def test_native_evidence_rejects_incomplete_or_mismatched_inputs(
         manifest = {
             "sha": "candidate",
             "system": system,
+            "end_sha": "candidate",
+            "end_status": "",
+            "candidate_unchanged": True,
+            "tracked_digest": "before",
+            "end_tracked_digest": "before",
             "status": "",
             "commands": [
                 {"task": "test", "exit_code": 0},
@@ -74,6 +82,10 @@ def test_native_evidence_rejects_incomplete_or_mismatched_inputs(
                 manifest["sha"] = "another-candidate"
             elif defect == "failed-tests":
                 manifest["commands"][0]["exit_code"] = 1
+            elif defect == "changed-source":
+                manifest["end_tracked_digest"] = "after"
+            elif defect == "changed-commit":
+                manifest["end_sha"] = "another-candidate"
             elif defect == "dirty":
                 manifest["status"] = " M source.py"
         (root / "manifest.json").write_text(json.dumps(manifest))

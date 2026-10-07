@@ -1,6 +1,7 @@
 """Run the same contributor checks on native Windows, Linux and macOS without Make."""
 
 import argparse
+import hashlib
 import json
 import os
 import platform
@@ -70,6 +71,31 @@ def clean() -> None:
             shutil.rmtree(path)
 
 
+def checkout_state() -> dict[str, str]:
+    """Fingerprint tracked bytes and Git state without following tracked symbolic links.
+
+    Returns:
+        Commit, working-tree status and deterministic tracked-content digest.
+    """
+    digest = hashlib.sha256()
+    paths = subprocess.check_output(["git", "ls-files", "-z"], cwd=ROOT).split(b"\0")
+    for name in sorted(path for path in paths if path):
+        path = ROOT / os.fsdecode(name)
+        digest.update(name + b"\0")
+        if path.is_symlink():
+            data = b"link:" + os.fsencode(os.readlink(path))
+        elif path.is_file():
+            data = b"file:" + path.read_bytes()
+        else:
+            data = b"missing"
+        digest.update(hashlib.sha256(data).digest())
+    return {
+        "sha": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
+        "status": subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT, text=True),
+        "tracked_digest": digest.hexdigest(),
+    }
+
+
 def identity() -> dict[str, object]:
     """Record the actual checkout and runtime without inferring other platform support.
 
@@ -83,8 +109,7 @@ def identity() -> dict[str, object]:
         "machine": platform.machine(),
         "launcher_python": sys.version,
         "launcher_executable": sys.executable,
-        "sha": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
-        "status": subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT, text=True),
+        **checkout_state(),
     }
     if sys.platform == "linux":
         result["distribution"] = platform.freedesktop_os_release()
@@ -114,7 +139,10 @@ def main() -> int:
     # A portable Python entry point replaces shell-specific help, cleanup and pipelines.
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "task", nargs="?", default="help", choices=[*COMMANDS, "help", "clean", "check", "ci"]
+        "task",
+        nargs="?",
+        default="help",
+        choices=[*COMMANDS, "help", "clean", "check", "check-local", "ci"],
     )
     parser.add_argument("--evidence-dir", type=Path)
     parser.add_argument(
@@ -123,17 +151,20 @@ def main() -> int:
         help="Collect one OS for the combined gate; requires evidence output.",
     )
     args = parser.parse_args()
+    if args.task == "check-local":
+        args.platform_coverage = True
+        args.evidence_dir = args.evidence_dir or ROOT / ".coverage.local"
     if args.platform_coverage and (
-        not args.evidence_dir or args.task not in {"check", "test", "ci"}
+        not args.evidence_dir or args.task not in {"check", "check-local", "test", "ci"}
     ):
         parser.error("--platform-coverage requires check/test/ci and --evidence-dir")
     if args.task == "help":
-        print("Tasks: " + ", ".join([*COMMANDS, "clean", "check", "ci"]))
+        print("Tasks: " + ", ".join([*COMMANDS, "clean", "check", "check-local", "ci"]))
         return 0
     if args.task == "clean":
         clean()
         return 0
-    tasks = CHECKS if args.task in {"check", "ci"} else [args.task]
+    tasks = CHECKS if args.task in {"check", "check-local", "ci"} else [args.task]
     if args.task == "build":
         tasks = ["validate-config", "build"]
     # Evidence is opt-in and captures failures as well as successful commands.
@@ -144,6 +175,9 @@ def main() -> int:
         evidence.mkdir(parents=True, exist_ok=True)
     environment = os.environ.copy()
     if args.platform_coverage:
+        print(
+            "Platform checks only; combined native Windows + Linux coverage gate remains pending."
+        )
         environment["AGENT_COMPANY_COVERAGE_CONTEXT"] = (
             platform.system() + "-" + platform.python_version()
         )
@@ -194,9 +228,22 @@ def main() -> int:
                     }
                 )
                 manifest["commands"] = results
+                final = checkout_state()
+                manifest.update({"end_" + key: value for key, value in final.items()})
+                manifest["candidate_unchanged"] = all(
+                    manifest[key] == value for key, value in final.items()
+                )
                 (evidence / "manifest.json").write_text(
                     json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
                 )
+                if not manifest["candidate_unchanged"] and args.task in {
+                    "check",
+                    "check-local",
+                    "ci",
+                    "test",
+                }:
+                    print("Candidate changed during validation; evidence is diagnostic only.")
+                    return code or 1
             if code:
                 return code
     return 0
