@@ -32,6 +32,8 @@ jobs:
           PYTHONUTF8: '1'
         run: |
           import json, os, pathlib, platform, subprocess, sys, tempfile
+          sys.path.insert(0, str(pathlib.Path.cwd()))
+          from scripts.dev import run_command
           evidence = pathlib.Path(os.environ['EVIDENCE_DIR'])
           evidence.mkdir(parents=True, exist_ok=True)
           expected = 'win32' if os.environ['RUNNER_OS'] == 'Windows' else 'linux'
@@ -59,12 +61,9 @@ jobs:
               ['poetry', 'run', 'python', 'scripts/dev.py', 'check', '--evidence-dir', str(evidence), '--platform-coverage'],
           ]
           for index, command in enumerate(commands):
-              result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                      text=True, encoding='utf-8', errors='replace')
-              (evidence / f'bootstrap-{index}.log').write_text(result.stdout, encoding='utf-8')
-              print(result.stdout, flush=True)
-              if result.returncode:
-                  sys.exit(result.returncode)
+              status = run_command(command, os.environ.copy(), evidence / f'bootstrap-{index}.log')
+              if status:
+                  sys.exit(status)
       - name: Retain success or failure evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -98,6 +97,8 @@ jobs:
           OUTPUT: ${{ runner.temp }}/agent-1-combined-coverage
         run: |
           import os, pathlib, subprocess, sys
+          sys.path.insert(0, str(pathlib.Path.cwd()))
+          from scripts.dev import run_command
           output = pathlib.Path(os.environ['OUTPUT'])
           output.mkdir(parents=True, exist_ok=True)
           commands = [
@@ -108,12 +109,9 @@ jobs:
                '--output-dir', str(output)],
           ]
           for index, command in enumerate(commands):
-              result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                      text=True, encoding='utf-8', errors='replace')
-              (output / f'command-{index}.log').write_text(result.stdout, encoding='utf-8')
-              print(result.stdout, flush=True)
-              if result.returncode:
-                  sys.exit(result.returncode)
+              status = run_command(command, os.environ.copy(), output / f'command-{index}.log')
+              if status:
+                  sys.exit(status)
       - name: Retain combined gate evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7

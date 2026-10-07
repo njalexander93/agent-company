@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -172,3 +173,46 @@ def test_local_collection_is_explicit_and_does_not_weaken_full_check(
     assert ("--cov-fail-under=0" in command) is (task == "check-local")
     assert ("coverage_gate" in manifest) is (task == "check-local")
     assert manifest["candidate_unchanged"] is True
+
+
+def test_command_stream_retains_partial_output_before_child_exit(tmp_path: Path) -> None:
+    """Flush unterminated progress output while the actual child process is still running.
+
+    Args:
+        tmp_path: Disposable release signal and evidence log.
+
+    Raises:
+        AssertionError: Console or evidence output waits for the entire child to finish.
+    """
+    log = tmp_path / "partial.log"
+    release = tmp_path / "release"
+    child = (
+        "import time; from pathlib import Path\n"
+        "print('partial', end='', flush=True)\n"
+        f"while not Path({str(release)!r}).exists(): time.sleep(0.01)\n"
+        "print(' done', flush=True)\n"
+    )
+    parent = (
+        "import os; from pathlib import Path; from scripts.dev import run_command; "
+        f"raise SystemExit(run_command({[sys.executable, '-c', child]!r}, "
+        f"os.environ.copy(), Path({str(log)!r})))"
+    )
+    with subprocess.Popen(
+        [sys.executable, "-c", parent],
+        cwd=dev.ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    ) as process:
+        try:
+            deadline = time.monotonic() + 5
+            while (not log.exists() or not log.read_bytes()) and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert log.read_bytes() == b"partial"
+            assert process.poll() is None
+        finally:
+            release.touch()
+        output, error = process.communicate(timeout=10)
+    assert process.returncode == 0, error
+    assert output == "partial done\n"
+    assert log.read_text() == output

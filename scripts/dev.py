@@ -1,6 +1,7 @@
 """Run the same contributor checks on native Windows, Linux and macOS without Make."""
 
 import argparse
+import codecs
 import hashlib
 import json
 import os
@@ -130,6 +131,51 @@ def identity() -> dict[str, object]:
     return result
 
 
+def run_command(command: list[str], environment: dict[str, str], log: Path | None = None) -> int:
+    """Stream real child output to the console and an optional flushed evidence log.
+
+    Args:
+        command: Exact subprocess arguments, never shell-expanded.
+        environment: Explicit child environment.
+        log: Optional persistent partial log for failure or cancellation diagnosis.
+
+    Returns:
+        Child exit code, or 127 if the executable cannot start.
+    """
+    # Unbuffered Python children expose progress while a test is still running.
+    environment = {**environment, "PYTHONUNBUFFERED": "1"}
+    try:
+        if log is None:
+            return subprocess.run(command, cwd=ROOT, env=environment).returncode
+        with (
+            log.open("wb") as stream,
+            subprocess.Popen(
+                command,
+                cwd=ROOT,
+                env=environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                bufsize=0,
+            ) as process,
+        ):
+            assert process.stdout is not None
+            decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+            while chunk := os.read(process.stdout.fileno(), 65536):
+                stream.write(chunk)
+                stream.flush()
+                sys.stdout.write(decoder.decode(chunk))
+                sys.stdout.flush()
+            sys.stdout.write(decoder.decode(b"", final=True))
+            sys.stdout.flush()
+            return process.wait()
+    except OSError as error:
+        print(error, file=sys.stderr, flush=True)
+        if log:
+            with log.open("ab") as stream:
+                stream.write((str(error) + "\n").encode("utf-8"))
+        return 127
+
+
 def main() -> int:
     """Execute one named task, optionally saving command logs and an OS evidence manifest.
 
@@ -198,26 +244,9 @@ def main() -> int:
                 command.append("--cov-fail-under=0")
             print(" ".join(command), flush=True)
             started = time.monotonic()
-            try:
-                process = subprocess.run(
-                    command,
-                    cwd=ROOT,
-                    env=environment,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    stdout=subprocess.PIPE if evidence else None,
-                    stderr=subprocess.STDOUT if evidence else None,
-                )
-                code = process.returncode
-                output = process.stdout or ""
-            except OSError as error:
-                code, output = 127, str(error)
-                print(output, file=sys.stderr)
+            log = f"{task}-{number}.log"
+            code = run_command(command, environment, evidence / log if evidence else None)
             if evidence:
-                log = f"{task}-{number}.log"
-                (evidence / log).write_text(output, encoding="utf-8")
-                print(output, end="", flush=True)
                 results.append(
                     {
                         "task": task,

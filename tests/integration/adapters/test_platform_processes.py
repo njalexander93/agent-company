@@ -51,7 +51,7 @@ def test_hook_bounds_malformed_and_open_stdin(
         )
         assert invalid.returncode == status, invalid.stdout + invalid.stderr
         assert isinstance(json.loads(invalid.stdout), dict)
-        assert "INVALID_REQUEST" in invalid.stdout
+        assert "INVALID_REQUEST" in invalid.stdout + invalid.stderr
         assert "Traceback" not in invalid.stderr
     # Keep stdin open after a partial envelope. The supervisor must exit without waiting for EOF.
     with subprocess.Popen(
@@ -125,7 +125,13 @@ def test_supervisor_reaps_worker_and_preserves_failure_contract(
         timeout=6,
     )
     assert result.returncode == status, result.stdout + result.stderr
-    assert isinstance(json.loads(result.stdout), dict)
+    response = json.loads(result.stdout)
+    assert isinstance(response, dict)
+    # A valid pre-tool envelope needs an explicit denial, even when Codex exits successfully.
+    if host == "cursor":
+        assert response["permission"] == "deny"
+    else:
+        assert response["hookSpecificOutput"]["permissionDecision"] == "deny"
     if fault == "late_write":
         assert started.exists(), "The mutation worker must actually start before the deadline"
         assert "BUSY" in result.stderr
