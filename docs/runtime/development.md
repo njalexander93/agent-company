@@ -9,21 +9,23 @@ Runtime metadata accepts **Python >=3.12,<3.15**. The reproducible development i
 2. From the worktree root, create its own ignored environment:
 
    ```sh
-   poetry env use python3.14
-   make install
-   make validate-config
+   poetry env use /absolute/path/to/python3.14
+   poetry sync
+   poetry run python scripts/dev.py validate-config
    poetry run python --version
    ```
 
-3. Run `make check` before requesting review. Git and a POSIX environment are
-   required by the tests. The first supported workspace platform is macOS;
-   `fcntl` and directory-descriptor operations are not a Windows port.
+3. On Windows, pass the quoted path to `python.exe` to `poetry env use`.
+   Use a local NTFS checkout. On Linux and macOS, use a local filesystem with
+   the permissions and locking described in the [workspace contract](task-workspace.md#registration-and-validation).
+4. Run `poetry run python scripts/dev.py check` before requesting review.
+   Tests require Git. Make is optional; the Python command works across platforms.
 
 `poetry.toml` selects `.venv/` inside each worktree. Task data is shared by issue;
 Python environments are separate per worktree. Commit the lock and project
 configuration, never environments, caches or task data. Use `poetry sync` for
 reproduction; change and review the lock deliberately when updating dependencies.
-`make install` also installs `agent_company` in editable mode from `src/`. Run it
+`poetry sync` also installs `agent_company` in editable mode from `src/`. Run it
 after switching to this layout or creating a new worktree. Source edits then use
 the same package import without copying files into the environment.
 
@@ -51,10 +53,10 @@ The three hooks in [the local configuration](../../.pre-commit-config.yaml) reus
 the locked Poetry tools and [project rules](../../pyproject.toml):
 
 - Ruff lint and format checks examine staged Python files under `src/` and
-  `tests/` at commit time. They do not fix, format or stage files.
-- Mypy runs `make type-check` on every commit, including deletion-only changes.
+  `tests/` and `scripts/` at commit time. They do not fix, format or stage files.
+- Mypy runs `poetry run python scripts/dev.py type-check` on every commit, including deletion-only changes.
   It receives no staged filenames and checks the whole configured `src/` scope.
-- Tests and coverage run through `make check` before review, outside automatic
+- Tests and coverage run through `poetry run python scripts/dev.py check` before review, outside automatic
   pre-commit.
 
 For commit checks, the framework temporarily hides unstaged tracked edits and
@@ -64,11 +66,12 @@ in the working tree; it is not a staged-only check.
 See [pre-commit staged-content behavior](https://pre-commit.com/#pre-commit).
 
 If a check fails, fix the reported problem, review the diff, stage only intended
-changes and retry. Use `make format` explicitly when formatting is needed.
-Run `make check` before requesting review even when the commit hooks pass.
+changes and retry. Use `poetry run python scripts/dev.py format` explicitly when
+formatting is needed. Run the full `check` command before requesting review even
+when the commit hooks pass.
 
 An intentional bypass such as `git commit --no-verify` is not acceptance. Record
-its reason and any failures in the review handoff, then complete `make check`.
+its reason and any failures in the review handoff, then complete the full `check` command.
 Local hooks provide feedback; they do not enforce merges or install required
 server checks. See [Git's pre-commit contract](https://git-scm.com/docs/githooks#_pre_commit).
 
@@ -77,6 +80,7 @@ server checks. See [Git's pre-commit contract](https://git-scm.com/docs/githooks
 ```text
 src/agent_company/
   lifecycle/task_workspace.py       # shared lifecycle implementation and JSON entry point
+  lifecycle/_filesystem*.py         # platform filesystem implementations
   adapters/                         # native host adapters over the shared lifecycle
   resources/task_workspace/          # reusable roadmap and context templates
 tests/
@@ -84,6 +88,7 @@ tests/
   integration/                      # stateful lifecycle, Git and host-protocol checks
   support.py                        # shared stateful test support
   types.py                          # shared test types
+scripts/dev.py                      # portable contributor command runner
 ```
 
 Templates are loaded through Python package resources. Native adapters import
@@ -91,9 +96,17 @@ the shared lifecycle module; they do not maintain
 a second lifecycle implementation. The current hook commands still depend on a
 configured contributor checkout and its `.venv/`.
 
-The implemented local filesystem scope is macOS. Windows, Debian, Ubuntu and Fedora are future platform targets. Debian and
-Ubuntu require separate validation, and each host/platform combination needs its
-own evidence. The package layout establishes no additional operating-system support. The [host guide](host-hooks.md) describes available native adapters and their limits. Installed-host trust and callback delivery require separate evidence; protocol tests do not establish them. Empty platform placeholders are not part of this layout.
+The workspace targets macOS, native Windows and Linux. Native Windows uses local
+NTFS and does not require WSL. Windows-mounted paths in WSL are not interchangeable
+with a Linux filesystem; keep Linux worktrees in the Linux filesystem. See
+[Microsoft's filesystem guidance](https://learn.microsoft.com/en-us/windows/wsl/filesystems).
+Debian, Ubuntu and Fedora require separately identified evidence. A container run
+establishes its tested userland, not a different native kernel or installed host.
+
+Platform verification is in progress for this change. Do not infer a completed
+platform matrix from the package metadata. The [host guide](host-hooks.md) records
+host integration limits. Installed-host trust and callback delivery require
+separate evidence; protocol tests do not establish them.
 
 ## Editor setup
 
@@ -126,8 +139,9 @@ two shared settings/recommendation files.
 | `make build` | Build a local wheel under `dist/`; no upload or release. |
 | `make clean` | Remove generated build/test/tool output and Python caches; keep `.venv/` and `.task/`. |
 
-The underlying commands are in the root `Makefile`. Use them directly through
-Poetry if Make is unavailable. Pytest uses strict configuration/markers and
+Every Make target delegates to [scripts/dev.py](../../scripts/dev.py). For any
+command in the table, use `poetry run python scripts/dev.py <target>` on Windows
+or when Make is unavailable. The same command implementation runs on every OS. Pytest uses strict configuration/markers and
 importlib collection; tests carry `unit` or `integration` markers. Tests use
 temporary repositories and do not adopt or clean an active task workspace.
 
@@ -142,9 +156,12 @@ package; splitting test directories does not change the policy.
 local wheel. It does not supply a standalone installer, installed CLI, host setup
 or a supported end-user distribution. The release pipeline, artifact promotion
 and publication remain separate Controlled Runtime work. `make ci` is a local
-command alias; it does not install a GitHub Actions workflow or branch rule.
+command alias; it does not install a workflow or branch rule.
 
-CI/release-pipeline and branch-rule integration remain separate work. Local results do not establish GitHub enforcement or human acceptance.
+The narrowly scoped platform-validation workflow runs only on its designated
+validation branch and retains per-platform evidence. Required PR checks, release
+pipelines and branch-rule integration remain separate work. Local results do not
+establish GitHub enforcement or human acceptance.
 
 ## Hook interpreter and trust
 

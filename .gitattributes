@@ -1,0 +1,2 @@
+# Keep launchers and packaged text resources byte-consistent across checkouts.
+* text=auto eol=lf

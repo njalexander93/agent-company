@@ -3,10 +3,11 @@
 ## Usage
 
 Complete the [Python and Poetry setup](development.md), then run `make check`
-from the repository root. Tests create temporary non-bare repositories and linked worktrees. They do
-not clean or adopt an active task workspace. Python's standard library is the only
-runtime dependency. The first platform remains macOS/POSIX (`fcntl` and directory
-file descriptors); Windows ignore rules do not imply a Windows runtime port.
+from the repository root. Without Make, run `poetry run python scripts/dev.py check`.
+Tests create temporary non-bare repositories and linked worktrees. They do not clean
+or adopt an active task workspace. Python's standard library is the only runtime
+dependency. Use the platform filesystem requirements in the
+[contract](task-workspace.md#registration-and-validation); native Windows requires local NTFS.
 
 ### Explicit setup and bootstrap
 
@@ -38,15 +39,24 @@ file descriptors); Windows ignore rules do not imply a Windows runtime port.
    This checks supplied evidence; it does not independently authenticate a human
    decision or provider response. Cancellation records an explicit separate outcome.
 
-Construct the core CLI argument vector below with `shlex.join`. Pass it through the native host's documented bootstrap tool route in the [host guide](host-hooks.md). That guide owns shell/tool field requirements; the core request still binds the exact worktree, host, session and issue. Wrappers, redirection, substitutions and unrelated commands are not bootstrap exceptions.
+Construct bootstrap commands with the shared formatter. It selects the native
+Windows encoded request route for Codex/Cursor and preserves POSIX shell quoting
+for Unix hosts and Claude's Bash tool. Pass the result through the native host's
+[documented tool route](host-hooks.md#setup-and-bootstrap). The core request still
+binds the exact worktree, host, session and issue. Wrappers, redirection,
+substitutions and unrelated commands are not bootstrap exceptions.
 
 ```python
-repository_root = Path(absolute_repository_root)
-python_path = str(repository_root / ".venv" / "bin" / "python")
-absolute_core_path = str(repository_root / "src/agent_company/lifecycle/task_workspace.py")
-argv = [python_path, absolute_core_path, "--request-json", json.dumps(request)]
-command = shlex.join(argv)
+from agent_company.adapters.common import bootstrap_command
+
+command = bootstrap_command(request, host=request["host"])
 ```
+
+The helper uses this installed checkout's interpreter and entry point. Run it in
+the intended worktree's Poetry environment. Do not substitute a global interpreter
+or manually rewrite quoting. The Windows entry decodes one bounded canonical
+URL-safe base64 JSON request and calls the same lifecycle implementation; encoding
+does not confer permission or change the recovery allowlist.
 
 The startup prompt accepts exactly one standalone `Task: <issue-id>` line, for example `Task: ISSUE-1`. It
 records only that identity. A packet/coordinator assignment is still explicit;
@@ -174,7 +184,10 @@ intent. It never recursively removes the task root.
 
 Follow the [host guide](host-hooks.md) for native configuration, event coverage and trust. Direct adapter subprocess tests do not prove that an installed host loaded the candidate or invoked its callbacks. Child identity, async association and provider observations must be demonstrated on the actual supported path; otherwise retain explicit denial or uncertainty.
 
-OS metadata ignores do not imply runtime support on those operating systems. The utility uses macOS/POSIX filesystem mechanisms; other operating systems require their own implementation and validation.
+Filesystem support and host support are separate checks. Windows uses a native
+NTFS implementation; Linux and macOS use the POSIX implementation. A filesystem
+test does not demonstrate an installed host's trust or callback behavior. WSL
+results establish the tested Linux environment, not native Windows support.
 
 ### Recovery and completion semantics
 

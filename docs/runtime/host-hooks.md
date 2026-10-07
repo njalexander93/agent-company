@@ -8,14 +8,15 @@ This checkout supplies three native entry points over one lifecycle core:
 | Claude Code | `.claude/settings.json` | `agent_company.adapters.claude` | `claude-code` |
 | Cursor Agent | `.cursor/hooks.json` | `agent_company.adapters.cursor` | `cursor` |
 
-The supported environment is a local macOS checkout with its editable Poetry installation.
-Generic Claude chat, Cowork, cloud/remote agents, Cursor Tab, and other operating systems are
-not covered. Repository hooks are cooperative guardrails, not a sandbox or execution authority.
+The integration targets local macOS, Linux and native Windows checkouts with an
+editable Poetry installation. Native Windows requires Git for Windows and local
+NTFS storage. Generic Claude chat, Cowork, cloud/remote agents and Cursor Tab are
+not covered. Platform tests and installed-host acceptance are separate requirements. Repository hooks are cooperative guardrails, not a sandbox or execution authority.
 A successful local protocol test does not prove that a host loaded or trusted its configuration.
 
 ## Native protocols and failure semantics
 
-Sources checked on 2026-10-06:
+Protocol sources checked on 2026-10-06; launcher and shell references checked on 2026-10-07:
 
 - [Claude Code hook reference](https://code.claude.com/docs/en/hooks): stdin JSON carries
   `session_id`, `cwd`, and `hook_event_name`; tool events add `tool_use_id`, `tool_name`, and
@@ -41,20 +42,27 @@ The implementation's choices below are intentionally narrower than those host pr
 
 ## Setup and bootstrap
 
-1. Install this checkout's editable package and locked tools with Poetry. Every configuration
-   invokes the quoted `.venv/bin/python` and its host-specific file under `src/agent_company/adapters/`.
-   Missing setup exits 2. No system interpreter or shell `PYTHONPATH` fallback is accepted.
+1. Install this checkout's editable package and locked tools with Poetry. Hooks
+   use a fixed invocation-local Git alias to run `adapters/launch.sh` from the
+   repository root, including when the host starts in a nested directory.
+   The launcher selects `.venv/bin/python` on POSIX or
+   `.venv/Scripts/python.exe` under Git for Windows, then the selected host adapter.
+   Missing setup exits 2. There is no global interpreter fallback or persistent
+   Git alias. See [Git shell-alias behavior](https://git-scm.com/docs/git-config#Documentation/git-config.txt-alias).
 2. Review and activate project hooks using the host's own controls. This change does not alter
    global settings or grant trust. Keep existing permission prompts and restrictions enabled.
 3. Submit exactly one `Task: ISSUE-ID` line. The adapter records an explicit assignment for
    that host/session. It uses only an existing coordinator assignment or an explicitly registered
    startup packet; it does not invent scope or infer authority from prose.
-4. Recover with the exact canonical command produced by
-   `shlex.join([PYTHON, str(LIFECYCLE), "--request-json", json.dumps(request)])`.
-   `PYTHON` is the checkout's `.venv/bin/python`; `LIFECYCLE` is
-   `src/agent_company/lifecycle/task_workspace.py` under that checkout.
-   Include the adapter's host value and actual session identity in the request.
-   Claude uses `session_id`; Cursor uses `conversation_id` as the lifecycle `session_id`.
+4. Recover with `agent_company.adapters.common.bootstrap_command(request, host)`
+   from the intended worktree's Poetry environment. On POSIX and Claude's Bash
+   tool it emits the exact `shlex.join` lifecycle invocation. Native Windows
+   Codex/Cursor use a quoted PowerShell call to `adapters/bootstrap.py` with one
+   canonical encoded JSON argument. This avoids native argument differences
+   between Windows PowerShell 5.1 and PowerShell 7. The decoded request uses the
+   same lifecycle implementation and checks. Include the adapter's host value and
+   actual session identity. Claude uses `session_id`; Cursor uses
+   `conversation_id` as lifecycle `session_id`.
 5. Register/resume, read the assigned packet, and acknowledge its digest before ordinary tools.
    The recovery operation/field allowlist and assignment checks live in `adapters/common.py`.
    Wrappers, chaining, redirection, alternate interpreters, conflicting worktrees, and
@@ -64,11 +72,12 @@ The implementation's choices below are intentionally narrower than those host pr
 
 The Codex adapter accepts only `Bash` or `exec_command` for bootstrap. Supply the canonical
 command from step 4 as `command` (Bash) or `cmd` (exec_command). Explicitly set `login: false`
-and `shell: "/bin/sh"`. Run without a TTY and omit the `tty` field entirely; even `tty: false`
+and `shell: "/bin/sh"` on POSIX. Native Windows accepts `shell: "powershell.exe"`
+or `shell: "pwsh.exe"` with the helper's encoded command. Run without a TTY and omit the `tty` field entirely; even `tty: false`
 is outside the accepted field allowlist.
 
 For example, the `exec_command` tool input must have this shape, replacing the placeholder
-with the exact command from step 4:
+with the exact command from step 4 (use the corresponding Windows shell there):
 
 ```json
 {
@@ -83,6 +92,21 @@ The only accepted input fields are `command`, `cmd`, `login`, `shell`, `workdir`
 Use one command field. These requirements come from the
 [Codex bootstrap parser](../../src/agent_company/adapters/codex.py); they do not change host
 permission requirements. Claude and Cursor use their own native tool-input shapes.
+
+### Bounded hook processes
+
+Git must be available to the host. If Git cannot start or find the repository,
+the launcher does not run and Git's failure status is preserved. The host's own
+error policy then applies; do not assume exit 2. Once the launcher starts, missing
+environment or Python process failure maps to exit 2. Cursor's configured
+`failClosed` gates still apply. See the native failure semantics above.
+
+A supervisor reads bounded input and executes the selected adapter in a child
+process. At the deadline it kills and waits for that worker before returning a
+failure response. A timed-out worker cannot continue lifecycle writes after the
+supervisor reports the timeout. The shared lifecycle transaction handles interrupted
+writes on the next operation. This preserves each host's response and exit conventions;
+it does not change the host's own timeout or fail-open behavior.
 
 ### Claude foreground Bash
 
