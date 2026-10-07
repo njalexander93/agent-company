@@ -176,10 +176,8 @@ or a supported end-user distribution. The release pipeline, artifact promotion
 and publication remain separate Controlled Runtime work. `make ci` is a local
 command alias; it does not install a workflow or branch rule.
 
-The narrowly scoped platform-validation workflow runs only on its designated
-validation branch and retains per-platform evidence. Required PR checks, release
-pipelines and branch-rule integration remain separate work. Local results do not
-establish GitHub enforcement or human acceptance.
+GitHub workflows, required PR checks and branch-rule integration remain separate
+work. Local results do not establish GitHub enforcement or human acceptance.
 
 ## Hook interpreter and trust
 
