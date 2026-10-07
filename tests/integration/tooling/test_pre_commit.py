@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.platform_support import environment_python, link_directory, unlink_directory
 from tests.support import ROOT
 
 pytestmark = pytest.mark.integration
@@ -117,7 +118,7 @@ def hook_repo(tmp_path: Path) -> HookRepo:
         PATH=os.pathsep.join(
             path
             for path in os.environ["PATH"].split(os.pathsep)
-            if Path(path).resolve() != (Path(sys.prefix) / "bin").resolve()
+            if Path(path).resolve() != environment_python(Path(sys.prefix)).parent.resolve()
         ),
     )
     # Copy policy and source only; no active task data or live repository metadata enters.
@@ -132,23 +133,28 @@ def hook_repo(tmp_path: Path) -> HookRepo:
     ):
         shutil.copy2(ROOT / name, seed / name)
     shutil.copytree(ROOT / "src", seed / "src", ignore=shutil.ignore_patterns("__pycache__"))
+    shutil.copytree(
+        ROOT / "scripts", seed / "scripts", ignore=shutil.ignore_patterns("__pycache__")
+    )
     (seed / "tests").mkdir()
     (seed / "tests/hook_probe.py").write_text('"""Supply a staged hook fixture."""\n\nVALUE = 1\n')
     (seed / ".gitignore").write_text(".venv\n.mypy_cache/\n.ruff_cache/\n__pycache__/\n")
     setup = HookRepo(seed, env)
     setup.git("init", "-q")
+    setup.git("config", "core.autocrlf", "false")
     setup.git("add", ".")
     setup.git("commit", "-qm", "fixture baseline")
     # A fresh clone has no installed hooks until the explicit install command runs.
     root = tmp_path / "clone"
     setup.git("clone", "--quiet", "--no-local", str(seed), str(root))
     repo = HookRepo(root, env)
+    repo.git("config", "core.autocrlf", "false")
     assert not (root / ".git/hooks/pre-commit").exists()
-    (root / ".venv").symlink_to(Path(sys.prefix), target_is_directory=True)
-    result = repo.run(str(root / ".venv/bin/python"), "-m", "pre_commit", "install")
+    link_directory(root / ".venv", Path(sys.prefix))
+    result = repo.run(str(environment_python(root / ".venv")), "-m", "pre_commit", "install")
     assert result.returncode == 0, result.stdout
     installed = (root / ".git/hooks/pre-commit").read_text()
-    assert str(root / ".venv/bin/python") in installed
+    assert str(environment_python(root / ".venv")) in installed
     return repo
 
 
@@ -304,18 +310,22 @@ def test_installed_hook_fails_when_project_environment_is_absent(hook_repo: Hook
     """
     # Remove only this clone's environment symlink; preserve the actual development environment.
     hook_repo.stage("tests/hook_probe.py", '"""Supply a staged hook fixture."""\n\nVALUE = 2\n')
-    (hook_repo.root / ".venv").unlink()
+    unlink_directory(hook_repo.root / ".venv")
     # Prevent an unrelated globally installed framework from masking the missing clone setup.
-    commands = hook_repo.root.parent / "host-commands"
-    commands.mkdir()
-    for name in ("git", "bash", "dirname"):
-        executable = shutil.which(name, path=hook_repo.env["PATH"])
-        assert executable is not None
-        (commands / name).symlink_to(executable)
-    hook_repo.env["PATH"] = str(commands)
     before = hook_repo.snapshot()
     head = hook_repo.git("rev-parse", "HEAD")
-    result = hook_repo.run("git", "commit", "-m", "missing environment")
+    original_path = hook_repo.env["PATH"]
+    git = shutil.which("git", path=original_path)
+    assert git is not None
+    hook_repo.env["PATH"] = os.pathsep.join(
+        path
+        for path in original_path.split(os.pathsep)
+        if shutil.which("pre-commit", path=path) is None
+    )
+    try:
+        result = hook_repo.run(git, "commit", "-m", "missing environment")
+    finally:
+        hook_repo.env["PATH"] = original_path
     assert result.returncode != 0, result.stdout
     assert "pre-commit" in result.stdout and "not found" in result.stdout
     assert not (hook_repo.root / ".venv").exists()

@@ -1,0 +1,76 @@
+name: AGENT-1 platform validation
+
+# This temporary-branch validation is not product CI or a release pipeline.
+on:
+  push:
+    branches: [agent-1-platform-validation]
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.14.8'
+          architecture: x64
+      - name: Validate native platform and retain evidence
+        shell: python
+        env:
+          PRE_COMMIT_HOME: ${{ runner.temp }}/agent-1-pre-commit
+          EVIDENCE_DIR: ${{ runner.temp }}/agent-1-platform-evidence
+          PYTHONUTF8: '1'
+        run: |
+          import json, os, pathlib, platform, subprocess, sys, tempfile
+          evidence = pathlib.Path(os.environ['EVIDENCE_DIR'])
+          evidence.mkdir(parents=True, exist_ok=True)
+          expected = 'win32' if os.environ['RUNNER_OS'] == 'Windows' else 'linux'
+          assert sys.platform == expected, (sys.platform, expected)
+          assert sys.version_info[:3] == (3, 14, 8), sys.version
+          host = {'platform': platform.platform(), 'system': platform.system(),
+                  'python': sys.version, 'executable': sys.executable,
+                  'workspace': str(pathlib.Path.cwd()), 'temp': tempfile.gettempdir(),
+                  'git': subprocess.check_output(['git', '--version'], text=True).strip(),
+                  'sha': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()}
+          if sys.platform == 'win32':
+              fs = ['powershell.exe', '-NoProfile', '-Command',
+                    'Get-Volume | Select-Object DriveLetter,FileSystem,FileSystemLabel | ConvertTo-Json']
+          else:
+              host['distribution'] = platform.freedesktop_os_release()
+              fs = ['findmnt', '--json', '--target', str(pathlib.Path.cwd())]
+          observed = subprocess.run(fs, capture_output=True, text=True)
+          host['filesystem'] = {'command': fs, 'exit_code': observed.returncode,
+                                'stdout': observed.stdout, 'stderr': observed.stderr}
+          (evidence / 'host.json').write_text(json.dumps(host, indent=2), encoding='utf-8')
+          commands = [
+              [sys.executable, '-m', 'pip', 'install', '--disable-pip-version-check', 'poetry==2.4.2'],
+              ['poetry', 'env', 'use', sys.executable],
+              ['poetry', 'sync'],
+              ['poetry', 'run', 'python', 'scripts/dev.py', 'check', '--evidence-dir', str(evidence)],
+          ]
+          for index, command in enumerate(commands):
+              result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                      text=True, encoding='utf-8', errors='replace')
+              (evidence / f'bootstrap-{index}.log').write_text(result.stdout, encoding='utf-8')
+              print(result.stdout, flush=True)
+              if result.returncode:
+                  sys.exit(result.returncode)
+      - name: Retain success or failure evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: agent-1-${{ matrix.os }}-${{ github.sha }}
+          path: ${{ runner.temp }}/agent-1-platform-evidence
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7

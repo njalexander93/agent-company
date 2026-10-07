@@ -34,12 +34,13 @@ class LifecycleTests(Fixture):
             self.req("create", worktree=str(self.other), binding_generation=1),
         ]
         # Race both creators using separate processes.
-        with multiprocessing.get_context("fork").Pool(2) as pool:
+        with multiprocessing.get_context("spawn").Pool(2) as pool:
             results = pool.map(call_process, requests)
         # Check every result and the shared canonical view.
         for r in results:
             self.require_ok(r)
-        self.assertTrue((self.other / ".task/TEST-1").is_symlink())
+        view = self.other / ".task/TEST-1"
+        self.assertTrue(view.is_symlink() or view.is_junction())
         self.assertEqual((self.other / ".task/TEST-1").resolve(), self.root / ".task/TEST-1")
         # Create a different issue and verify its roadmap has a distinct identity.
         second = self.req("create", issue_id="TEST-2", issue_uuid="second", session_id="second")
@@ -153,7 +154,7 @@ class LifecycleTests(Fixture):
             for i in range(2)
         ]
         # Race the writes in separate processes under the shared issue lock.
-        with multiprocessing.get_context("fork").Pool(2) as pool:
+        with multiprocessing.get_context("spawn").Pool(2) as pool:
             results = pool.map(call_process, requests)
         # Require one winner and one explicit revision conflict.
         self.assertEqual(sum(r["ok"] for r in results), 1, results)
@@ -217,7 +218,7 @@ class LifecycleTests(Fixture):
         self.create()
         requests = [self.req("event", event_type="check", event={"code": "OK"}) for _ in range(12)]
         # Append concurrently to exercise shared event coordination.
-        with multiprocessing.get_context("fork").Pool(4) as pool:
+        with multiprocessing.get_context("spawn").Pool(4) as pool:
             # Require every concurrent append to complete successfully.
             for r in pool.map(call_process, requests):
                 self.require_ok(r)

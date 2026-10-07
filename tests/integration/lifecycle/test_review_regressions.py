@@ -8,6 +8,7 @@ from unittest import mock
 import pytest
 
 from agent_company.lifecycle import task_workspace as w
+from tests.platform_support import link_directory, unlink_directory
 from tests.support import Fixture, call_process
 from tests.types import JsonObject
 
@@ -179,7 +180,7 @@ class ReviewRegressions(Fixture):
             "reopen", expected_revision=self.state()["revision"], evidence=self.evidence()
         )
         # Race the two state transitions using separate processes.
-        with multiprocessing.get_context("fork").Pool(2) as pool:
+        with multiprocessing.get_context("spawn").Pool(2) as pool:
             results = pool.map(call_process, [cleanup, reopen])
         # Require one winner and inspect its committed storage state.
         self.assertEqual(sum(r["ok"] for r in results), 1, results)
@@ -204,11 +205,11 @@ class ReviewRegressions(Fixture):
         self.call("attach", worktree=str(self.other))
         # Replace that view with a link to an outside sentinel directory.
         view = self.other / ".task/TEST-1"
-        view.unlink()
+        unlink_directory(view)
         outside = Path(self.temp.name).resolve() / "outside"
         outside.mkdir()
         (outside / "keep").write_text("sentinel")
-        view.symlink_to(outside)
+        link_directory(view, outside)
         # Require readiness failure while preserving the outside sentinel.
         self.assertFalse(w.execute(self.req("ready", worktree=str(self.other)))["ok"])
         self.assertEqual((outside / "keep").read_text(), "sentinel")
