@@ -103,8 +103,9 @@ with a Linux filesystem; keep Linux worktrees in the Linux filesystem. See
 Debian, Ubuntu and Fedora require separately identified evidence. A container run
 establishes its tested userland, not a different native kernel or installed host.
 
-Platform verification is in progress for this change. Do not infer a completed
-platform matrix from the package metadata. The [host guide](host-hooks.md) records
+Record the exact operating system, interpreter and tested revision in the PR's
+validation evidence. Do not infer a completed platform matrix from package
+metadata. The [host guide](host-hooks.md) records
 host integration limits. Installed-host trust and callback delivery require
 separate evidence; protocol tests do not establish them.
 
@@ -158,7 +159,8 @@ other platform's code. Acceptance requires successful native Windows and Linux
 runs from the same unchanged commit, then
 `poetry run python scripts/combine_coverage.py <artifact-directory> --output-dir <output>`.
 The combination verifies the source revision, clean start/end state and successful
-test results before applying the configured 80% floor to the complete package.
+test results. The combining checkout must also remain clean and unchanged while
+applying the configured 80% floor to the complete package.
 It preserves each platform's original data and coverage context.
 
 Mypy checks production code, not test annotations. Runtime validation still checks untrusted JSON; annotations do not validate incoming data.

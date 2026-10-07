@@ -181,7 +181,8 @@ Before claiming actual-host acceptance, use a disposable registered repository a
 5. For Cursor with third-party imports enabled, one native mutation and no Claude-host binding.
 6. For Claude, inherited background-disable configuration and preserved permission prompting.
 
-No trusted host session, provider interaction, global configuration change, or platform-parity test
-was performed by the local protocol checks. Claude's host-level fail-open cases remain a boundary:
+Protocol tests do not establish trusted host loading or actual provider interaction.
+The PR's validation evidence identifies the native platforms and exact revision tested.
+Claude's host-level fail-open cases remain a boundary:
 the wrapper converts process failures to exit 2 and the Python deadline precedes the configured
 host timeout, but an externally killed or timed-out hook is not guaranteed enforcement.
