@@ -6,14 +6,9 @@ Host adapters call a shared lifecycle core for supported local task actions. It 
 
 ## Scope and governing inputs
 
-**V0** controls governing interpretation; **V2** supplies repository placement; **V6/RC-07** governs scoped context and verified archival; **RC-09** governs evidence/privacy. Their direct records are in the [baseline register](baseline.md#governing-source-register). This document defines local mechanics, not new organizational authority.
+Use the public [context and independence rules](baseline.md#context-and-independent-assurance), [evidence/privacy rules](baseline.md#evidence-and-privacy) and [handoff/outcome rules](baseline.md#handoffs-and-outcomes). This document defines local mechanics, not new organizational authority.
 
-Additional reading routes, relative to the shared vault:
-
-- `Specifications/Runtime/Context Packages.md` (`GUIDE-CONTEXT`): minimum sufficient inputs, provenance and staged disclosure.
-- `Assurance/Conformance/R6-C03.md`, `R6-C04.md`, `R6-C11.md`, `R6-C13.md`: isolation, contract integrity, completion and evidence scenarios. These are defined expectations, not passed tests.
-
-The first supported platform is one local non-bare Git repository and its linked worktrees on macOS. Separate clones, remote hosts, synchronization, exposed services and background scheduling are excluded. Generic task use must not require this team's private vault. A different host/platform architecture needs its own scope and validation.
+The first supported platform is one local non-bare Git repository and its linked worktrees on macOS. Separate clones, remote hosts, synchronization, exposed services and background scheduling are excluded. A different host/platform architecture needs its own scope and validation.
 
 ## Storage and identity
 
@@ -93,7 +88,7 @@ Terminal recording for a completed issue requires references to exact human acce
 
 One coordinator owns `roadmap.md`, shared summary and packet assignment. Participants own distinct named notes, recorded in control state, for example `context/implementation.md`. Every note/update carries author/participant, source references and digests, applicability, status, and superseded revision when relevant. No private reasoning is required. Ownership transfers are explicit, revision-checked and recorded.
 
-Packet manifests list reference ID, source locator, content digest/version, authority class, required/optional status, inclusion reason and allowed reader/stage. Required governing sources remain independently retrievable; summaries do not replace them. Refresh allowed references on resume/compaction and after material source changes. A stale required reference denies readiness for affected work. A packet checksum does not prove semantic completeness. [RC-07, GUIDE-CONTEXT]
+Packet manifests list reference ID, source locator, content digest/version, authority class, required/optional status, inclusion reason and allowed reader/stage. Required governing sources remain independently retrievable; summaries do not replace them. Refresh allowed references on resume/compaction and after material source changes. A stale required reference denies readiness for affected work. A packet checksum does not prove semantic completeness.
 
 Fresh-author and independent-review participants receive explicit allowlists. Do not expose the whole roadmap, events stream, archive, upstream author notes or research by default. An authorized factual safety notice can be added with provenance without disclosing upstream conclusions. Hook output contains only fixed control text, safe IDs and packet digests; task text is retrieved as data through scoped reads. Do not interpolate roadmap/note/prompt content into developer-level `additionalContext`.
 
@@ -113,7 +108,7 @@ Out-of-band edits are unsupported concurrent writes. Detect manifest mismatch be
 
 ## Events and retention
 
-`events.jsonl` is a **local diagnostic stream**, not the full authority ledger. Write UTF-8 JSON, one complete newline-terminated object per event. The coordinated writer assigns sequence and identifiers. Required workspace-transition events commit with their local operation; optional host observations may fail without stopping unrelated work. [RC-09]
+`events.jsonl` is a **local diagnostic stream**, not the full authority ledger. Write UTF-8 JSON, one complete newline-terminated object per event. The coordinated writer assigns sequence and identifiers. Required workspace-transition events commit with their local operation; optional host observations may fail without stopping unrelated work.
 
 Version 1 event fields:
 
@@ -153,7 +148,7 @@ The command-hook process does not inherit the foreground connector session. Prov
 4. The verifier parses the structured payload, decodes every file, checks byte lengths/digests, validates the repository/issue/snapshot manifest, and compares against the frozen snapshot. Reacquire the issue lock and require the current payload revision/digests to match. A provider-normalized Markdown wrapper may differ; decoded archived bytes may not.
 5. Record the verified locator, provider version, payload digest, manifest digest, event prefix/head, snapshot revision and read-back time outside the disposable directory. This receipt authorizes only the specified local eligibility check; it is not human acceptance. If the receipt/snapshot is stale, keep the workspace.
 
-The archive document contains a readable outcome/goal/constraints/progress/blockers/source/handoff history plus a versioned structured manifest and reconstructable payload. For exactness, encode UTF-8 roadmap/context/event bytes in base64 inside a fenced JSON object. Each entry carries relative path, byte length, SHA-256 and disclosure scope. Digests use original bytes. Sensitive material must be excluded before export, not merely encoded. Research stays at its durable vault source; large external evidence needs a verified durable reference and scope.
+The archive document contains a readable outcome/goal/constraints/progress/blockers/source/handoff history plus a versioned structured manifest and reconstructable payload. For exactness, encode UTF-8 roadmap/context/event bytes in base64 inside a fenced JSON object. Each entry carries relative path, byte length, SHA-256 and disclosure scope. Digests use original bytes. Sensitive material must be excluded before export, not merely encoded. Research stays at its access-controlled durable source; large external evidence needs a verified durable reference and scope.
 
 Use a conservative 256 KiB export-document limit as a **local implementation limit**, not a claimed Linear limit. Larger payloads require numbered issue documents plus a root manifest of document IDs/digests and read-back of every part. If the provider rejects size/content, preserve local data and return `ARCHIVE_PENDING`; never truncate or silently omit meaningful history. Validate actual connector behavior and multipart reconstruction separately from local provider fixtures.
 
@@ -195,7 +190,7 @@ No general shell, file read/write, web search, MCP wildcard or “read-only comm
 
 Local lifecycle checks must cover worktree sharing/isolation, identity/path validation, scoped context, concurrent writes, crash recovery, pending-operation retention, exact archive reconstruction and cleanup/restore races. Host checks must separately establish actual callback delivery, legitimate trust, allowed bootstrap, denied covered actions, async completion and child identity. Provider checks need real save/read-back and reconstruction in addition to local fixtures.
 
-Retain exact candidate, inputs, failures, repairs, reviewer scope and limitations in the delivery record outside product documentation. Human-reviewed publication does not activate policy or replace exact governance authorization. See the [baseline publication rule](baseline.md#confirmed-authoring-and-publication-decisions).
+Retain exact candidate, inputs, failures, repairs, reviewer scope and limitations in the delivery record outside product documentation. Human-reviewed publication does not activate policy or replace exact governance authorization. See the [baseline publication rule](baseline.md#authoring-and-publication-rules).
 
 ## Usage
 
