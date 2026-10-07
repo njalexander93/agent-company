@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
 import shlex
-import signal
-import sys
 import uuid
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import NoReturn
 
+from agent_company.adapters import bootstrap as encoded_bootstrap
+from agent_company.adapters import runner
 from agent_company.lifecycle import task_workspace as core
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -51,7 +51,8 @@ COMMON_FIELDS = {
     "expected_revision",
 }
 LIFECYCLE = ROOT / "src/agent_company/lifecycle/task_workspace.py"
-PYTHON = str(ROOT / ".venv" / "bin" / "python")
+WINDOWS_BOOTSTRAP = ROOT / "src/agent_company/adapters/bootstrap.py"
+PYTHON = str(ROOT / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python"))
 
 
 def request_for(event: core.JSONObject, operation: str, host: str) -> core.JSONObject:
@@ -233,6 +234,71 @@ def prompt(event: core.JSONObject, host: str) -> core.JSONObject:
     }
 
 
+def bootstrap_command(request: core.JSONObject, host: str) -> str:
+    """Format the sole bootstrap spelling for this platform and host shell.
+
+    Args:
+        request: Explicit lifecycle request with host and session identities.
+        host: Native adapter identity, determining Bash versus PowerShell syntax.
+
+    Returns:
+        A canonical command containing no expandable shell arguments.
+
+    Raises:
+        ValueError: If an argument contains shell-control or smart-quote characters.
+    """
+    if os.name != "nt" or host == "claude-code":
+        command = shlex.join([PYTHON, str(LIFECYCLE), "--request-json", json.dumps(request)])
+    else:
+        encoded = base64.urlsafe_b64encode(json.dumps(request).encode()).decode("ascii")
+        argv = [PYTHON, str(WINDOWS_BOOTSTRAP), "--request-base64", encoded]
+        if any(any(c in arg for c in '\r\n\0"‘’“”') for arg in argv):
+            raise ValueError("Unsupported PowerShell argument")
+        command = "& " + " ".join("'" + arg.replace("'", "''") + "'" for arg in argv)
+    if len(command.encode()) > 65536 or any(c in command for c in "\r\n\0"):
+        raise ValueError("Unsupported bootstrap command size or control character")
+    return command
+
+
+def bootstrap_request(command: str, host: str, python: str, lifecycle: Path) -> core.JSONObject:
+    """Parse only the exact literal invocation for the selected platform shell.
+
+    Args:
+        command: Observed tool command, never evaluated.
+        host: Native adapter identity.
+        python: Exact checkout interpreter.
+        lifecycle: Exact POSIX lifecycle entry point.
+
+    Returns:
+        The decoded request after canonical argument checks.
+
+    Raises:
+        ValueError: If shell syntax is not canonical.
+        core.WorkspaceError: If the encoded request is malformed.
+    """
+    if any(character in command for character in "\r\n\0"):
+        raise ValueError("Control character in command")
+    if os.name == "nt" and host != "claude-code":
+        token = r"'(?:[^'\r\n\x00]|'')*'"
+        if not re.fullmatch(r"& " + " ".join([token] * 4), command):
+            raise ValueError("Noncanonical PowerShell command")
+        argv = [match[1:-1].replace("''", "'") for match in re.findall(token, command[2:])]
+        if any(any(c in arg for c in '"‘’“”') for arg in argv):
+            raise ValueError("Unsupported PowerShell quoting")
+        if argv[:3] != [python, str(WINDOWS_BOOTSTRAP), "--request-base64"]:
+            raise ValueError("Unexpected Windows bootstrap entry")
+        return encoded_bootstrap.decode_request(argv[3])
+    argv = shlex.split(command)
+    if len(argv) != 4 or argv[:3] != [python, str(lifecycle), "--request-json"]:
+        raise ValueError("Unexpected bootstrap entry")
+    if command != shlex.join(argv):
+        raise ValueError("Noncanonical shell command")
+    request = core.strict_json(argv[3])
+    if not isinstance(request, dict):
+        raise ValueError("Invalid request object")
+    return request
+
+
 def canonical_bootstrap(
     event: core.JSONObject,
     command: object,
@@ -257,18 +323,7 @@ def canonical_bootstrap(
     if not isinstance(command, str) or len(command.encode()) > 65536:
         return False
     try:
-        # Parse shell arguments for exact interpreter, entry point and JSON matching.
-        argv = shlex.split(command)
-        # Require one reviewed interpreter invocation with one JSON argument.
-        if len(argv) != 4 or argv[:3] != [python, str(lifecycle), "--request-json"]:
-            return False
-        # Reject shell spellings that could introduce expansion or wrappers.
-        if command != shlex.join(argv):
-            return False
-        # Decode the sole lifecycle request before checking its allowed fields.
-        request = core.strict_json(argv[3])
-        if not isinstance(request, dict):
-            return False
+        request = bootstrap_request(command, host, python, lifecycle)
         # Select the operation-specific bootstrap field policy.
         operation = request.get("operation")
         # Limit unready sessions to the documented recovery operation schemas.
@@ -612,8 +667,9 @@ def recovery(code: str, host: str) -> str:
         A bounded explanation of the retained state and allowed recovery route.
     """
     return (
-        f"TASK_WORKSPACE_NOT_READY: {code}. Use the exact project Python lifecycle "
-        f"--request-json command with host={host} and the observed session ID to diagnose, "
+        f"TASK_WORKSPACE_NOT_READY: {code}. Use adapters.common.bootstrap_command "
+        f"to format the exact project lifecycle command with host={host} and the observed "
+        "session ID to diagnose, "
         "register, resume, read and acknowledge the assigned packet. "
         "Unsupported child/provider/background work must use a separately verified route. "
         "Pending work is retained; no completion or readiness was inferred."
@@ -647,36 +703,4 @@ def run_native(
     Returns:
         Zero for a translated event; two for parser, timeout, or protocol failure.
     """
-    name = ""
-
-    def timeout(*_: object) -> NoReturn:
-        """Interrupt a hook before the host's longer external timeout.
-
-        Args:
-            _: Unused signal-handler arguments.
-
-        Raises:
-            core.WorkspaceError: Always, with the bounded BUSY diagnostic.
-        """
-        raise core.WorkspaceError("BUSY")
-
-    # Keep output bounded and contain normal exceptions before the host's fail-open boundary.
-    signal.signal(signal.SIGALRM, timeout)
-    signal.setitimer(signal.ITIMER_REAL, 2.0)
-    status = 0
-    try:
-        raw = sys.stdin.buffer.read(1024 * 1024 + 1)
-        core.require(len(raw) <= 1024 * 1024, "SIZE_LIMIT")
-        event = core.strict_json(raw)
-        core.require(isinstance(event, dict), "INVALID_REQUEST")
-        name = native_token(event.get("hook_event_name"))
-        result = handler(event)
-    except Exception as error:
-        code = error.code if isinstance(error, core.WorkspaceError) else "RECOVERY_REQUIRED"
-        result = failure(name, code)
-        status = 2
-        print(recovery(code, "the selected native host"), file=sys.stderr)
-    finally:
-        signal.setitimer(signal.ITIMER_REAL, 0)
-    print(json.dumps(result, separators=(",", ":")))
-    return status
+    return runner.run(handler, failure)

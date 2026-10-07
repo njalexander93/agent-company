@@ -3,57 +3,57 @@
   "hooks": {
     "sessionStart": [
       {
-        "command": "task_workspace_root=$(git rev-parse --show-toplevel) || exit 2; if [ ! -x \"$task_workspace_root/.venv/bin/python\" ]; then printf '%s\\n' 'TASK_WORKSPACE_SETUP_REQUIRED: Run Poetry setup in this checkout.' >&2; exit 2; fi; \"$task_workspace_root/.venv/bin/python\" \"$task_workspace_root/src/agent_company/adapters/cursor.py\" || exit 2",
+        "command": "git -c alias.task-workspace-hook=!./src/agent_company/adapters/launch.sh task-workspace-hook cursor",
         "timeout": 10
       }
     ],
     "beforeSubmitPrompt": [
       {
-        "command": "task_workspace_root=$(git rev-parse --show-toplevel) || exit 2; if [ ! -x \"$task_workspace_root/.venv/bin/python\" ]; then printf '%s\\n' 'TASK_WORKSPACE_SETUP_REQUIRED: Run Poetry setup in this checkout.' >&2; exit 2; fi; \"$task_workspace_root/.venv/bin/python\" \"$task_workspace_root/src/agent_company/adapters/cursor.py\" || exit 2",
+        "command": "git -c alias.task-workspace-hook=!./src/agent_company/adapters/launch.sh task-workspace-hook cursor",
         "timeout": 10,
         "failClosed": true
       }
     ],
     "preToolUse": [
       {
-        "command": "task_workspace_root=$(git rev-parse --show-toplevel) || exit 2; if [ ! -x \"$task_workspace_root/.venv/bin/python\" ]; then printf '%s\\n' 'TASK_WORKSPACE_SETUP_REQUIRED: Run Poetry setup in this checkout.' >&2; exit 2; fi; \"$task_workspace_root/.venv/bin/python\" \"$task_workspace_root/src/agent_company/adapters/cursor.py\" || exit 2",
+        "command": "git -c alias.task-workspace-hook=!./src/agent_company/adapters/launch.sh task-workspace-hook cursor",
         "timeout": 10,
         "failClosed": true
       }
     ],
     "postToolUse": [
       {
-        "command": "task_workspace_root=$(git rev-parse --show-toplevel) || exit 2; if [ ! -x \"$task_workspace_root/.venv/bin/python\" ]; then printf '%s\\n' 'TASK_WORKSPACE_SETUP_REQUIRED: Run Poetry setup in this checkout.' >&2; exit 2; fi; \"$task_workspace_root/.venv/bin/python\" \"$task_workspace_root/src/agent_company/adapters/cursor.py\" || exit 2",
+        "command": "git -c alias.task-workspace-hook=!./src/agent_company/adapters/launch.sh task-workspace-hook cursor",
         "timeout": 10
       }
     ],
     "postToolUseFailure": [
       {
-        "command": "task_workspace_root=$(git rev-parse --show-toplevel) || exit 2; if [ ! -x \"$task_workspace_root/.venv/bin/python\" ]; then printf '%s\\n' 'TASK_WORKSPACE_SETUP_REQUIRED: Run Poetry setup in this checkout.' >&2; exit 2; fi; \"$task_workspace_root/.venv/bin/python\" \"$task_workspace_root/src/agent_company/adapters/cursor.py\" || exit 2",
+        "command": "git -c alias.task-workspace-hook=!./src/agent_company/adapters/launch.sh task-workspace-hook cursor",
         "timeout": 10
       }
     ],
     "preCompact": [
       {
-        "command": "task_workspace_root=$(git rev-parse --show-toplevel) || exit 2; if [ ! -x \"$task_workspace_root/.venv/bin/python\" ]; then printf '%s\\n' 'TASK_WORKSPACE_SETUP_REQUIRED: Run Poetry setup in this checkout.' >&2; exit 2; fi; \"$task_workspace_root/.venv/bin/python\" \"$task_workspace_root/src/agent_company/adapters/cursor.py\" || exit 2",
+        "command": "git -c alias.task-workspace-hook=!./src/agent_company/adapters/launch.sh task-workspace-hook cursor",
         "timeout": 10
       }
     ],
     "stop": [
       {
-        "command": "task_workspace_root=$(git rev-parse --show-toplevel) || exit 2; if [ ! -x \"$task_workspace_root/.venv/bin/python\" ]; then printf '%s\\n' 'TASK_WORKSPACE_SETUP_REQUIRED: Run Poetry setup in this checkout.' >&2; exit 2; fi; \"$task_workspace_root/.venv/bin/python\" \"$task_workspace_root/src/agent_company/adapters/cursor.py\" || exit 2",
+        "command": "git -c alias.task-workspace-hook=!./src/agent_company/adapters/launch.sh task-workspace-hook cursor",
         "timeout": 10
       }
     ],
     "sessionEnd": [
       {
-        "command": "task_workspace_root=$(git rev-parse --show-toplevel) || exit 2; if [ ! -x \"$task_workspace_root/.venv/bin/python\" ]; then printf '%s\\n' 'TASK_WORKSPACE_SETUP_REQUIRED: Run Poetry setup in this checkout.' >&2; exit 2; fi; \"$task_workspace_root/.venv/bin/python\" \"$task_workspace_root/src/agent_company/adapters/cursor.py\" || exit 2",
+        "command": "git -c alias.task-workspace-hook=!./src/agent_company/adapters/launch.sh task-workspace-hook cursor",
         "timeout": 10
       }
     ],
     "subagentStart": [
       {
-        "command": "task_workspace_root=$(git rev-parse --show-toplevel) || exit 2; if [ ! -x \"$task_workspace_root/.venv/bin/python\" ]; then printf '%s\\n' 'TASK_WORKSPACE_SETUP_REQUIRED: Run Poetry setup in this checkout.' >&2; exit 2; fi; \"$task_workspace_root/.venv/bin/python\" \"$task_workspace_root/src/agent_company/adapters/cursor.py\" || exit 2",
+        "command": "git -c alias.task-workspace-hook=!./src/agent_company/adapters/launch.sh task-workspace-hook cursor",
         "timeout": 10,
         "failClosed": true
       }

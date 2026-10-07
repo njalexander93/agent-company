@@ -4,12 +4,11 @@
 from __future__ import annotations
 
 import json
-import signal
+import os
 import sys
 from pathlib import Path
-from typing import NoReturn
 
-from agent_company.adapters import common
+from agent_company.adapters import common, runner
 from agent_company.lifecycle import task_workspace as core
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -35,7 +34,7 @@ def denial(code: str) -> core.JSONObject:
             "permissionDecision": "deny",
             "permissionDecisionReason": "TASK_WORKSPACE_NOT_READY: "
             + code
-            + ". Use the exact lifecycle --request-json command for the assigned session.",
+            + ". Use adapters.common.bootstrap_command for the assigned session.",
         }
     }
 
@@ -92,11 +91,16 @@ def bootstrap(event: core.JSONObject, ready: bool = False) -> bool:
         return False
     # Select and decode the documented command input.
     args = event.get("tool_input", {})
+    command_field = "command" if event["tool_name"] == "Bash" else "cmd"
+    other_field = "cmd" if command_field == "command" else "command"
     if (
         not isinstance(args, dict)
+        or command_field not in args
+        or other_field in args
         or args.get("tty")
         or args.get("login") is not False
-        or args.get("shell") != "/bin/sh"
+        or args.get("shell")
+        not in ({"powershell.exe", "pwsh.exe"} if os.name == "nt" else {"/bin/sh"})
         or not set(args)
         <= {
             "command",
@@ -113,7 +117,7 @@ def bootstrap(event: core.JSONObject, ready: bool = False) -> bool:
     ):
         return False
     # Select and decode the documented command input.
-    command = args.get("command", args.get("cmd"))
+    command = args[command_field]
     return common.canonical_bootstrap(event, command, "codex", ready, PYTHON, LIFECYCLE)
 
 
@@ -395,52 +399,30 @@ def handle(event: core.JSONObject) -> core.JSONObject:
     return {}
 
 
-def main() -> int:
-    """Run one hook with bounded input, execution time and event-specific error output.
+def failure(name: str, code: str) -> core.JSONObject:
+    """Render Codex's existing event-specific failure response.
+
+    Args:
+        name: Native hook event name.
+        code: Bounded diagnostic code.
 
     Returns:
-        Zero after emitting a supported JSON response; failures become bounded diagnostics.
+        A denial for admission events, or an advisory diagnostic.
     """
-    name = None
+    if name == "PreToolUse":
+        return denial(code)
+    if name == "UserPromptSubmit":
+        return {"decision": "block", "reason": "TASK_WORKSPACE_NOT_READY: " + code}
+    return {"systemMessage": "TASK_WORKSPACE_NOT_READY: " + code}
 
-    def timeout(*_: object) -> NoReturn:
-        """Interrupt a hook that exceeds its process-local execution deadline.
 
-        Args:
-            _: Signal handler arguments; no payload is inspected.
+def main() -> int:
+    """Run one supervised Codex hook using its existing exit-zero response convention.
 
-        Raises:
-            core.WorkspaceError: Always, with the bounded BUSY diagnostic.
-        """
-        raise core.WorkspaceError("BUSY")
-
-    # Bound the entire hook, including input reads and filesystem checks, to two seconds.
-    signal.signal(signal.SIGALRM, timeout)
-    signal.setitimer(signal.ITIMER_REAL, 2.0)
-    try:
-        # Reject oversized input before parsing or dispatching the host event.
-        raw = sys.stdin.buffer.read(1024 * 1024 + 1)
-        core.require(len(raw) <= 1024 * 1024, "SIZE_LIMIT")
-        event = core.strict_json(raw)
-        name = event.get("hook_event_name")
-        result = handle(event)
-    # Deny pre-tool failures; report other failures using the event-specific response shape.
-    except Exception as error:
-        code = error.code if isinstance(error, core.WorkspaceError) else "RECOVERY_REQUIRED"
-        result = (
-            denial(code)
-            if name == "PreToolUse"
-            else (
-                {"decision": "block", "reason": "TASK_WORKSPACE_NOT_READY: " + code}
-                if name == "UserPromptSubmit"
-                else {"systemMessage": "TASK_WORKSPACE_NOT_READY: " + code}
-            )
-        )
-    finally:
-        # Cancel the alarm even when decoding or hook handling fails.
-        signal.setitimer(signal.ITIMER_REAL, 0)
-    print(json.dumps(result, separators=(",", ":")))
-    return 0
+    Returns:
+        Zero after emitting the supported event response, including bounded failures.
+    """
+    return runner.run(handle, failure, error_status=0)
 
 
 if __name__ == "__main__":
