@@ -42,6 +42,10 @@ The implementation's choices below are intentionally narrower than those host pr
 
 ## Setup and bootstrap
 
+For issue sequencing, approval and assigned step threads, use the
+[canonical contributor procedure](contributor-workflow.md). Hook setup supplies
+local lifecycle integration, not proposal approval.
+
 1. Install this checkout's editable package and locked tools with Poetry. Hooks
    use a fixed invocation-local Git alias to run `adapters/launch.sh` from the
    repository root, including when the host starts in a nested directory.
@@ -51,6 +55,10 @@ The implementation's choices below are intentionally narrower than those host pr
    Git alias. See [Git shell-alias behavior](https://git-scm.com/docs/git-config#Documentation/git-config.txt-alias).
 2. Review and activate project hooks using the host's own controls. This change does not alter
    global settings or grant trust. Keep existing permission prompts and restrictions enabled.
+   Record loading/activation evidence separately from observed callbacks. An enabled
+   definition alone is insufficient evidence of trusted execution. If trust or callback
+   delivery is unverified, retain that limit; a successful manual lifecycle call does
+   not demonstrate a native callback or identify a runtime defect.
 3. Submit exactly one `Task: ISSUE-ID` line. The adapter records an explicit assignment for
    that host/session. It uses only an existing coordinator assignment or an explicitly registered
    startup packet; it does not invent scope or infer authority from prose.
@@ -63,7 +71,12 @@ The implementation's choices below are intentionally narrower than those host pr
    same lifecycle implementation and checks. Include the adapter's host value and
    actual session identity. Claude uses `session_id`; Cursor uses
    `conversation_id` as lifecycle `session_id`.
-5. Register/resume, read the assigned packet, and acknowledge its digest before ordinary tools.
+5. Register the selected checkout if needed; attach or resume existing issue state.
+   The master establishes explicit coordination and installs reader-specific packets.
+   Assigned steps attach with their verified actual host/session identity and own scope.
+   Follow [explicit lifecycle setup](task-workspace-usage.md#explicit-setup-and-bootstrap)
+   for coordinator assignment and payload-relative note locators. Read the installed
+   packet, acknowledge its exact digest and verify `ready` before ordinary tools.
    The recovery operation/field allowlist and assignment checks live in `adapters/common.py`.
    Wrappers, chaining, redirection, alternate interpreters, conflicting worktrees, and
    cross-host/session bootstrap requests receive no recovery exemption.

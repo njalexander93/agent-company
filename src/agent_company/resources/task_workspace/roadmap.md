@@ -1,48 +1,61 @@
 # [{{issue_id}}] <Task title>
 
-**Status:** Active. Creation implies no acceptance or completion.
-**Owner:** <Coordinator and participating owners>
-**Branch/base:** <Verified working branch and base>
+**Proposal status:** Proposed / awaiting explicit approval.
+**Proposal revision:** <Exact revision presented for approval>
+**Approval record:** <Pending; then attributable human approval, approved revision and evidence>
+**Lifecycle disposition:** <Observed value; `active` is not human approval>
+**Storage state:** <Observed value; workspace presence is not approval>
+**Master:** <Verified host/session identity; explicit lifecycle coordinator>
+**Issue:** <Identifier, immutable provider identity, observed assignee and status>
+**Branch/base:** <Verified checkout, working branch and base>
 
-### Scope Notes
+## Scope and approval
 
-- **Goal:** <Assigned outcome and acceptance boundary>
-- **Constraints:** <Permitted scope, exclusions and required approvals>
-- **Sources:** <Governing references with retrievable identities>
-- **Blockers:** <Unresolved requirements and responsible owner>
+- **Objective and criteria:** <Assigned outcome and requirement IDs>
+- **Constraints:** <Permitted scope, exclusions and delivery obligations>
+- **Sources:** <Governing references and exact candidate/source identities>
+- **Existing progress:** <Verified prior outputs, approvals and unresolved work>
+- **Blockers:** <Affected work, responsible owner and next action>
 
-### Execution Coordination
+Follow the canonical contributor procedure at `docs/runtime/contributor-workflow.md`
+in the selected checkout for proposal approval, dispatch, verification and delivery.
+The coordinator owns this roadmap. Preserve existing bytes and progress on attach
+or resume; template changes apply to newly created workspaces only. Record approved
+scope revisions explicitly. Lifecycle readiness and packet acknowledgment do not
+establish human approval.
 
-The coordinator owns this roadmap. Participants return scoped evidence and handoffs.
-Preserve recorded progress when attaching or resuming. Mark a checkbox only when
-its cited evidence supports completion. Expand the numbered steps for the task.
+## Numbered steps
 
-### 1. Establish Scope and Inputs
+Replace the step below with the proposed numbered steps. Each approved step has
+one fresh thread with verified actual identity and its own bounded packet.
 
-**Requirements:** <Applicable requirement IDs and sources>
+### 1. <Deliverable or outcome>
 
-- [ ] Confirm the goal, constraints, ownership and working base.
-- [ ] Verify required inputs and record any access or authority blocker.
+**Status:** <Proposed / assigned / awaiting verification / verified / blocked>
+**Scope:** <Requirements, permitted inputs and owned output paths>
+**Dependencies:** <Prerequisite steps and master-verified outputs; or none>
+**Outputs:** <Concrete artifacts and exact candidate identities>
+**Verification:** <Checks, review criteria and required evidence>
+**Exit criteria:** <Observable conditions the master must verify>
+**Thread owner:** <Verified actual host/session identity; pending until dispatch>
+**Packet:** <Scope/digest, binding generation and readiness evidence>
 
-**Exit evidence:** <Verified inputs, source identities and blocker dispositions>
-**Next handoff:** <Owner, permitted inputs and required output>
+- [ ] Produce the scoped outputs and verification evidence.
+- [ ] Return the handoff; master verifies every exit criterion.
 
-### 2. Produce and Verify the Deliverable
+**Handoff/evidence:** <Artifact revisions, checks/results, limits and unresolved findings>
+**Master verification:** <Accepted evidence or required corrections>
+**Continuation:** <Next eligible step, owner, permitted inputs and next action>
 
-**Depends on:** Step 1's usable inputs. **Requirements:** <Applicable IDs>
+## Delivery and closure
 
-- [ ] Produce the assigned deliverable within the permitted scope.
-- [ ] Record relevant checks, independent review, repairs and remaining limitations.
+**Current candidate:** <Revision, exact diff/manifest including untracked files>
+**Checks and limits:** <Commands/results, tested platforms, remaining evidence>
+**PR and review:** <PR into main, verified In Review state and lifecycle checkpoint>
+**Merge and acceptance:** <Actual merge, human acceptance and verified Merged state>
+**Obligations and completion:** <Evidence for all obligations and verified Done state>
+**Retention/disposition:** <Durable evidence, scratch cleanup or unresolved retention>
+**Next action:** <Continue the approved roadmap until verified delivery or an owned blocker>
 
-**Exit evidence:** <Candidate identity, results and retrievable evidence>
-**Next handoff:** <Reviewer or successor, permitted inputs and unresolved questions>
-
-### 3. Prepare Acceptance and Handoff
-
-**Depends on:** Step 2's reviewed candidate. **Requirements:** <Acceptance obligations>
-
-- [ ] Verify the final candidate and retain evidence before disposing of working context.
-- [ ] Obtain required acceptance and record the actual outcome; retain unresolved work.
-
-**Exit evidence:** <Acceptance/outcome references or explicit open conditions>
-**Next handoff:** <Next owner, required inputs and remaining action>
+Child completion is a handoff, not issue closure. Use the canonical procedure and
+lifecycle completion requirements before recording terminal disposition or cleanup.

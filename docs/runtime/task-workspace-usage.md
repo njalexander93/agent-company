@@ -1,5 +1,11 @@
 # Task-workspace usage
 
+For issue start/resume and assigned steps, follow the [canonical contributor
+procedure](contributor-workflow.md). This guide describes lifecycle mechanics;
+`active` disposition, present storage and readiness do not approve implementation.
+New roadmap templates start **Proposed / awaiting explicit approval**. Attach and
+resume preserve existing roadmap bytes, including recorded progress and approval.
+
 ## Usage
 
 Complete the [Python and Poetry setup](development.md), then run `make check-local`
@@ -25,9 +31,15 @@ dependency. Use the platform filesystem requirements in the
    and optional `owned_paths`. Each packet entry has `id`, `locator`, `sha256`,
    `required`, `authority`, `reason`, `stage`, and `reader`. `reader` is the exact
    participant key. A locator is a safe payload path or an explicit absolute
-   source path. Every required file is checked again by `ready`.
+   source path. For managed notes use payload-relative locators such as
+   `roadmap.md` or `context/<name>.md`. Absolute paths through an issue symlink
+   are rejected by the external source reader. Every required file is checked
+   again by `ready`. The master explicitly owns coordination; an assigned step
+   attaches to its own installed packet using its actual host/session identity.
 4. Use `read`, then `acknowledge` with its exact `packet_digest`. This establishes
-   delivery facts only. The next covered tool checks readiness. Scope replacement
+   delivery facts only. Call `ready` to verify current readiness; the next covered
+   tool also checks it. After required source edits, request a coordinator refresh,
+   then read and acknowledge the replacement digest before dependent work. Scope replacement
    invalidates acknowledgment even if the packet text happens to be unchanged.
 5. Updates require the returned `binding_generation`, current `expected_revision`,
    `path`, `old_digest`, UTF-8 `content`, and `provenance` containing `sources`,
