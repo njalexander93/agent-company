@@ -12,7 +12,7 @@ from scripts import dev
 from tests.support import ROOT
 
 pytestmark = pytest.mark.integration
-WORKFLOW = ROOT / ".github/workflows/pr-pre-merge.yml"
+WORKFLOW = ROOT / ".github/workflows/pr-checks.yml"
 
 
 def test_workflow_exposes_five_checks_without_masking_failed_steps() -> None:
