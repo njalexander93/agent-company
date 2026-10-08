@@ -33,6 +33,7 @@ COMMANDS: dict[str, list[list[str]]] = {
     "test-integration": [["poetry", "run", "pytest", "tests/integration"]],
     "build": [["poetry", "build", "--format", "wheel"]],
 }
+TEST_TASKS = {"test", "test-unit", "test-integration"}
 CHECKS = ["validate-config", "format-check", "lint", "type-check", "test"]
 
 
@@ -206,9 +207,9 @@ def main() -> int:
         args.platform_coverage = True
         args.evidence_dir = args.evidence_dir or ROOT / ".coverage.local"
     if args.platform_coverage and (
-        not args.evidence_dir or args.task not in {"check", "check-local", "test", "ci"}
+        not args.evidence_dir or args.task not in {"check", "check-local", "ci", *TEST_TASKS}
     ):
-        parser.error("--platform-coverage requires check/test/ci and --evidence-dir")
+        parser.error("--platform-coverage requires a check or test task and --evidence-dir")
     if args.task == "help":
         print("Tasks: " + ", ".join([*COMMANDS, "clean", "check", "check-local", "ci"]))
         return 0
@@ -230,7 +231,7 @@ def main() -> int:
             "Platform checks only; combined native Windows + Linux coverage gate remains pending."
         )
         environment["AGENT_COMPANY_COVERAGE_CONTEXT"] = (
-            platform.system() + "-" + platform.python_version()
+            platform.system() + "-" + platform.python_version() + "-" + args.task
         )
         manifest["coverage_gate"] = "pending native Windows + Linux combination"
     if evidence:
@@ -238,15 +239,14 @@ def main() -> int:
     for task in tasks:
         for number, command in enumerate(COMMANDS[task]):
             command = list(command)
-            if evidence and task == "test":
-                command.extend(
-                    [
-                        f"--junitxml={evidence / 'tests.xml'}",
-                        f"--cov-report=xml:{evidence / 'coverage.xml'}",
-                    ]
-                )
-            if args.platform_coverage and task == "test":
+            if args.platform_coverage and task in TEST_TASKS:
+                if task != "test":
+                    command.extend(["--cov", "--cov-report=term-missing"])
                 command.append("--cov-fail-under=0")
+            if evidence and task in TEST_TASKS:
+                command.append(f"--junitxml={evidence / 'tests.xml'}")
+                if task == "test" or args.platform_coverage:
+                    command.append(f"--cov-report=xml:{evidence / 'coverage.xml'}")
             print(" ".join(command), flush=True)
             started = time.monotonic()
             log = f"{task}-{number}.log"
@@ -274,7 +274,7 @@ def main() -> int:
                     "check",
                     "check-local",
                     "ci",
-                    "test",
+                    *TEST_TASKS,
                 }:
                     print("Candidate changed during validation; evidence is diagnostic only.")
                     return code or 1

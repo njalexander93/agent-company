@@ -103,9 +103,10 @@ def test_native_evidence_rejects_incomplete_or_mismatched_inputs(
         verified_inputs(tmp_path, "candidate", "before")
 
 
+@pytest.mark.parametrize("split", [False, True])
 @pytest.mark.parametrize("mutation", ["none", "dirty-policy", "dirty-source", "during-report"])
 def test_collector_to_combiner_fences_checkout_bytes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str, split: bool
 ) -> None:
     """Exercise collection and real reporting in a disposable Git checkout.
 
@@ -113,6 +114,7 @@ def test_collector_to_combiner_fences_checkout_bytes(
         tmp_path: Disposable source and synthetic platform evidence.
         monkeypatch: Scoped collector commands and platform labels; never native evidence.
         mutation: Policy or source mutation before or during report generation.
+        split: Collect unit and integration data independently instead of a full-suite run.
 
     Raises:
         AssertionError: Collection requires a sidecar or changed bytes receive acceptance.
@@ -150,7 +152,9 @@ def test_collector_to_combiner_fences_checkout_bytes(
     monkeypatch.setattr(dev, "ROOT", root)
     monkeypatch.setattr(combine_coverage, "ROOT", root)
     monkeypatch.setattr(dev, "CHECKS", ["test"])
-    monkeypatch.setattr(dev, "COMMANDS", {"test": [[sys.executable, "-c", "pass"]]})
+    monkeypatch.setattr(
+        dev, "COMMANDS", {task: [[sys.executable, "-c", "pass"]] for task in dev.TEST_TASKS}
+    )
     artifacts = tmp_path / "artifacts"
     # Only labels and check commands are synthetic. The collector writes its actual schema.
     for system in ("Windows", "Linux"):
@@ -162,24 +166,22 @@ def test_collector_to_combiner_fences_checkout_bytes(
                 "system": system,
             },
         )
-        evidence = artifacts / system
-        monkeypatch.setattr(
-            sys,
-            "argv",
-            [
-                "dev.py",
-                "check-local",
-                "--evidence-dir",
-                str(evidence),
-            ],
-        )
-        assert dev.main() == 0
-        data = CoverageData(basename=str(evidence / ".coverage"))
-        data.add_lines({str(source): {1}})
-        data.write()
-        assert not (evidence / "host.json").exists()
+        for task in ("test-unit", "test-integration") if split else ("test",):
+            evidence = artifacts / system / task
+            monkeypatch.setattr(
+                sys,
+                "argv",
+                ["dev.py", task, "--platform-coverage", "--evidence-dir", str(evidence)],
+            )
+            assert dev.main() == 0
+            data = CoverageData(basename=str(evidence / ".coverage"))
+            data.add_lines({str(source): {1}})
+            data.write()
+            assert not (evidence / "host.json").exists()
     initial = dev.checkout_state()
-    assert len(verified_inputs(artifacts, initial["sha"], initial["tracked_digest"])) == 2
+    assert len(verified_inputs(artifacts, initial["sha"], initial["tracked_digest"])) == (
+        4 if split else 2
+    )
     output = tmp_path / "combined"
     monkeypatch.setattr(
         sys,
@@ -215,3 +217,78 @@ def test_collector_to_combiner_fences_checkout_bytes(
         assert result["required_percent"] == 80
         assert result["passed"] is (mutation == "none")
         assert result["candidate_unchanged"] is (mutation == "none")
+
+
+@pytest.mark.parametrize(
+    "defect",
+    [
+        "none",
+        "missing-unit",
+        "missing-integration",
+        "failed-unit",
+        "failed-integration",
+        "duplicate-suite",
+        "repeated-command",
+        "mixed-full-suite",
+        "wrong-sha",
+        "wrong-digest",
+        "dirty",
+        "missing-database",
+        "malformed-command",
+    ],
+)
+def test_split_suite_evidence_requires_each_successful_native_suite(
+    tmp_path: Path, defect: str
+) -> None:
+    """Reject incomplete, repeated or conflicting split coverage before opening databases.
+
+    Args:
+        tmp_path: Disposable synthetic evidence, never native acceptance evidence.
+        defect: One invalid property to inject into the Windows evidence.
+
+    Raises:
+        AssertionError: Missing or invalid suite evidence receives combined acceptance.
+    """
+    for system in ("Windows", "Linux"):
+        for suite in ("unit", "integration"):
+            if system == "Windows" and defect == f"missing-{suite}":
+                continue
+            root = tmp_path / system / suite
+            root.mkdir(parents=True)
+            manifest = {
+                "sha": "candidate",
+                "end_sha": "candidate",
+                "system": system,
+                "status": "",
+                "end_status": "",
+                "tracked_digest": "bytes",
+                "end_tracked_digest": "bytes",
+                "candidate_unchanged": True,
+                "commands": [{"task": f"test-{suite}", "exit_code": 0}],
+            }
+            if system == "Windows":
+                if defect == f"failed-{suite}":
+                    manifest["commands"][0]["exit_code"] = 1
+                if suite == "integration":
+                    if defect == "wrong-sha":
+                        manifest["sha"] = "other"
+                    elif defect == "wrong-digest":
+                        manifest["tracked_digest"] = "other"
+                    elif defect == "dirty":
+                        manifest["end_status"] = " M sample.py"
+                    elif defect == "duplicate-suite":
+                        manifest["commands"][0]["task"] = "test-unit"
+                    elif defect == "mixed-full-suite":
+                        manifest["commands"][0]["task"] = "test"
+                    elif defect == "repeated-command":
+                        manifest["commands"] *= 2
+                    elif defect == "malformed-command":
+                        manifest["commands"] = [None]
+            (root / "manifest.json").write_text(json.dumps(manifest))
+            if not (system == "Windows" and suite == "unit" and defect == "missing-database"):
+                (root / ".coverage").touch()
+    if defect == "none":
+        assert len(verified_inputs(tmp_path, "candidate", "bytes")) == 4
+    else:
+        with pytest.raises(ValueError):
+            verified_inputs(tmp_path, "candidate", "bytes")
