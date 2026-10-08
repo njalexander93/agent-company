@@ -75,7 +75,9 @@ results do not substitute for checks on the current revision. See GitHub's
 [pull-request event](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#pull_request)
 and [required-check troubleshooting](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks).
 
-Preserve the existing human review policy, stale-review dismissal, resolved
+The rollout preserves the existing review count of zero: the owner controls
+the manual merge, but GitHub does not require a separate approving review.
+Preserve this human merge policy, stale-review dismissal, resolved
 review threads, squash-only merge and empty bypass list. The workflow never
 approves, merges, enables auto-merge or publishes a package. Its only token
 permission is `contents: read`; checkout credentials are not persisted. It uses
@@ -108,5 +110,5 @@ permission is `contents: read`; checkout credentials are not persisted. It uses
    longer retention is needed. Record blocked merge state without attempting a
    merge. Never use human-review or rule bypasses as a test technique.
 
-See [artifact behavior](https://github.com/actions/upload-artifact/tree/v4.6.2)
+See [artifact behavior](https://github.com/actions/upload-artifact/tree/v7.0.2)
 and [rerunning workflows](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/re-run-workflows-and-jobs).

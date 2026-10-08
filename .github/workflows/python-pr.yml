@@ -36,7 +36,7 @@ jobs:
         run: poetry run python scripts/dev.py ${{ matrix.task }} --evidence-dir .coverage.quality
       - name: Retain diagnostic evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: quality-${{ matrix.task }}-${{ github.run_attempt }}
           path: .coverage.quality/
@@ -74,7 +74,7 @@ jobs:
         run: poetry run python scripts/dev.py test --platform-coverage --evidence-dir .coverage.platform
       - name: Retain diagnostic evidence for this attempt
         if: ${{ always() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: tests-${{ matrix.platform }}-${{ github.run_attempt }}
           path: .coverage.platform/
@@ -85,7 +85,7 @@ jobs:
       # The attempt-specific archive above preserves earlier diagnostic evidence.
       - name: Publish successful native coverage input
         if: ${{ success() && matrix.platform != 'macos' }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: native-${{ matrix.platform }}
           path: .coverage.platform/
@@ -112,7 +112,7 @@ jobs:
           poetry env use python
           poetry sync
       # With no token/run-id override, download only this workflow run's inputs.
-      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
         with:
           pattern: native-*
           path: .coverage.inputs
@@ -120,7 +120,7 @@ jobs:
         run: poetry run python scripts/combine_coverage.py .coverage.inputs --output-dir .coverage.combined
       - name: Retain combined evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: combined-${{ github.run_attempt }}
           path: .coverage.combined/

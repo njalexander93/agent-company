@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.platform_support import environment_python, link_directory, unlink_directory
+from tests.platform_support import environment_python
 from tests.support import ROOT
 
 pytestmark = pytest.mark.integration
@@ -150,7 +150,9 @@ def hook_repo(tmp_path: Path) -> HookRepo:
     repo = HookRepo(root, env)
     repo.git("config", "core.autocrlf", "false")
     assert not (root / ".git/hooks/pre-commit").exists()
-    link_directory(root / ".venv", Path(sys.prefix))
+    # Framework Python on macOS resolves a linked environment to its outer path.
+    # Copy the locked tools so the installed hook genuinely belongs to this clone.
+    shutil.copytree(Path(sys.prefix), root / ".venv", symlinks=True)
     result = repo.run(str(environment_python(root / ".venv")), "-m", "pre_commit", "install")
     assert result.returncode == 0, result.stdout
     installed = (root / ".git/hooks/pre-commit").read_text()
@@ -308,9 +310,9 @@ def test_installed_hook_fails_when_project_environment_is_absent(hook_repo: Hook
     Raises:
         AssertionError: Missing environment bypasses checks or changes staged content.
     """
-    # Remove only this clone's environment symlink; preserve the actual development environment.
+    # Move only this clone's copied environment; preserve the development environment.
     hook_repo.stage("tests/hook_probe.py", '"""Supply a staged hook fixture."""\n\nVALUE = 2\n')
-    unlink_directory(hook_repo.root / ".venv")
+    (hook_repo.root / ".venv").rename(hook_repo.root.parent / "removed-environment")
     # Prevent an unrelated globally installed framework from masking the missing clone setup.
     before = hook_repo.snapshot()
     head = hook_repo.git("rev-parse", "HEAD")
