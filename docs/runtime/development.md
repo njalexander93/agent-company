@@ -176,8 +176,10 @@ or a supported end-user distribution. The release pipeline, artifact promotion
 and publication remain separate Controlled Runtime work. `make ci` is a local
 command alias; it does not install a workflow or branch rule.
 
-GitHub workflows, required PR checks and branch-rule integration remain separate
-work. Local results do not establish GitHub enforcement or human acceptance.
+The [required Python PR checks](ci.md) run these commands on Ubuntu, native
+Windows and macOS, then enforce combined Windows/Linux coverage. See that guide
+for required-check names, revision identity, artifacts and retry troubleshooting.
+Local results alone do not establish GitHub enforcement or human acceptance.
 
 ## Hook interpreter and trust
 

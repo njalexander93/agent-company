@@ -8,6 +8,7 @@ Public framework rules, authoring references, examples, fixtures and runtime gui
 | Task | Start here | Scope to select |
 | --- | --- | --- |
 | Set up a contributor checkout or local commit checks | [Runtime contract](runtime/CONTEXT.md#setup) | Environment setup, editor and check commands. |
+| Change or troubleshoot required pull-request checks | [Runtime contract](runtime/CONTEXT.md#pull-request-checks) | Workflow, ruleset, exact revision evidence and local reproduction. |
 | Configure or inspect a native host hook | [Runtime contract](runtime/CONTEXT.md#host-protocol) | The selected host protocol and its limitations. |
 | Change or use task-workspace lifecycle behavior | [Runtime contract](runtime/CONTEXT.md#lifecycle) | The affected contract and usage sections. |
 | Change a shared framework rule or Role placement | [Framework contract](framework/CONTEXT.md) | The named rule, team and affected Role entry. |

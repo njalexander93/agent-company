@@ -1,0 +1,150 @@
+name: Python PR checks
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: python-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Python / ${{ matrix.task }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        task: [validate-config, format-check, lint, type-check]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version-file: .python-version
+      - name: Install locked development environment
+        run: |
+          python -m pip install poetry==2.4.2
+          poetry env use python
+          poetry sync
+      - name: Run repository command
+        run: poetry run python scripts/dev.py ${{ matrix.task }} --evidence-dir .coverage.quality
+      - name: Retain diagnostic evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: quality-${{ matrix.task }}-${{ github.run_attempt }}
+          path: .coverage.quality/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 30
+
+  tests:
+    name: Python / tests (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux
+            runner: ubuntu-24.04
+          - platform: windows
+            runner: windows-2025
+          - platform: macos
+            runner: macos-15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version-file: .python-version
+      - name: Install locked development environment
+        run: |
+          python -m pip install poetry==2.4.2
+          poetry env use python
+          poetry sync
+      - name: Run tests and collect platform coverage
+        run: poetry run python scripts/dev.py test --platform-coverage --evidence-dir .coverage.platform
+      - name: Retain diagnostic evidence for this attempt
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: tests-${{ matrix.platform }}-${{ github.run_attempt }}
+          path: .coverage.platform/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 30
+      # Stable input names let a failed-job retry reuse the successful sibling.
+      # The attempt-specific archive above preserves earlier diagnostic evidence.
+      - name: Publish successful native coverage input
+        if: ${{ success() && matrix.platform != 'macos' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: native-${{ matrix.platform }}
+          path: .coverage.platform/
+          include-hidden-files: true
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 30
+
+  coverage:
+    name: Python / combined coverage
+    needs: tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version-file: .python-version
+      - name: Install locked development environment
+        run: |
+          python -m pip install poetry==2.4.2
+          poetry env use python
+          poetry sync
+      # With no token/run-id override, download only this workflow run's inputs.
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          pattern: native-*
+          path: .coverage.inputs
+      - name: Enforce configured whole-package coverage floor
+        run: poetry run python scripts/combine_coverage.py .coverage.inputs --output-dir .coverage.combined
+      - name: Retain combined evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: combined-${{ github.run_attempt }}
+          path: .coverage.combined/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 30
+
+  required:
+    name: Python / required
+    if: ${{ always() }}
+    needs: [quality, tests, coverage]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Require every check to succeed
+        env:
+          QUALITY: ${{ needs.quality.result }}
+          TESTS: ${{ needs.tests.result }}
+          COVERAGE: ${{ needs.coverage.result }}
+          CANDIDATE: ${{ github.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          printf 'Head: %s\nBase: %s\nTested merge: %s\n' "$HEAD" "$BASE" "$CANDIDATE" >> "$GITHUB_STEP_SUMMARY"
+          printf 'Quality: %s\nTests: %s\nCoverage: %s\n' "$QUALITY" "$TESTS" "$COVERAGE" >> "$GITHUB_STEP_SUMMARY"
+          test "$QUALITY" = success && test "$TESTS" = success && test "$COVERAGE" = success

@@ -13,6 +13,10 @@ Working inputs are the selected checkout, host/event or lifecycle operation and 
 
 Read [development.md](development.md): environment setup, local commit checks, editor setup and checks. Follow the host guide only when configuring host hooks.
 
+### Pull-request checks
+
+Read [ci.md](ci.md) for workflow jobs, merge enforcement, candidate evidence and retry behavior. Pair it with [development setup](development.md#set-up-each-worktree) and the checked-in workflow and commands when changing CI.
+
 ### Host protocol
 
 Read the selected host row in [native protocols](host-hooks.md#native-protocols-and-failure-semantics), its applicable [setup](host-hooks.md#setup-and-bootstrap), [coverage](host-hooks.md#implemented-coverage) and [validation limits](host-hooks.md#validation-and-remaining-evidence), plus [host limitations](task-workspace-usage.md#host-limitations). For admission/blocking behavior, also read [host adapters](task-workspace.md#host-adapters) and [bootstrap exceptions](task-workspace.md#bootstrap-exceptions). Use the applicable cited public host protocol, not another host's payload shape.

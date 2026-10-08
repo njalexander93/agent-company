@@ -42,7 +42,9 @@ N/A
 - [ ] New and existing unit tests pass locally with my changes
 - [ ] I have checked test coverage and it hasn't decreased
 - [ ] All tests are properly marked (`@pytest.mark.unit` or `@pytest.mark.integration`)
-- [ ] My code passes `make test` without errors
+- [ ] `poetry run python scripts/dev.py check-local` passes on my OS
+- [ ] `Python / required` passes for this revision, including native Windows/Linux/macOS tests and combined coverage
+- [ ] I recorded the head/tested merge SHAs, run URL and any failed-check/repair evidence
 
 ### Type Safety & Linting
 
