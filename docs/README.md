@@ -10,7 +10,7 @@ Public framework rules, authoring references, examples, fixtures and runtime gui
 | Start or resume an issue, or execute an assigned step | [Contributor procedure](runtime/contributor-workflow.md) | Master planning, approval, step threads, handoffs and delivery; assigned children use the bounded step-thread route. |
 | Create or update a pull request | [PR preparation and verification](runtime/contributor-workflow.md#pr-preparation-and-verification) | Title, exact repository template, evidence, current required checks and published read-back. |
 | Set up a contributor checkout or local commit checks | [Runtime contract](runtime/CONTEXT.md#setup) | Environment setup, editor and check commands. |
-| Diagnose Python pull-request checks or reproduce CI | [Python PR checks](runtime/ci.md) | Aggregate result, native matrix, coverage, evidence and retries; branch enforcement remains a separate human-owned step. |
+| Diagnose pull-request checks or reproduce CI | [PR pre-merge checks](runtime/ci.md) | Five checks, native suites, coverage, evidence and retries; branch enforcement remains a separate human-owned step. |
 | Configure or inspect a native host hook | [Runtime contract](runtime/CONTEXT.md#host-protocol) | The selected host protocol and its limitations. |
 | Change or use task-workspace lifecycle behavior | [Runtime contract](runtime/CONTEXT.md#lifecycle) | The affected contract and usage sections. |
 | Change a shared framework rule or Role placement | [Framework contract](framework/CONTEXT.md) | The named rule, team and affected Role entry. |

@@ -176,10 +176,10 @@ or a supported end-user distribution. The release pipeline, artifact promotion
 and publication remain separate Controlled Runtime work. `make ci` is a local
 command alias; it does not install a workflow or branch rule.
 
-The [Python PR checks guide](ci.md) describes the GitHub workflow, native matrix,
-aggregate result, artifacts and retries. Adding `Python gate` to the branch rule
-is a separate human-owned setup step after merge. Local results do not establish
-GitHub enforcement or human acceptance.
+The [PR pre-merge checks guide](ci.md) describes the five GitHub checks, native
+unit/integration suites, artifacts and retries. Requiring all five checks in the
+branch rule is a separate human-owned setup step after merge. Local results do
+not establish GitHub enforcement or human acceptance.
 
 ## Hook interpreter and trust
 

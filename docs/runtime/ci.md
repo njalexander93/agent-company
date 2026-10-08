@@ -1,27 +1,36 @@
-# Python pull-request checks
+# Pull-request pre-merge checks
 
-**Read `Python gate` for the aggregate result.** It passes only when all quality
-checks, native test jobs and combined coverage pass. A failed, cancelled or
-skipped dependency cannot produce a passing gate. Open the failing job for its
-command log and evidence artifact.
+**All five checks must pass.** Open a failed check for its failing step, command
+log and evidence artifact. The [PR Pre-Merge Check workflow](../../.github/workflows/pr-pre-merge.yml)
+runs on pull requests targeting `main`, including documentation-only changes.
+Bugbot is an independent check, outside these five jobs.
 
-The [Python PR workflow](../../.github/workflows/python-pr.yml) runs on pull
-requests targeting `main`, including documentation-only changes. A newer run for
-the same pull request cancels an in-progress run. The workflow uses the interpreter
-in [`.python-version`](../../.python-version), Poetry 2.4.2 and locked dependencies.
+The workflow uses the interpreter in [`.python-version`](../../.python-version),
+Poetry 2.4.2 and locked dependencies. A newer run for the same pull request cancels
+an in-progress run. Normal cancellation stops further validation work; artifact
+retention steps still attempt to preserve available diagnostic evidence.
 
 ## What runs
 
-| Check | Runner | Result required by `Python gate` |
+| Check | Runner | Passing result |
 | --- | --- | --- |
-| `Python validate-config` | Ubuntu 24.04 | Project/lock and pre-commit configuration are valid. |
-| `Python format-check` | Ubuntu 24.04 | Ruff formatting passes without edits. |
-| `Python lint` | Ubuntu 24.04 | Ruff lint passes without fixes. |
-| `Python type-check` | Ubuntu 24.04 | Mypy passes for the configured production scope. |
-| `Python tests (ubuntu-24.04)` | Native Ubuntu | All applicable tests pass; collect Linux coverage. |
-| `Python tests (windows-2025)` | Native Windows | All applicable tests pass; collect Windows coverage. |
-| `Python tests (macos-15)` | Native macOS | All applicable tests pass; retain diagnostic coverage. |
-| `Python combined coverage` | Ubuntu 24.04 | Combined native Windows and Linux coverage reaches **80%**. |
+| `Code Quality Check` | Ubuntu 24.04 | Configuration, formatting, lint and types all pass. |
+| `Linux Tests (Unit/Integration)` | Ubuntu 24.04 | Unit and integration suites both pass. |
+| `Windows Tests (Unit/Integration)` | Windows 2025 | Unit and integration suites both pass. |
+| `MacOS Tests (Unit/Integration)` | macOS 15 | Unit and integration suites both pass. |
+| `Test Coverage Check` | Ubuntu 24.04 | Complete successful native Windows/Linux suites combine to at least **80%** coverage. |
+
+Quality and the three OS jobs can run concurrently. Quality steps run in order:
+`validate-config`, `format-check`, `lint`, then `type-check`. Later steps still run
+after an earlier failure unless cancelled; the failure still fails the job.
+Each OS similarly runs `test-unit`, then `test-integration`, including integration
+after a unit failure. The matrix does not cancel peer jobs on failure.
+
+Coverage waits for all three OS jobs. Unless cancelled, it runs even when an OS
+job fails so missing or failed Windows/Linux suite evidence produces an explicit
+failure. It combines both suites from Windows and Linux. macOS coverage is
+retained for diagnosis but is not a combination input; its test check must still
+pass independently. Coverage success alone does not mean all five checks passed.
 
 The matrix tests the pinned development interpreter. It does not establish every
 interpreter in the declared runtime range, every Linux distribution, or installed
@@ -32,31 +41,37 @@ host-hook delivery. See [development limits](development.md#source-layout) and
 
 1. Follow [worktree setup](development.md#set-up-each-worktree). Run commands from
    the repository root with the locked Poetry environment.
-2. Run the local checks:
+2. Run the existing local checks:
 
    ```sh
    poetry run python scripts/dev.py check-local
    ```
 
-   This runs configuration, formatting, lint, types and tests on the current OS.
-   It saves logs, test results and coverage in ignored `.coverage.local/`.
-   **The combined coverage gate remains pending.** A failed test still fails.
-3. Reproduce one failing quality job with its task name, for example:
+   This still runs configuration, formatting, lint, types and the full test suite
+   on the current OS. It stops at the first failure and saves evidence in ignored
+   `.coverage.local/`. **Combined Windows/Linux coverage remains pending.**
+3. Reproduce quality steps individually. Run all four to inspect independent
+   failures, as the workflow does:
 
    ```sh
+   poetry run python scripts/dev.py validate-config
+   poetry run python scripts/dev.py format-check
    poetry run python scripts/dev.py lint
+   poetry run python scripts/dev.py type-check
    ```
 
-4. To reproduce native collection, run this on both Windows and Linux from the
-   same clean, unchanged commit. Use a separate external evidence directory on
-   each machine:
+4. Reproduce split native collection on both Windows and Linux from the same
+   clean, unchanged commit. Use separate external output directories per suite:
 
    ```sh
-   poetry run python scripts/dev.py test --platform-coverage --evidence-dir <evidence-directory>
+   poetry run python scripts/dev.py test-unit --platform-coverage --evidence-dir <platform-directory>/unit
+   poetry run python scripts/dev.py test-integration --platform-coverage --evidence-dir <platform-directory>/integration
    ```
 
-5. Put the complete Windows and Linux evidence directories under one external
-   artifact directory. Preserve each hidden `.coverage` file and `manifest.json`.
+   Run integration even if unit fails, then preserve both exit results. A later
+   successful suite does not erase an earlier failure.
+5. Put the complete Windows and Linux directories under one external artifact
+   directory. Preserve every suite's hidden `.coverage` file and `manifest.json`.
    From a clean checkout of that same commit, combine them into another external
    output directory:
 
@@ -64,10 +79,11 @@ host-hook delivery. See [development limits](development.md#source-layout) and
    poetry run python scripts/combine_coverage.py <artifact-directory> --output-dir <output-directory>
    ```
 
-   Replace the angle-bracket paths with actual paths; quote paths containing spaces.
-   The combiner rejects missing or duplicate platforms, failing test evidence,
-   dirty checkouts, changed source bytes and mismatched revisions. macOS data is
-   retained for diagnosis but is not an input to this combination.
+   Replace angle-bracket paths with actual paths; quote paths containing spaces.
+   The combiner rejects missing, failed, duplicate or incomplete native suites,
+   dirty checkouts, changed source bytes and mismatched revisions. Existing full
+   `test` or `check-local` evidence remains supported: each platform supplies
+   either one successful full suite or both successful split suites.
 
 The [command runner](../../scripts/dev.py), [combiner](../../scripts/combine_coverage.py)
 and [coverage policy](../../pyproject.toml) are canonical. Coverage includes
@@ -77,32 +93,40 @@ The strict `test`, `check` and `ci` commands retain the single-run 80% floor.
 
 ## Evidence and retries
 
-- The gate summary records the **PR head**, **PR base**, **tested merge commit**,
-  run attempt and group results. Keep the workflow-run link with those identities.
-  A passing older run does not validate a newer candidate.
-- Command artifacts include logs and a manifest with the actual OS, interpreter,
-  commit, clean/dirty status, tracked-source digest, commands and exit codes.
-  Start/end fields show whether the candidate changed during validation.
-- Native artifacts also contain test XML, coverage XML and the raw coverage
-  database. `python-combined-coverage` contains the combined reports and
-  `combined.json`, including the measured result and required floor.
+- The coverage job summary records the **PR head**, **PR base**, **tested merge
+  commit**, run attempt and native-test/coverage results. Keep the workflow-run
+  link and all five check results with those identities. A passing older run does
+  not validate a newer candidate.
+- `python-quality` contains `config/`, `format/`, `lint/` and `types/` evidence.
+  Each command manifest records the OS, interpreter, commit, clean/dirty status,
+  tracked-source digest, commands and exit codes. Start/end fields detect changes
+  during validation; logs retain command output.
+- `python-tests-linux`, `python-tests-windows` and `python-tests-macos` each contain
+  `unit/` and `integration/`. Each suite has its own manifest, log, `tests.xml`,
+  `coverage.xml` and hidden `.coverage` database when collection completes.
+- `python-combined-coverage` contains combined reports and `combined.json`,
+  including the measured result and required floor. Incomplete runs may retain
+  only diagnostic output; missing artifacts are not passing evidence.
 - Artifacts have **14-day retention**. Stable native artifact names are scoped
-  to the workflow run. A partial rerun replaces its own artifact and can reuse
-  successful same-revision Windows/Linux artifacts from an earlier attempt of
-  that run. Earlier attempt logs remain available in Actions.
-- Rerun a failed job when its retained peer artifacts are still available. If
-  inputs have expired or are missing, rerun the native jobs and dependent coverage
-  job, or rerun all jobs. Never combine artifacts from a different candidate or
-  substitute local success for the current pull-request result.
+  to the workflow run. A partial rerun replaces that platform's suite evidence
+  and can reuse successful same-revision peer artifacts from an earlier attempt
+  of the same run. Earlier attempt logs remain available in Actions.
+- Rerun a failed job when peer artifacts remain available. If inputs have expired
+  or are missing, rerun the native jobs and coverage, or all jobs. Never combine
+  artifacts from a different candidate or substitute local success for the
+  current pull-request result.
 
 ## Merge enforcement and human review
 
-The workflow emits `Python gate`; creating that check does not make it a required
-branch check. **Adding it to the branch rule is a separate, human-owned setup
-step after merge.** Do not report it as required until the live rule confirms it.
+Creating these checks does not make them required branch checks. **Requiring all
+five named checks is a separate, human-owned setup step after merge.** Do not
+report them as required until the live branch rule confirms it.
 
-At delivery, inspect the current rules for `main` and the current candidate's check
+At delivery, inspect the current rules for `main` and the current candidate's
 results. Record pending enforcement separately from test results. Preserve other
-required checks and follow [PR verification](contributor-workflow.md#pr-preparation-and-verification).
-Passing checks do not authorize merge: [human PR review and human-controlled
-merge](../framework/baseline.md#authoring-and-publication-rules) still apply.
+required checks, including independently configured Bugbot requirements. Follow
+[submission readiness and PR verification](contributor-workflow.md#8-submit-and-verify-delivery):
+finish work and available checks before opening a review-ready PR; PR-triggered
+checks can honestly remain pending after submission. Passing checks do not
+authorize merge: [human PR review and human-controlled merge](../framework/baseline.md#authoring-and-publication-rules)
+still apply.
