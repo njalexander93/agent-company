@@ -4,13 +4,15 @@ import os
 import shutil
 import subprocess
 import sys
+import sysconfig
 import time
+import venv
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
 
-from tests.platform_support import environment_python, link_directory, unlink_directory
+from tests.platform_support import environment_python
 from tests.support import ROOT
 
 pytestmark = pytest.mark.integration
@@ -150,8 +152,23 @@ def hook_repo(tmp_path: Path) -> HookRepo:
     repo = HookRepo(root, env)
     repo.git("config", "core.autocrlf", "false")
     assert not (root / ".git/hooks/pre-commit").exists()
-    link_directory(root / ".venv", Path(sys.prefix))
-    result = repo.run(str(environment_python(root / ".venv")), "-m", "pre_commit", "install")
+    # Give the hook a real disposable interpreter identity. A linked whole environment
+    # can resolve back to the live environment under framework Python on macOS.
+    environment = root / ".venv"
+    venv.EnvBuilder(with_pip=False).create(environment)
+    python = environment_python(environment)
+    result = repo.run(str(python), "-c", "import sysconfig; print(sysconfig.get_path('purelib'))")
+    assert result.returncode == 0, result.stdout
+    packages = Path(result.stdout.strip())
+    # Reuse locked libraries without downloading or copying the development environment.
+    (packages / "fixture-tools.pth").write_text(sysconfig.get_path("purelib") + "\n")
+    for tool in ("ruff", "mypy"):
+        name = tool + (".exe" if os.name == "nt" else "")
+        shutil.copy2(environment_python(Path(sys.prefix)).parent / name, python.parent / name)
+    # Exercise the canonical environment path, as framework Python does on macOS.
+    result = repo.run(
+        str(environment_python((root / ".venv").resolve())), "-m", "pre_commit", "install"
+    )
     assert result.returncode == 0, result.stdout
     installed = (root / ".git/hooks/pre-commit").read_text()
     assert str(environment_python(root / ".venv")) in installed
@@ -308,9 +325,9 @@ def test_installed_hook_fails_when_project_environment_is_absent(hook_repo: Hook
     Raises:
         AssertionError: Missing environment bypasses checks or changes staged content.
     """
-    # Remove only this clone's environment symlink; preserve the actual development environment.
+    # Remove only the real disposable environment; shared locked packages remain outside it.
     hook_repo.stage("tests/hook_probe.py", '"""Supply a staged hook fixture."""\n\nVALUE = 2\n')
-    unlink_directory(hook_repo.root / ".venv")
+    shutil.rmtree(hook_repo.root / ".venv")
     # Prevent an unrelated globally installed framework from masking the missing clone setup.
     before = hook_repo.snapshot()
     head = hook_repo.git("rev-parse", "HEAD")
