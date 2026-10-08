@@ -7,6 +7,7 @@ Public framework rules, authoring references, examples, fixtures and runtime gui
 
 | Task | Start here | Scope to select |
 | --- | --- | --- |
+| Start or resume an issue, or execute an assigned step | [Contributor procedure](runtime/contributor-workflow.md) | Master planning, approval, step threads, handoffs and delivery; assigned children use the bounded step-thread route. |
 | Set up a contributor checkout or local commit checks | [Runtime contract](runtime/CONTEXT.md#setup) | Environment setup, editor and check commands. |
 | Configure or inspect a native host hook | [Runtime contract](runtime/CONTEXT.md#host-protocol) | The selected host protocol and its limitations. |
 | Change or use task-workspace lifecycle behavior | [Runtime contract](runtime/CONTEXT.md#lifecycle) | The affected contract and usage sections. |

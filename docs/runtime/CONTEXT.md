@@ -9,6 +9,10 @@ Select one route. Commands retain their documented repository-root working direc
 
 Working inputs are the selected checkout, host/event or lifecycle operation and the exact observed behavior or proposed change. Reference inputs are below; load only the selected route.
 
+### Contributor workflow
+
+When starting or resuming an issue, follow the [canonical contributor procedure](contributor-workflow.md). An assigned child uses its [step-thread route](contributor-workflow.md#step-thread-route). This procedure owns contributor sequencing and approval; the lifecycle references below own storage and readiness mechanics.
+
 ### Setup
 
 Read [development.md](development.md): environment setup, local commit checks, editor setup and checks. Follow the host guide only when configuring host hooks.
