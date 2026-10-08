@@ -71,8 +71,20 @@ After each verified handoff, update progress and dispatch the next eligible step
 
 ## 8. Submit and verify delivery
 
+**Before opening a PR:** finish the approved implementation and documentation,
+verify step handoffs, and pass the checks that can run before submission. Resolve
+known failures and incomplete work first. Keep Linear **In Progress** until the
+candidate is ready for human review. Open a review-ready PR only at that point;
+never use an early draft PR as a staging area or test harness, because opening it
+can trigger Linear's review transition.
+
+Checks triggered only by a PR run after submission. Report them as pending in the
+PR, then verify their results on the submitted revision and fix failures. This
+exception does not defer checks available before submission, waive required
+checks, or authorize merge.
+
 1. Prepare, submit and read back a **PR for human review into `main`** using [PR preparation and verification](#pr-preparation-and-verification) and the [publication rules](../framework/baseline.md#authoring-and-publication-rules). Retain the exact candidate revision, diff, relevant check results and acceptance evidence in the delivery record. Validate affected links and templates. Report unproven runtime or platform claims.
-2. At PR submission, move Linear to **In Review** and verify by read-back. Record the PR and lifecycle `in_review` checkpoint; retain context while review and corrections continue.
+2. At review-ready PR submission, move Linear to **In Review** if automation has not already done so, and verify by read-back. Record the PR and lifecycle `in_review` checkpoint; retain context while review and corrections continue.
 3. Read the live rules applicable to the target branch to identify required checks. Preserve current-candidate evidence for failures of currently required checks and the applicable **CI failed** label. Reconcile that label against current requirements and results; record a removed requirement as removed, not passed. An absent check that is no longer required is not a merge blocker. Keep repository-local validation and issue-specific acceptance obligations separate from GitHub merge requirements. Follow those obligations without inventing infrastructure work.
 4. Keep merge human-controlled. Verify the actual PR merge into `main`, then move to **Merged** and read back the state. After acceptance and every issue obligation are verified, move to **Done** and verify the completed state. An open PR, passing checks or child completion is insufficient.
 5. Record supported [completion evidence](task-workspace-usage.md#recovery-and-completion-semantics) before terminal lifecycle disposition. Preserve unresolved obligations and recovery state. Report unavailable transitions/integrations as blockers rather than fabricating closure.
@@ -81,7 +93,7 @@ After each verified handoff, update progress and dispatch the next eligible step
 
 ### PR preparation and verification
 
-Apply these steps when creating a PR and when updating it after review or scope changes.
+Apply these steps when creating a PR and when updating it after review or scope changes. Before creating a PR, meet the [submission readiness requirements](#8-submit-and-verify-delivery).
 
 **Title:** use `<ISSUE-ID>: <issue title>`, with the actual issue identifier, a colon and one space, followed by the issue title. For example: `AGENT-29: Require roadmap approval and separate step threads when starting issues`. Verify the title against the linked issue before publication and during PR read-back.
 
