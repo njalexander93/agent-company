@@ -1,3 +1,8 @@
+<!-- Before creating or updating this PR, follow docs/runtime/contributor-workflow.md#pr-preparation-and-verification.
+Keep every heading, option and checklist item below in its original order and wording.
+Check only verified, applicable items. Leave non-applicable items unchecked and explain N/A below their checklist group.
+Fill every section; use N/A with a reason where needed. -->
+
 ## Type of Change
 
 <!-- Mark the relevant option with an "x" -->

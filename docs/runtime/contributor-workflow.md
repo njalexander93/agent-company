@@ -71,13 +71,25 @@ After each verified handoff, update progress and dispatch the next eligible step
 
 ## 8. Submit and verify delivery
 
-1. Submit a **human-reviewed PR into `main`** under the [publication rules](../framework/baseline.md#authoring-and-publication-rules). Retain the exact candidate revision, diff, relevant check results and acceptance evidence in the delivery record. Validate affected links and templates. Report unproven runtime or platform claims.
+1. Prepare, submit and read back a **PR for human review into `main`** using [PR preparation and verification](#pr-preparation-and-verification) and the [publication rules](../framework/baseline.md#authoring-and-publication-rules). Retain the exact candidate revision, diff, relevant check results and acceptance evidence in the delivery record. Validate affected links and templates. Report unproven runtime or platform claims.
 2. At PR submission, move Linear to **In Review** and verify by read-back. Record the PR and lifecycle `in_review` checkpoint; retain context while review and corrections continue.
-3. Preserve current-candidate evidence for required CI failures and the applicable **CI failed** label. Clear it only after relevant required checks pass. Follow the issue’s delivery obligations without inventing infrastructure work.
+3. Read the live rules applicable to the target branch to identify required checks. Preserve current-candidate evidence for failures of currently required checks and the applicable **CI failed** label. Reconcile that label against current requirements and results; record a removed requirement as removed, not passed. An absent check that is no longer required is not a merge blocker. Keep repository-local validation and issue-specific acceptance obligations separate from GitHub merge requirements. Follow those obligations without inventing infrastructure work.
 4. Keep merge human-controlled. Verify the actual PR merge into `main`, then move to **Merged** and read back the state. After acceptance and every issue obligation are verified, move to **Done** and verify the completed state. An open PR, passing checks or child completion is insufficient.
 5. Record supported [completion evidence](task-workspace-usage.md#recovery-and-completion-semantics) before terminal lifecycle disposition. Preserve unresolved obligations and recovery state. Report unavailable transitions/integrations as blockers rather than fabricating closure.
 
 **Exit:** actual merge, human acceptance, required checks, obligations and provider completion are evidenced. Workspace archival/cleanup retains its separate lifecycle prerequisites.
+
+### PR preparation and verification
+
+Apply these steps when creating a PR and when updating it after review or scope changes.
+
+1. Load [`.github/pull_request_template.md`](../../.github/pull_request_template.md) from the candidate checkout. It is the canonical body structure. Copy it before filling content, including when using an API or CLI that does not insert it automatically.
+2. Preserve every heading, change-type option and checklist item in its exact wording and order. Fill every section. Put the issue link, concrete problem, resulting behavior and material limitations in **Description**. Put reproducible commands, tested revision, environment, results and pending validation in **Testing**. Use **Screenshots or Command Outputs (if applicable)** for useful output, or `N/A` with a reason. Keep relevant evidence inside these sections.
+3. Mark applicable change types. Check a checklist item only when evidence supports it for this candidate. Leave non-applicable items unchecked and explain `N/A` beneath their checklist group. Leave applicable but unverified items unchecked and state what remains. Record equivalent portable commands explicitly when the template names a Make target. Keep automation-owned additions separate from the authored template and preserve them when editing.
+4. Before submission, compare the prepared body against the loaded template: exact heading sequence, change-type options and checklist wording; completed section content; truthful checked, pending and N/A items. Confirm the title, issue link, branch, target `main` and candidate revision. Use structured body arguments or a UTF-8 body file to preserve Markdown.
+5. After creating or editing the PR, fetch it again. Verify the published title and authored body against the prepared values, template structure, base/head branches and exact head commit. Repair mismatches before reporting successful submission. Attach the PR to the working chat and retain the read-back in the delivery record. Repeat affected checks when the candidate or template changes.
+
+**Submission exit:** the published PR matches the required title and exact template, its evidence applies to the named revision, and current required-check status is recorded. Submission does not establish human acceptance or authorize merge.
 
 ## Step-thread route
 
