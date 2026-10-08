@@ -1,7 +1,7 @@
 # Pull-request pre-merge checks
 
 **All five checks must pass.** Open a failed check for its failing step, command
-log and evidence artifact. The [PR Pre-Merge Check workflow](../../.github/workflows/pr-pre-merge.yml)
+log and evidence artifact. The [PR Pre-Merge Check workflow](../../.github/workflows/pr-checks.yml)
 runs on pull requests targeting `main`, including documentation-only changes.
 Bugbot is an independent check, outside these five jobs.
 
@@ -115,6 +115,26 @@ The strict `test`, `check` and `ci` commands retain the single-run 80% floor.
   or are missing, rerun the native jobs and coverage, or all jobs. Never combine
   artifacts from a different candidate or substitute local success for the
   current pull-request result.
+
+## Tests for the checking tools
+
+These integration tests protect the validation machinery itself:
+
+- [test_pr_workflow.py](../../tests/integration/tooling/test_pr_workflow.py)
+  checks the five-job configuration and continuation conditions. It exercises
+  collector arguments with injected subprocess failures and checks that later
+  collectors run, failures remain recorded and suite evidence stays separate.
+  It does not execute GitHub's scheduler; hosted runs provide that evidence.
+- [test_pre_commit.py](../../tests/integration/tooling/test_pre_commit.py)
+  installs real Git hooks in disposable clones with the locked tools. It checks
+  successful commits, rejection of formatting/lint/type errors, partial staging,
+  restoration of unstaged edits and missing-environment failures. It validates
+  local commit hooks, not GitHub branch enforcement.
+- [test_platform_coverage.py](../../tests/integration/tooling/test_platform_coverage.py)
+  exercises coverage transport, combination and evidence rejection, including
+  incomplete suites and changed checkout bytes. Synthetic coverage and platform
+  labels test those rules; they do not prove tests ran on native Windows/Linux.
+  Native job artifacts supply that separate evidence.
 
 ## Merge enforcement and human review
 
