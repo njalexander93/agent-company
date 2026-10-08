@@ -1,0 +1,168 @@
+name: PR Pre-Merge Check
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-pre-merge-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  POETRY_VIRTUALENVS_IN_PROJECT: "true"
+  PYTHONUTF8: "1"
+
+jobs:
+  quality:
+    name: Code Quality Check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version-file: .python-version
+      - name: Install Poetry
+        run: python -m pip install poetry==2.4.2
+      - name: Select interpreter and install locked dependencies
+        run: |
+          python -c "import subprocess, sys; subprocess.run(['poetry', 'env', 'use', sys.executable], check=True)"
+          python scripts/dev.py install
+      - name: Configuration
+        if: ${{ !cancelled() }}
+        run: poetry run python scripts/dev.py validate-config --evidence-dir "$RUNNER_TEMP/python-quality/config"
+      - name: Formatting
+        if: ${{ !cancelled() }}
+        run: poetry run python scripts/dev.py format-check --evidence-dir "$RUNNER_TEMP/python-quality/format"
+      - name: Lint
+        if: ${{ !cancelled() }}
+        run: poetry run python scripts/dev.py lint --evidence-dir "$RUNNER_TEMP/python-quality/lint"
+      - name: Types
+        if: ${{ !cancelled() }}
+        run: poetry run python scripts/dev.py type-check --evidence-dir "$RUNNER_TEMP/python-quality/types"
+      - name: Retain quality evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: python-quality
+          path: ${{ runner.temp }}/python-quality
+          include-hidden-files: true
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 14
+
+  tests:
+    name: ${{ matrix.name }} Tests (Unit/Integration)
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: ubuntu-24.04, name: Linux, artifact: linux}
+          - {os: windows-2025, name: Windows, artifact: windows}
+          - {os: macos-15, name: MacOS, artifact: macos}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version-file: .python-version
+      - name: Install Poetry
+        run: python -m pip install poetry==2.4.2
+      - name: Select interpreter and install locked dependencies
+        run: |
+          python -c "import subprocess, sys; subprocess.run(['poetry', 'env', 'use', sys.executable], check=True)"
+          python scripts/dev.py install
+      - name: Unit tests
+        if: ${{ !cancelled() }}
+        run: poetry run python scripts/dev.py test-unit --platform-coverage --evidence-dir "$RUNNER_TEMP/python-tests/unit"
+      - name: Integration tests
+        if: ${{ !cancelled() }}
+        run: poetry run python scripts/dev.py test-integration --platform-coverage --evidence-dir "$RUNNER_TEMP/python-tests/integration"
+      # Stable names belong to this run. Partial reruns replace only their own
+      # platform's unit and integration evidence; previous attempt logs remain.
+      - name: Retain native test evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: python-tests-${{ matrix.artifact }}
+          path: ${{ runner.temp }}/python-tests
+          include-hidden-files: true
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 14
+
+  coverage:
+    name: Test Coverage Check
+    if: ${{ !cancelled() }}
+    needs: tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version-file: .python-version
+      - name: Install Poetry
+        run: python -m pip install poetry==2.4.2
+      - name: Select interpreter and install locked dependencies
+        run: |
+          python -c "import subprocess, sys; subprocess.run(['poetry', 'env', 'use', sys.executable], check=True)"
+          python scripts/dev.py install
+      - name: Download Linux suite coverage
+        if: ${{ !cancelled() }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: python-tests-linux
+          path: ${{ runner.temp }}/python-coverage-inputs/Linux
+      - name: Download Windows suite coverage
+        if: ${{ !cancelled() }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: python-tests-windows
+          path: ${{ runner.temp }}/python-coverage-inputs/Windows
+      - name: Enforce complete suites and configured coverage floor
+        if: ${{ !cancelled() }}
+        run: poetry run python scripts/combine_coverage.py "$RUNNER_TEMP/python-coverage-inputs" --output-dir "$RUNNER_TEMP/python-coverage-combined"
+      - name: Retain combined coverage evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: python-combined-coverage
+          path: ${{ runner.temp }}/python-coverage-combined
+          include-hidden-files: true
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 14
+      - name: Record candidate identity
+        if: always()
+        env:
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          TESTED_SHA: ${{ github.sha }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          TEST_RESULT: ${{ needs.tests.result }}
+          COVERAGE_RESULT: ${{ job.status }}
+        run: |
+          {
+            printf '| Identity | Value |\n| --- | --- |\n'
+            printf '| PR head | `%s` |\n' "$PR_HEAD"
+            printf '| PR base | `%s` |\n' "$PR_BASE"
+            printf '| Tested merge commit | `%s` |\n' "$TESTED_SHA"
+            printf '| Run attempt | `%s` |\n' "$RUN_ATTEMPT"
+            printf '| Native tests | %s |\n' "$TEST_RESULT"
+            printf '| Coverage | %s |\n' "$COVERAGE_RESULT"
+          } >> "$GITHUB_STEP_SUMMARY"

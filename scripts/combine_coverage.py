@@ -28,11 +28,25 @@ def verified_inputs(directory: Path, sha: str, tracked_digest: str) -> list[str]
         ValueError: A platform, SHA, clean checkout, or successful test result is missing.
     """
     files: list[str] = []
-    systems: set[str] = set()
+    systems: dict[str, set[str]] = {}
     for path in sorted(directory.rglob("manifest.json")):
         # The collector manifest is canonical; workflow host.json is supplemental diagnostics.
         manifest = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(manifest, dict):
+            raise ValueError(f"Malformed platform evidence: {path}")
         commands = manifest.get("commands", [])
+        if (
+            not isinstance(commands, list)
+            or not commands
+            or any(
+                not isinstance(command, dict)
+                or type(command.get("exit_code")) is not int
+                or command["exit_code"] != 0
+                or not isinstance(command.get("task"), str)
+                for command in commands
+            )
+        ):
+            raise ValueError(f"Missing, malformed or failed commands: {path}")
         if (
             manifest.get("sha") != sha
             or manifest.get("status") != ""
@@ -42,21 +56,28 @@ def verified_inputs(directory: Path, sha: str, tracked_digest: str) -> list[str]
             or not tracked_digest
             or manifest.get("tracked_digest") != tracked_digest
             or manifest.get("tracked_digest") != manifest.get("end_tracked_digest")
-            or not commands
-            or any(command["exit_code"] != 0 for command in commands)
-            or not any(command["task"] == "test" for command in commands)
         ):
             raise ValueError(f"Incomplete or mismatched platform evidence: {path}")
         system = manifest["system"]
-        if system not in {"Windows", "Linux"} or system in systems:
-            raise ValueError(f"Unexpected or duplicate native platform: {system}")
+        suite_tasks = [command["task"] for command in commands if command["task"] in dev.TEST_TASKS]
+        if (
+            not isinstance(system, str)
+            or system not in {"Windows", "Linux"}
+            or len(suite_tasks) != 1
+        ):
+            raise ValueError(f"Unexpected platform or test suite: {path}")
+        suites = set(suite_tasks)
+        if systems.setdefault(system, set()) & suites:
+            raise ValueError(f"Duplicate native test suite: {path}")
         coverage_file = path.parent / ".coverage"
         if not coverage_file.is_file():
             raise ValueError(f"Missing coverage database: {coverage_file}")
-        systems.add(system)
+        systems[system].update(suites)
         files.append(str(coverage_file))
-    if systems != {"Windows", "Linux"}:
-        raise ValueError("Both native Windows and Linux results are required")
+    if set(systems) != {"Windows", "Linux"} or any(
+        suites not in ({"test"}, {"test-unit", "test-integration"}) for suites in systems.values()
+    ):
+        raise ValueError("Both native Windows and Linux require complete successful test suites")
     return files
 
 

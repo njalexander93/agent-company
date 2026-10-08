@@ -1,0 +1,132 @@
+"""Verify PR scheduling policy and independent collectors with disposable failures."""
+
+import json
+import shlex
+import sys
+from pathlib import Path
+
+import pytest
+import yaml
+
+from scripts import dev
+from tests.support import ROOT
+
+pytestmark = pytest.mark.integration
+WORKFLOW = ROOT / ".github/workflows/pr-checks.yml"
+
+
+def test_workflow_exposes_five_checks_without_masking_failed_steps() -> None:
+    """Require explicit continuation, independent platforms and a separate coverage result.
+
+    Raises:
+        AssertionError: A failed check is masked or prevents a later required check.
+    """
+    jobs = yaml.safe_load(WORKFLOW.read_text())["jobs"]
+    assert set(jobs) == {"quality", "tests", "coverage"}
+    assert jobs["quality"]["name"] == "Code Quality Check"
+    assert jobs["coverage"]["name"] == "Test Coverage Check"
+    tests = jobs["tests"]
+    assert tests["name"] == "${{ matrix.name }} Tests (Unit/Integration)"
+    assert tests["strategy"]["fail-fast"] is False
+    assert {item["name"] for item in tests["strategy"]["matrix"]["include"]} == {
+        "Linux",
+        "Windows",
+        "MacOS",
+    }
+    assert "needs" not in jobs["quality"] and "needs" not in tests
+    assert jobs["coverage"]["needs"] == "tests"
+    assert jobs["coverage"]["if"] == "${{ !cancelled() }}"
+    for job in jobs.values():
+        assert "continue-on-error" not in job
+        for step in job["steps"]:
+            assert "continue-on-error" not in step
+            if step.get("run", "").startswith("poetry run python scripts/"):
+                assert step["if"] == "${{ !cancelled() }}"
+
+
+@pytest.mark.parametrize("job", ["quality", "tests"])
+def test_workflow_collectors_retain_failure_and_run_later_checks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, job: str
+) -> None:
+    """Run the actual workflow collector arguments independently after an injected failure.
+
+    Args:
+        tmp_path: Disposable evidence directory and marker files.
+        monkeypatch: Scoped command plan and checkout identity, never real platform evidence.
+        job: Sequential quality checks or split native test suites.
+
+    Raises:
+        AssertionError: A failure is lost, a later check is absent, or suite data collides.
+    """
+    steps = yaml.safe_load(WORKFLOW.read_text())["jobs"][job]["steps"]
+    selected = [
+        step
+        for step in steps
+        if step.get("run", "").startswith("poetry run python scripts/dev.py ")
+    ]
+    tasks = [shlex.split(step["run"])[4] for step in selected]
+    assert tasks == (
+        ["validate-config", "format-check", "lint", "type-check"]
+        if job == "quality"
+        else ["test-unit", "test-integration"]
+    )
+    state = {"sha": "fixture", "status": "", "tracked_digest": "bytes"}
+    monkeypatch.setattr(dev, "ROOT", tmp_path)
+    monkeypatch.setattr(dev, "identity", lambda: dict(state))
+    monkeypatch.setattr(dev, "checkout_state", lambda: dict(state))
+    commands = {}
+    for index, task in enumerate(tasks):
+        program = (
+            "import os; from pathlib import Path; "
+            f"Path({str(tmp_path / task)!r}).touch(); "
+            "print(os.environ.get('AGENT_COMPANY_COVERAGE_CONTEXT', 'quality')); "
+            f"raise SystemExit({7 if index == 0 else 0})"
+        )
+        commands[task] = [[sys.executable, "-c", program]]
+    monkeypatch.setattr(dev, "COMMANDS", commands)
+    results = []
+    contexts = []
+    for step, task in zip(selected, tasks, strict=True):
+        # This checks GitHub's explicit scheduling condition separately from collector behavior.
+        assert step["if"] == "${{ !cancelled() }}"
+        arguments = shlex.split(step["run"].replace("$RUNNER_TEMP", tmp_path.as_posix()))[4:]
+        monkeypatch.setattr(sys, "argv", ["dev.py", *arguments])
+        results.append(dev.main())
+        evidence = Path(arguments[arguments.index("--evidence-dir") + 1])
+        manifest = json.loads((evidence / "manifest.json").read_text())
+        assert manifest["commands"][0]["exit_code"] == results[-1]
+        assert (tmp_path / task).is_file()
+        if job == "tests":
+            command = manifest["commands"][0]["command"]
+            assert "--cov" in command and "--cov-fail-under=0" in command
+            assert any(arg.startswith("--junitxml=") for arg in command)
+            contexts.append((evidence / f"{task}-0.log").read_text().strip())
+    assert results == [7, *([0] * (len(tasks) - 1))]
+    if job == "tests":
+        assert contexts[0] != contexts[1]
+
+
+@pytest.mark.parametrize("task", ["test-unit", "test-integration"])
+def test_split_collector_rejects_candidate_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, task: str
+) -> None:
+    """Fail a successful subset process if its source identity changes while it runs.
+
+    Args:
+        tmp_path: Disposable evidence and subprocess directory.
+        monkeypatch: Scoped candidate identity and real harmless subprocess.
+        task: Subset collector whose source boundary is checked.
+
+    Raises:
+        AssertionError: A changed candidate receives successful suite evidence.
+    """
+    state = {"sha": "fixture", "status": "", "tracked_digest": "before"}
+    monkeypatch.setattr(dev, "ROOT", tmp_path)
+    monkeypatch.setattr(dev, "identity", lambda: dict(state))
+    monkeypatch.setattr(dev, "checkout_state", lambda: {**state, "tracked_digest": "after"})
+    monkeypatch.setattr(dev, "COMMANDS", {task: [[sys.executable, "-c", "pass"]]})
+    monkeypatch.setattr(
+        sys, "argv", ["dev.py", task, "--platform-coverage", "--evidence-dir", str(tmp_path)]
+    )
+    assert dev.main() == 1
+    assert json.loads((tmp_path / "manifest.json").read_text())["candidate_unchanged"] is False
