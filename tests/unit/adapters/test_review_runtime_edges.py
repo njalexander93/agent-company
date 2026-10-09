@@ -418,17 +418,25 @@ def test_native_lookup_skips_other_tools_and_rejects_malformed_generic_input(
     assert code(caught) == "INVALID_REQUEST"
 
 
+@pytest.mark.parametrize("response_shape", ["issue", "content-list", "serialized-content-list"])
 def test_claude_ticket_completion_requires_exact_native_call(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, response_shape: str
 ) -> None:
     """Reject unsolicited and competing completions while allowing an exact retry.
 
     Args:
         monkeypatch: Replaces binding storage and local startup for call correlation.
+        response_shape: Normalized issue or Desktop's raw or serialized content list.
     """
     # Completion without an admitted native call must not start a workspace.
     entries = install_bindings(monkeypatch, "claude-code")
     callback = event("claude-code", tool_response={"id": UUID, "identifier": ISSUE})
+    # Exercise Desktop's observed response through the real shared ticket parser.
+    if response_shape != "issue":
+        blocks = [{"type": "text", "text": json.dumps({"id": ISSUE, "uuid": UUID})}]
+        callback["tool_response"] = (
+            json.dumps(blocks) if response_shape == "serialized-content-list" else blocks
+        )
     monkeypatch.setattr(
         startup,
         "start",
@@ -456,6 +464,43 @@ def test_claude_ticket_completion_requires_exact_native_call(
     key = core.participant_key({"host": "claude-code", "session_id": "session"})
     assert f"/.task/.bindings/{key}.lookup-required.json" not in entries
     assert f"/.task/.bindings/{key}.lookup.json" not in entries
+
+
+@pytest.mark.parametrize(
+    "blocks,expected",
+    [
+        ([], "PROVIDER_RESPONSE_INVALID"),
+        ([{"type": "text", "text": "{}"}] * 2, "PROVIDER_RESPONSE_INVALID"),
+        (
+            [{"type": "text", "text": json.dumps({"id": "AGENT-99", "uuid": UUID})}],
+            "ISSUE_MISMATCH",
+        ),
+    ],
+)
+def test_claude_content_list_preserves_provider_validation(
+    monkeypatch: pytest.MonkeyPatch, blocks: list[dict[str, str]], expected: str
+) -> None:
+    """Reject malformed or wrong-ticket Desktop results before starting a workspace.
+
+    Args:
+        monkeypatch: Replaces storage and forbids startup for an invalid result.
+        blocks: Desktop content list returned by the admitted read.
+        expected: Diagnostic from the real shared provider parser.
+    """
+    # Admit one native call without creating any real repository or workspace.
+    entries = install_bindings(monkeypatch, "claude-code")
+    callback = event("claude-code", tool_response=blocks)
+    assert common.native_ticket_lookup(callback, "claude-code") == {}
+    monkeypatch.setattr(
+        startup, "start", lambda *_args, **_kwargs: pytest.fail("workspace started")
+    )
+    # Wrapping the list must retain parser rejection and permit a fresh exact read.
+    with pytest.raises(core.WorkspaceError) as caught:
+        common.native_ticket_lookup(callback, "claude-code", complete=True)
+    assert code(caught) == expected
+    key = core.participant_key({"host": "claude-code", "session_id": "session"})
+    assert f"/.task/.bindings/{key}.lookup.json" not in entries
+    assert f"/.task/.bindings/{key}.lookup-required.json" in entries
 
 
 @pytest.mark.parametrize("order", [(False, True), (True, False)])
