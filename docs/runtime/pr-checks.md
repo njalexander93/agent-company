@@ -38,15 +38,17 @@ It also retains native suite totals, a pinned-base source diff and the order
 replay status as **advisory** entries. These do not create a hidden score or a
 second percentage floor.
 
-The function check compares AST-listed source functions with the union of
-executable lines and branch arcs in applicable native **unit** reports. It
-retains each OS report so platform gaps remain visible. Scripts use the
+The function check compares AST-listed source functions with executable lines
+and branch arcs in each applicable native **unit** report separately. A path
+missed on one OS fails even when another OS covers it. Scripts use the
 separate tooling unit report, so they do not change the production denominator.
 The checked-in [exception ledger](../../scripts/quality_exceptions.json) starts
 empty. An exception requires the exact source digest, paths, platform, case IDs,
-independent reviewer and review date. A named reviewer entry needs real review;
-the checker also requires each cited exact test node to have executed successfully
-on the claimed native platforms. It rejects stale or unused line/arc exceptions.
+independent reviewer and review date. Its named platforms must match the native
+reports where those exact paths remain missing. A named reviewer entry needs
+real review; the checker also requires each cited exact test node to have
+executed successfully on the claimed native platforms. It rejects stale or
+unused line/arc exceptions.
 It cannot decide whether an assertion is meaningful. Gaps without such evidence
 fail. Focused Ruff rules are `F631,PT010,PT011,PT012,PT026,PT030`.
 The [probe specification](../../scripts/quality_probes.json) selects one wrong

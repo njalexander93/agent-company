@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -1133,12 +1134,13 @@ def test_cleanup_commit_rejects_stale_challenge_without_intent(
 
 def test_completed_outcome_requires_verified_local_evidence_and_provider_status(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """Set completed only after local evidence bytes and typed provider state match."""
     store, issue = MemoryStore(), MemoryIssue()
     source = {
         "id": "acceptance",
-        "locator": "/evidence/acceptance.md",
+        "locator": str(tmp_path / "evidence/acceptance.md"),
         "sha256": core.sha(b"accepted"),
     }
     opened: list[str] = []
@@ -1187,7 +1189,7 @@ def test_completed_outcome_requires_verified_local_evidence_and_provider_status(
         ),
     )  # type: ignore[arg-type]
     assert result["ok"] is True
-    assert opened == ["/evidence"] * 3
+    assert opened == [str(tmp_path / "evidence")] * 3
     assert issue.state["disposition"] == "completed"
     assert issue.state["provider_completion"] == provider
     assert issue.commits[-1][0] == "outcome"
@@ -1195,12 +1197,13 @@ def test_completed_outcome_requires_verified_local_evidence_and_provider_status(
 
 def test_completed_outcome_rejects_provider_status_without_commit(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """Do not treat unverified provider status as issue completion."""
     store, issue = MemoryStore(), MemoryIssue()
     source = {
         "id": "acceptance",
-        "locator": "/evidence/acceptance.md",
+        "locator": str(tmp_path / "evidence/acceptance.md"),
         "sha256": core.sha(b"accepted"),
     }
 
@@ -1291,6 +1294,7 @@ def test_event_rollover_rejects_unverified_export_without_segment() -> None:
 
 def test_adopt_requires_exact_existing_payload_inventory_and_owners(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """Adopt previously inspected bytes without replacing the existing roadmap."""
     store, issue = MemoryStore(), MemoryIssue()
@@ -1323,7 +1327,11 @@ def test_adopt_requires_exact_existing_payload_inventory_and_owners(
 
     store.task = Task()
     monkeypatch.setattr(core, "inventory", lambda _payload: files)
-    source = {"id": "inspection", "locator": "/evidence/inspection.md", "sha256": core.sha(b"ok")}
+    source = {
+        "id": "inspection",
+        "locator": str(tmp_path / "evidence/inspection.md"),
+        "sha256": core.sha(b"ok"),
+    }
     request = base_request(
         "adopt",
         issue_uuid="uuid",
@@ -1342,6 +1350,7 @@ def test_adopt_requires_exact_existing_payload_inventory_and_owners(
 
 def test_adopt_rejects_changed_existing_payload_before_commit(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """Leave prior files unregistered when the supplied inspection digest is stale."""
     store, issue = MemoryStore(), MemoryIssue()
@@ -1373,7 +1382,11 @@ def test_adopt_rejects_changed_existing_payload_before_commit(
 
     store.task = Task()
     monkeypatch.setattr(core, "inventory", lambda _payload: files)
-    source = {"id": "inspection", "locator": "/evidence/inspection.md", "sha256": core.sha(b"ok")}
+    source = {
+        "id": "inspection",
+        "locator": str(tmp_path / "evidence/inspection.md"),
+        "sha256": core.sha(b"ok"),
+    }
     with pytest.raises(core.WorkspaceError) as captured:
         core.operate(
             store,

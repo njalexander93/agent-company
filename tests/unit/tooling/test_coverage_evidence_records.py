@@ -116,6 +116,30 @@ def check(directory: Path) -> tuple[str, str, Path]:
     )
 
 
+def test_native_record_accepts_windows_json_paths_and_rejects_collisions(tmp_path: Path) -> None:
+    """Native JSON separators may differ from database paths, but aliases cannot collide."""
+    directory = record(tmp_path, "Windows", "unit")
+    report_path = directory / "coverage.json"
+    manifest_path = directory / "manifest.json"
+    report = json.loads(report_path.read_text())
+    source = "src/agent_company/sample.py"
+    windows_source = source.replace("/", "\\")
+    row = report["files"].pop(source)
+    report["files"][windows_source] = row
+    report_path.write_text(json.dumps(report))
+    manifest = json.loads(manifest_path.read_text())
+    manifest["artifacts_sha256"]["coverage.json"] = digest(report_path)
+    manifest_path.write_text(json.dumps(manifest))
+    assert check(directory) == ("Windows", "unit", directory / ".coverage")
+
+    report["files"][source] = row
+    report_path.write_text(json.dumps(report))
+    manifest["artifacts_sha256"]["coverage.json"] = digest(report_path)
+    manifest_path.write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match="duplicate normalized coverage source"):
+        check(directory)
+
+
 @pytest.mark.parametrize(
     "defect",
     [

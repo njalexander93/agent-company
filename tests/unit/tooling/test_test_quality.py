@@ -59,11 +59,14 @@ def test_function_gap_repair_is_measured_by_unit_report(
     for system in quality.SYSTEMS:
         directory = tmp_path / "evidence" / system / "unit"
         directory.mkdir(parents=True)
+        source_key = (
+            "src\\agent_company\\logic.py" if system == "Windows" else "src/agent_company/logic.py"
+        )
         (directory / "coverage.json").write_text(
             json.dumps(
                 {
                     "files": {
-                        "src/agent_company/logic.py": {
+                        source_key: {
                             "executed_lines": [1, 2, 3],
                             "missing_lines": [4],
                             "executed_branches": [[2, 3]],
@@ -75,7 +78,8 @@ def test_function_gap_repair_is_measured_by_unit_report(
         )
         records[(system, "unit")] = directory / ".coverage"
     gaps = quality.function_gaps(records, {system: {} for system in quality.SYSTEMS}, [])
-    assert len(gaps) == 1
+    assert len(gaps) == 3
+    assert {gap["systems"][0] for gap in gaps} == set(quality.SYSTEMS)
     assert all(gap["missing_lines"] == [4] and gap["missing_arcs"] == [[2, 4]] for gap in gaps)
     path = records[("Linux", "unit")].parent / "coverage.json"
     report = json.loads(path.read_text())
@@ -85,7 +89,12 @@ def test_function_gap_repair_is_measured_by_unit_report(
     row["executed_branches"].append([2, 4])
     row["missing_branches"] = []
     path.write_text(json.dumps(report))
-    # One applicable native path can cover a portable branch absent on peers.
+    # A repair on one native OS cannot erase the other two gaps.
+    gaps = quality.function_gaps(records, {system: {} for system in quality.SYSTEMS}, [])
+    assert {gap["systems"][0] for gap in gaps} == {"Windows", "Darwin"}
+    for system in ("Windows", "Darwin"):
+        path = records[(system, "unit")].parent / "coverage.json"
+        path.write_text(json.dumps(report))
     assert quality.function_gaps(records, {system: {} for system in quality.SYSTEMS}, []) == []
 
 
@@ -105,9 +114,10 @@ def test_function_gap_flags_unmeasured_and_unmapped_source(
         (directory / "coverage.json").write_text(json.dumps({"files": {}}))
         records[(system, "unit")] = directory / ".coverage"
     gaps = quality.function_gaps(records, {system: {} for system in quality.SYSTEMS}, [])
-    assert len(gaps) == 1
-    assert gaps[0]["error"] == "missing source report"
-    assert gaps[0]["missing_on"] == sorted(quality.SYSTEMS)
+    assert len(gaps) == 3
+    assert {gap["systems"][0] for gap in gaps} == set(quality.SYSTEMS)
+    assert all(gap["error"] == "missing source report" for gap in gaps)
+    assert all(gap["missing_on"] == gap["systems"] for gap in gaps)
 
     for system in quality.SYSTEMS:
         path = records[(system, "unit")].parent / "coverage.json"
@@ -126,8 +136,8 @@ def test_function_gap_flags_unmeasured_and_unmapped_source(
             )
         )
     gaps = quality.function_gaps(records, {system: {} for system in quality.SYSTEMS}, [])
-    assert len(gaps) == 1
-    assert gaps[0]["error"] == "no executable mapping"
+    assert len(gaps) == 3
+    assert all(gap["error"] == "no executable mapping" for gap in gaps)
 
 
 def test_function_exception_requires_exact_executed_case_and_missing_path(
@@ -157,13 +167,14 @@ def test_function_exception_requires_exact_executed_case_and_missing_path(
             )
             records[(system, suite)] = directory / ".coverage"
         unit = records[(system, "unit")].parent
+        linux_gap = system == "Linux"
         (unit / "coverage.json").write_text(
             json.dumps(
                 {
                     "files": {
                         "src/agent_company/logic.py": {
-                            "executed_lines": [1],
-                            "missing_lines": [2],
+                            "executed_lines": [1] if linux_gap else [1, 2],
+                            "missing_lines": [2] if linux_gap else [],
                             "executed_branches": [],
                             "missing_branches": [],
                         },
@@ -176,13 +187,15 @@ def test_function_exception_requires_exact_executed_case_and_missing_path(
         "source_path": "src/agent_company/logic.py",
         "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
         "symbol": "agent_company.logic:choose",
-        "platforms": list(quality.SYSTEMS),
+        "platforms": ["Linux"],
         "missing_lines": [2],
         "missing_arcs": [],
         "exception_paths": [],
         "compensating_case_ids": [case],
     }
     tooling = {system: {} for system in quality.SYSTEMS}
+    gaps = quality.function_gaps(records, tooling, [])
+    assert len(gaps) == 1 and gaps[0]["systems"] == ["Linux"]
     assert quality.function_gaps(records, tooling, [exception]) == []
     invalid_case = {**exception, "compensating_case_ids": [case + "_missing"]}
     with pytest.raises(ValueError, match="did not execute"):
@@ -190,12 +203,31 @@ def test_function_exception_requires_exact_executed_case_and_missing_path(
     invalid_line = {**exception, "missing_lines": [3]}
     with pytest.raises(ValueError, match="nonmissing path"):
         quality.function_gaps(records, tooling, [invalid_line])
+    wrong_platform = {**exception, "platforms": ["Windows"]}
+    with pytest.raises(ValueError, match="nonmissing path"):
+        quality.function_gaps(records, tooling, [wrong_platform])
+    with monkeypatch.context() as scoped:
+        scoped.setattr(quality, "applicable", lambda _path: {"Linux"})
+        inapplicable_platform = {**exception, "platforms": ["Linux", "Windows"]}
+        with pytest.raises(ValueError, match="inapplicable platform"):
+            quality.function_gaps(records, tooling, [inapplicable_platform])
+    stale_source = {**exception, "source_sha256": "0" * 64}
+    with pytest.raises(ValueError, match="unused or mismatched"):
+        quality.function_gaps(records, tooling, [stale_source])
     invalid_symbol = {**exception, "symbol": "agent_company.logic:other"}
     with pytest.raises(ValueError, match="unused or mismatched"):
         quality.function_gaps(records, tooling, [invalid_symbol])
     empty = {**exception, "missing_lines": [], "missing_arcs": [], "exception_paths": []}
     with pytest.raises(ValueError, match="empty exception"):
         quality.function_gaps(records, tooling, [empty])
+    unit = records[("Linux", "unit")].parent / "coverage.json"
+    report = json.loads(unit.read_text())
+    row = report["files"]["src/agent_company/logic.py"]
+    row["executed_lines"].append(2)
+    row["missing_lines"] = []
+    unit.write_text(json.dumps(report))
+    with pytest.raises(ValueError, match="nonmissing path"):
+        quality.function_gaps(records, tooling, [exception])
 
 
 def test_exception_ledger_rejects_stale_or_unreviewed_record(
@@ -383,18 +415,30 @@ def test_tooling_receipt_detects_a_changed_report(
     windows = root / "Windows/tooling-unit"
     report_path = windows / "coverage.json"
     original_report = report_path.read_text()
+    native_report = json.loads(original_report)
+    native_report["files"]["scripts\\sample.py"] = native_report["files"].pop("scripts/sample.py")
+    report_path.write_text(json.dumps(native_report))
+    manifest_path = windows / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["artifacts_sha256"]["coverage.json"] = hashlib.sha256(
+        report_path.read_bytes()
+    ).hexdigest()
+    manifest_path.write_text(json.dumps(manifest))
+    assert set(quality.valid_tooling(root, identity)["Windows"]) == {"scripts/sample.py"}
     report_path.write_text("{}")
     with pytest.raises(ValueError, match="missing or changed artifact"):
         quality.valid_tooling(root, identity)
 
     report_path.write_text(original_report)
+    manifest["artifacts_sha256"]["coverage.json"] = hashlib.sha256(
+        report_path.read_bytes()
+    ).hexdigest()
+    manifest_path.write_text(json.dumps(manifest))
     outcomes_path = windows / "pytest-evidence.json"
     outcomes = json.loads(outcomes_path.read_text())
     nodeid = outcomes["collected"][0]["nodeid"]
     outcomes["collected"][0]["suite_markers"] = []
     outcomes_path.write_text(json.dumps(outcomes))
-    manifest_path = windows / "manifest.json"
-    manifest = json.loads(manifest_path.read_text())
     manifest["artifacts_sha256"]["pytest-evidence.json"] = hashlib.sha256(
         outcomes_path.read_bytes()
     ).hexdigest()

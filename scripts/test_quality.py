@@ -19,7 +19,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from scripts import dev  # noqa: E402
-from scripts.coverage_evidence import valid_suite  # noqa: E402
+from scripts.coverage_evidence import normalized_report_files, valid_suite  # noqa: E402
 
 LINT_RULES = "F631,PT010,PT011,PT012,PT026,PT030"
 SYSTEMS = ("Linux", "Windows", "Darwin")
@@ -171,9 +171,9 @@ def valid_tooling(root: Path, identity: dict[str, str]) -> dict[str, dict[str, A
             )
             if observed != system or suite != "tooling-unit":
                 raise ValueError(f"misplaced tooling unit record: {system}")
-            reports[system] = json.loads((directory / "coverage.json").read_text(encoding="utf-8"))[
-                "files"
-            ]
+            reports[system] = normalized_report_files(
+                json.loads((directory / "coverage.json").read_text(encoding="utf-8"))
+            )
         except (ValueError, OSError, KeyError, TypeError) as error:
             errors.append(f"{system}/tooling-unit: {error}")
     extra = [
@@ -260,9 +260,11 @@ def function_gaps(
     validate_compensating_cases(records, exceptions)
     used: set[str] = set()
     production = {
-        system: json.loads(
-            (records[(system, "unit")].parent / "coverage.json").read_text(encoding="utf-8")
-        )["files"]
+        system: normalized_report_files(
+            json.loads(
+                (records[(system, "unit")].parent / "coverage.json").read_text(encoding="utf-8")
+            )
+        )
         for system in SYSTEMS
     }
     gaps: list[dict[str, Any]] = []
@@ -277,76 +279,74 @@ def function_gaps(
         module = relative.removesuffix(".py").removeprefix("src/").replace("/", ".")
         systems = sorted(applicable(relative))
         reports = tooling if relative.startswith("scripts/") else production
-        rows = {system: reports[system].get(relative) for system in systems}
         for symbol, first, last in functions:
             full_symbol = f"{module}:{symbol}"
-            if any(row is None for row in rows.values()):
-                gaps.append(
-                    {
-                        "systems": systems,
-                        "source_path": relative,
-                        "symbol": full_symbol,
-                        "error": "missing source report",
-                        "missing_on": [system for system, row in rows.items() if row is None],
-                    }
-                )
-                continue
-            available_rows = [row for row in rows.values() if row is not None]
-            # A portable branch may be reachable on only one OS. Union actual
-            # unit observations while retaining separate native reports.
-            executable = {
-                line
-                for row in available_rows
-                for line in (row["executed_lines"] + row["missing_lines"])
-            }
-            executed = {line for row in available_rows for line in row["executed_lines"]}
-            possible_arcs = {
-                tuple(arc)
-                for row in available_rows
-                for arc in (row["executed_branches"] + row["missing_branches"])
-            }
-            executed_arcs = {
-                tuple(arc) for row in available_rows for arc in row["executed_branches"]
-            }
             nested = [
                 (a, b) for other, a, b in functions if other != symbol and first <= a <= b <= last
             ]
-            own = {
-                line
-                for line in executable
-                if first <= line <= last and not any(a <= line <= b for a, b in nested)
-            }
-            lines = (own & executable) - executed
-            arcs = {arc for arc in possible_arcs - executed_arcs if arc[0] in own}
-            approved_lines: set[int] = set()
-            approved_arcs: set[tuple[int, int]] = set()
-            for exception in exceptions:
-                if (
-                    exception["source_path"] == relative
-                    and exception["source_sha256"] == digest
-                    and exception["symbol"] == full_symbol
-                    and set(systems) == set(exception["platforms"])
-                ):
+            matching = [
+                exception
+                for exception in exceptions
+                if exception["source_path"] == relative
+                and exception["source_sha256"] == digest
+                and exception["symbol"] == full_symbol
+            ]
+            for exception in matching:
+                if not set(exception["platforms"]) <= set(systems):
+                    raise ValueError(f"exception claims inapplicable platform: {exception['id']}")
+            for system in systems:
+                row = reports[system].get(relative)
+                if row is None:
+                    gaps.append(
+                        {
+                            "systems": [system],
+                            "source_path": relative,
+                            "symbol": full_symbol,
+                            "error": "missing source report",
+                            "missing_on": [system],
+                        }
+                    )
+                    continue
+                executable = set(row["executed_lines"] + row["missing_lines"])
+                executed = set(row["executed_lines"])
+                possible_arcs = {
+                    tuple(arc) for arc in row["executed_branches"] + row["missing_branches"]
+                }
+                executed_arcs = {tuple(arc) for arc in row["executed_branches"]}
+                own = {
+                    line
+                    for line in executable
+                    if first <= line <= last and not any(a <= line <= b for a, b in nested)
+                }
+                lines = own - executed
+                arcs = {arc for arc in possible_arcs - executed_arcs if arc[0] in own}
+                approved_lines: set[int] = set()
+                approved_arcs: set[tuple[int, int]] = set()
+                for exception in matching:
+                    if system not in exception["platforms"]:
+                        continue
                     claimed_lines = set(exception["missing_lines"])
                     claimed_arcs = {tuple(arc) for arc in exception["missing_arcs"]}
                     if not claimed_lines <= lines or not claimed_arcs <= arcs:
-                        raise ValueError(f"exception claims nonmissing path: {exception['id']}")
+                        raise ValueError(
+                            f"exception claims nonmissing path: {exception['id']} {system}"
+                        )
                     if not claimed_lines and not claimed_arcs and not exception["exception_paths"]:
                         raise ValueError(f"empty exception: {exception['id']}")
                     used.add(exception["id"])
-                    approved_lines.update(exception["missing_lines"])
-                    approved_arcs.update(tuple(arc) for arc in exception["missing_arcs"])
-            if not own or lines - approved_lines or arcs - approved_arcs:
-                gaps.append(
-                    {
-                        "systems": systems,
-                        "source_path": relative,
-                        "symbol": full_symbol,
-                        "missing_lines": sorted(lines - approved_lines),
-                        "missing_arcs": sorted([list(arc) for arc in arcs - approved_arcs]),
-                        "error": "no executable mapping" if not own else "unreviewed unit gap",
-                    }
-                )
+                    approved_lines.update(claimed_lines)
+                    approved_arcs.update(claimed_arcs)
+                if not own or lines - approved_lines or arcs - approved_arcs:
+                    gaps.append(
+                        {
+                            "systems": [system],
+                            "source_path": relative,
+                            "symbol": full_symbol,
+                            "missing_lines": sorted(lines - approved_lines),
+                            "missing_arcs": sorted([list(arc) for arc in arcs - approved_arcs]),
+                            "error": "no executable mapping" if not own else "unreviewed unit gap",
+                        }
+                    )
     unused = {record["id"] for record in exceptions} - used
     if unused:
         raise ValueError(f"unused or mismatched exceptions: {sorted(unused)}")

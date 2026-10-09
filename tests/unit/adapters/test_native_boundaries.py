@@ -12,12 +12,15 @@ from agent_company.lifecycle import task_workspace as core
 
 pytestmark = pytest.mark.unit
 
+CHECKOUT = Path(Path.cwd().anchor) / "checkout"
+OTHER = Path(Path.cwd().anchor) / "other"
+
 
 def event() -> dict[str, Any]:
     """Supply one identity-validated native hook event."""
     return {
         "session_id": "session",
-        "cwd": "/checkout",
+        "cwd": str(CHECKOUT),
         "tool_use_id": "tool-1",
         "tool_name": "Shell",
         "tool_input": {"command": "echo ok"},
@@ -44,7 +47,7 @@ def test_native_bootstrap_rejects_foreign_working_directory(
     """Reject a native directory override outside the observed repository."""
     monkeypatch.setattr(common.core, "repository", lambda path: (Path(path), None, []))
     monkeypatch.setattr(common, "canonical_bootstrap", lambda *_args: pytest.fail("parsed"))
-    altered = {**event(), "tool_input": {"command": "echo ok", "working_directory": "/other"}}
+    altered = {**event(), "tool_input": {"command": "echo ok", "working_directory": str(OTHER)}}
     assert common.native_bootstrap(altered, "cursor") is False
 
 
@@ -81,7 +84,7 @@ def test_native_bootstrap_rejects_background_and_repository_failure(
         "repository",
         lambda _path: (_ for _ in ()).throw(core.WorkspaceError("UNSAFE_PATH")),
     )
-    cursor = {**event(), "tool_input": {"command": "echo ok", "working_directory": "/checkout"}}
+    cursor = {**event(), "tool_input": {"command": "echo ok", "working_directory": str(CHECKOUT)}}
     assert common.native_bootstrap(cursor, "cursor") is False
 
 
@@ -157,7 +160,7 @@ def test_automatic_attach_uses_only_persisted_startup_assignment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Create and scope only the exact coordinator-owned startup packet."""
-    native = {"cwd": "/checkout", "session_id": "session"}
+    native = {"cwd": str(CHECKOUT), "session_id": "session"}
     key = core.participant_key({"host": "codex", "session_id": "session"})
     packet = [{"reader": key, "id": "roadmap"}]
     setup = {"issue_id": "AGENT-30", "issue_uuid": "uuid", "coordinator": key, "packet": packet}
@@ -294,7 +297,7 @@ def test_automatic_attach_keeps_existing_assigned_packet_without_recreation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Return after verified existing participant scope, preserving its packet."""
-    native = {"cwd": "/checkout", "session_id": "session"}
+    native = {"cwd": str(CHECKOUT), "session_id": "session"}
     key = core.participant_key({"host": "codex", "session_id": "session"})
 
     class Control:
@@ -441,7 +444,9 @@ def test_automatic_attach_bound_without_packet_does_not_invent_assignment(
         ),
     )
     assert (
-        common.automatic_attach({"cwd": "/checkout", "session_id": "session"}, "AGENT-30", "codex")
+        common.automatic_attach(
+            {"cwd": str(CHECKOUT), "session_id": "session"}, "AGENT-30", "codex"
+        )
         is None
     )
     assert calls == ["diagnose"]
@@ -452,7 +457,7 @@ def test_automatic_attach_without_setup_attempts_only_existing_core_scope(
     monkeypatch: pytest.MonkeyPatch, code: str
 ) -> None:
     """Do not create a new issue when no startup packet was persisted."""
-    native = {"cwd": "/checkout", "session_id": "session"}
+    native = {"cwd": str(CHECKOUT), "session_id": "session"}
 
     class Bindings:
         """Report no explicit startup assignment."""

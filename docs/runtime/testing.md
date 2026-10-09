@@ -61,7 +61,9 @@ or every exception path ([coverage branches](https://coverage.readthedocs.io/en/
 Do not add broad `omit`, `pragma: no cover`, or a lower aggregate floor to
 silence a gap. The current `*/__init__.py` omission remains the only configured
 production omission. Report unit and integration lines and arcs separately on
-each native OS. Collect tooling separately so the historical production-only
+each native OS. Enforce each function against its own applicable OS report;
+execution on one OS cannot erase another OS's gap. An exact reviewed exception
+may cover only its explicitly named platforms. Collect tooling separately so the historical production-only
 Linux+Windows aggregate remains comparable at **80% unrounded**. macOS evidence
 is required separately; it does not rescue that aggregate.
 

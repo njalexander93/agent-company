@@ -179,7 +179,7 @@ A hook can deny a covered action only when the host actually invokes and honors 
 
 An unready session may use only:
 
-1. On a Codex path with observable direct native callbacks, the direct `linear_get_issue({id})`
+1. On a Codex path with observable native callbacks for the exact tool, the `linear_get_issue({id})`
    call for the exact `Task: <issue-id>` assignment. The prompt records the requested
    identifier and no issue workspace. The adapter records the admitted tool ID,
    matches its completion, verifies the returned identifier and immutable UUID,
@@ -188,8 +188,10 @@ An unready session may use only:
    workspace creation. That envelope reports Linear could not find the requested
    identifier; generic `INVALID_ARGUMENT` and unverified provider errors are not
    reclassified as missing tickets. This exception does not admit issue edits,
-   arbitrary searches, `functions.exec` wrappers or other MCP calls. Nested MCP
-   callback forwarding is unverified; an outer wrapper alone receives no exemption.
+   arbitrary searches, outer `functions.exec` wrappers or other MCP calls. Codex
+   [documents hook decisions for nested code-mode tool calls](https://learn.chatgpt.com/docs/hooks#tool-calls-from-code-mode);
+   model-visible wrapping alone does not identify the native callback. An actually
+   observed outer-wrapper-only hook event receives no exemption.
 2. Host user-input/permission UI needed to grant the exact requested paths.
 3. The reviewed lifecycle command's exact `diagnose/register/bind/adopt/resume/restore` invocation for its assigned issue and allowlisted arguments. Allow no shell operators, redirection, command substitution, wrapper interpreters, arbitrary files or additional command. Parse a strict argument vector; reject anything the adapter cannot prove is this command.
 4. The exact Linear read/save operations bound to a pending immutable archive/recovery request, with checked issue/document ID and expected payload digest. This exception does not allow general provider edits. If nested tool calls conceal those arguments, use an observable direct call or retain the data.

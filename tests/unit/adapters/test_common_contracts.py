@@ -162,14 +162,16 @@ def test_native_tool_cursor_shell_rejects_foreign_directory(
 ) -> None:
     """Cursor shell work cannot redirect to an unbound repository."""
     monkeypatch.setattr(common.core, "repository", lambda path: (Path(path), None, []))
+    checkout = Path(Path.cwd().anchor) / "checkout"
+    other = Path(Path.cwd().anchor) / "other"
     native = {
-        **native_event("Shell", {"command": "echo ok", "working_directory": "/other"}),
-        "cwd": "/checkout",
+        **native_event("Shell", {"command": "echo ok", "working_directory": str(other)}),
+        "cwd": str(checkout),
     }
     with pytest.raises(core.WorkspaceError) as captured:
         common.native_tool(native, "cursor")
     assert captured.value.code == "REPOSITORY_MISMATCH"
-    native["tool_input"] = {"command": "echo ok", "working_directory": "/checkout"}
+    native["tool_input"] = {"command": "echo ok", "working_directory": str(checkout)}
     assert common.native_tool(native, "cursor") == "Shell"
 
 
@@ -197,9 +199,10 @@ def test_canonical_bootstrap_rejects_foreign_session_before_store_access(
 
 def test_canonical_bootstrap_rejects_oversized_or_unparseable_command(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """Command validation fails closed before any binding directory is opened."""
-    event = {"cwd": "/checkout", "session_id": "session"}
+    event = {"cwd": str(tmp_path / "checkout"), "session_id": "session"}
     monkeypatch.setattr(
         common.core.Directory, "absolute", lambda _path: pytest.fail("opened binding")
     )

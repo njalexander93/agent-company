@@ -16,6 +16,7 @@ pytestmark = pytest.mark.unit
 
 def test_fs_identity_returns_validated_native_descriptor_identity(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """Read only the identity returned by an owned absolute directory handle."""
     paths: list[str | Path] = []
@@ -33,8 +34,8 @@ def test_fs_identity_returns_validated_native_descriptor_identity(
             """Release the modeled directory."""
 
     monkeypatch.setattr(core.Directory, "absolute", lambda path: paths.append(path) or Handle())
-    assert core.fs_identity("/main") == [7, 11]
-    assert paths == ["/main"]
+    assert core.fs_identity(tmp_path / "main") == [7, 11]
+    assert paths == [tmp_path / "main"]
 
 
 @pytest.mark.parametrize(
@@ -46,12 +47,17 @@ def test_fs_identity_returns_validated_native_descriptor_identity(
     ],
 )
 def test_execute_returns_bounded_diagnostics_without_exception_text(
-    monkeypatch: pytest.MonkeyPatch, error: Exception, code: str
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, error: Exception, code: str
 ) -> None:
     """Keep unexpected exception contents out of the public lifecycle response."""
     monkeypatch.setattr(core, "repository", lambda _root: (_ for _ in ()).throw(error))
     response = core.execute(
-        {"schema_version": 1, "request_id": "r", "operation": "diagnose", "worktree": "/main"}
+        {
+            "schema_version": 1,
+            "request_id": "r",
+            "operation": "diagnose",
+            "worktree": str(tmp_path / "main"),
+        }
     )
     assert response["ok"] is False
     assert response["code"] == code
@@ -60,17 +66,24 @@ def test_execute_returns_bounded_diagnostics_without_exception_text(
 
 def test_execute_permission_response_lists_only_derived_paths(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """Give a narrow retry path when opening the repository is permission denied."""
     monkeypatch.setattr(
         core, "repository", lambda _root: (_ for _ in ()).throw(PermissionError("secret"))
     )
-    monkeypatch.setattr(core, "permission_paths", lambda _request: ["/main/.task/.bindings"])
+    bindings = str(tmp_path / "main/.task/.bindings")
+    monkeypatch.setattr(core, "permission_paths", lambda _request: [bindings])
     response = core.execute(
-        {"schema_version": 1, "request_id": "r", "operation": "diagnose", "worktree": "/main"}
+        {
+            "schema_version": 1,
+            "request_id": "r",
+            "operation": "diagnose",
+            "worktree": str(tmp_path / "main"),
+        }
     )
     assert response["code"] == "PERMISSION_REQUIRED"
-    assert response["paths"] == ["/main/.task/.bindings"]
+    assert response["paths"] == [bindings]
     assert "secret" not in str(response)
 
 
@@ -141,10 +154,11 @@ def test_execute_routes_registration_without_supplied_repo_id(
 
 def test_execute_discovers_only_recorded_registration(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """Report registration required until the direct local record exists."""
     present: set[str] = set()
-    root = Path("/checkout")
+    root = tmp_path / "checkout"
     monkeypatch.setattr(core, "repository", lambda _path: (root, None, [root]))
 
     class Directory:
@@ -191,6 +205,7 @@ def test_execute_discovers_only_recorded_registration(
 
 def test_execute_serializes_issue_dispatch_and_explicit_collection(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """Hold binding and issue locks before a create and collect only supplied candidates."""
     calls: list[str] = []
@@ -267,7 +282,7 @@ def test_execute_serializes_issue_dispatch_and_explicit_collection(
         "schema_version": 1,
         "request_id": "r",
         "operation": "create",
-        "worktree": "/checkout",
+        "worktree": str(tmp_path / "checkout"),
         "repo_id": "repo",
         "issue_id": "AGENT-30",
         "host": "codex",

@@ -9,6 +9,14 @@ from scripts import coverage_evidence as evidence
 pytestmark = pytest.mark.unit
 
 
+def test_report_file_index_rejects_malformed_paths() -> None:
+    """Only unambiguous, nonblank native source names may enter the lookup."""
+    with pytest.raises(ValueError, match="malformed coverage file rows"):
+        evidence.normalized_report_files({"files": ["src/sample.py"]})
+    with pytest.raises(ValueError, match="malformed coverage source path"):
+        evidence.normalized_report_files({"files": {"": {}}})
+
+
 def test_matrix_rejects_missing_and_duplicate_native_suites(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

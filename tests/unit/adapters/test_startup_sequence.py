@@ -56,7 +56,9 @@ class Issue:
         return {"coordinator": self.store.coordinator}
 
 
-def test_read_file_opens_only_parent_and_reads_exact_name(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_read_file_opens_only_parent_and_reads_exact_name(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """Use the lifecycle no-follow parent handle for one assigned source file."""
     opened: list[Path] = []
     reads: list[str] = []
@@ -74,8 +76,9 @@ def test_read_file_opens_only_parent_and_reads_exact_name(monkeypatch: pytest.Mo
         "absolute",
         lambda path: opened.append(path) or Parent(),
     )
-    assert startup._read_file(Path("/checkout/docs/AGENTS.md")) == b"approved source"
-    assert opened == [Path("/checkout/docs")]
+    source = tmp_path / "checkout/docs/AGENTS.md"
+    assert startup._read_file(source) == b"approved source"
+    assert opened == [source.parent]
     assert reads == ["AGENTS.md"]
 
 
@@ -447,7 +450,7 @@ def test_start_existing_assignment_respects_coordinator_packet_authority(
             },
             {
                 "id": "rules",
-                "locator": "/checkout/AGENTS.md",
+                "locator": str(checkout / "AGENTS.md"),
                 "sha256": core.sha(b"rules"),
                 "reason": "issue-startup",
             },
@@ -519,7 +522,7 @@ def test_start_existing_assignment_respects_coordinator_packet_authority(
             return {"ok": True}
         if operation == "read":
             references = (
-                [{"locator": "/checkout/optional.md", "available": False}]
+                [{"locator": str(checkout / "optional.md"), "available": False}]
                 if mode == "coordinator-optional"
                 else []
             )

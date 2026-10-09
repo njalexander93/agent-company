@@ -5,7 +5,7 @@ import json
 import math
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from coverage import CoverageData
 from coverage.exceptions import DataError
@@ -141,6 +141,22 @@ def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def normalized_report_files(report: dict[str, Any]) -> dict[str, Any]:
+    """Index hash-verified JSON rows across native separators without changing bytes."""
+    files = report["files"]
+    if not isinstance(files, dict):
+        raise ValueError("malformed coverage file rows")
+    normalized: dict[str, Any] = {}
+    for source, row in files.items():
+        if not isinstance(source, str) or not source:
+            raise ValueError("malformed coverage source path")
+        path = source.replace("\\", "/")
+        if path in normalized:
+            raise ValueError(f"duplicate normalized coverage source: {path}")
+        normalized[path] = row
+    return normalized
+
+
 def valid_suite(
     directory: Path,
     *,
@@ -258,9 +274,10 @@ def valid_suite(
                 or not report.get("files")
             ):
                 raise ValueError("missing branch JSON or source rows")
+            files = normalized_report_files(report)
             for source in data.measured_files():
                 normalized = source.replace("\\", "/")
-                row = report["files"].get(normalized)
+                row = files.get(normalized)
                 if row is None:
                     raise ValueError(f"measured file missing from JSON: {source}")
                 executed = set(row["executed_lines"])

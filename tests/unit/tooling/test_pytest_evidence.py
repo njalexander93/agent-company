@@ -34,6 +34,7 @@ def test_receipt_keeps_collection_errors_and_subtest_outcomes(
             ]
 
     evidence.pytest_collection_finish(SimpleNamespace(items=[Item()]))
+    evidence.pytest_collectreport(SimpleNamespace(failed=False, longrepr="ignored"))
     evidence.pytest_collectreport(SimpleNamespace(failed=True, longrepr="import failed"))
     node = Item.nodeid
     evidence.pytest_runtest_logreport(

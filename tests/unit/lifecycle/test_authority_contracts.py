@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+from pathlib import Path
 
 import pytest
 
@@ -129,10 +130,10 @@ def test_validate_packet_checks_every_relative_reference_before_return() -> None
     assert core.validate_packet(packet) is packet  # type: ignore[arg-type]
 
 
-def test_validate_packet_preserves_absolute_repository_reference() -> None:
+def test_validate_packet_preserves_absolute_repository_reference(tmp_path: Path) -> None:
     """An absolute governing source bypasses payload grammar but remains reader-scoped."""
     packet = [
-        reference(id="rules", locator="/checkout/AGENTS.md"),
+        reference(id="rules", locator=str(tmp_path / "checkout/AGENTS.md")),
         reference(id="roadmap", locator="roadmap.md"),
     ]
     assert core.validate_packet(packet) is packet  # type: ignore[arg-type]
@@ -178,11 +179,11 @@ def test_packet_reads_rejects_stale_required_bytes() -> None:
 
 def test_packet_reads_uses_owned_external_parent_for_absolute_source(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """Read only the exact assigned absolute source through its no-follow parent."""
-    from pathlib import Path
-
     opened: list[Path] = []
+    source = tmp_path / "checkout/AGENTS.md"
 
     class Parent:
         """Expose one validated external source file."""
@@ -202,16 +203,17 @@ def test_packet_reads_uses_owned_external_parent_for_absolute_source(
     monkeypatch.setattr(core.Directory, "absolute", lambda path: opened.append(path) or Parent())
     ref = {
         "id": "rules",
-        "locator": "/checkout/AGENTS.md",
+        "locator": str(source),
         "sha256": core.sha(b"rules"),
         "required": True,
     }
     assert core.packet_reads({}, {"packet": [ref]}, {}) == [{**ref, "available": True}]  # type: ignore[arg-type]
-    assert opened == [Path("/checkout")]
+    assert opened == [source.parent]
 
 
 def test_packet_reads_marks_failed_optional_external_source_unavailable(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """Keep optional source loss visible while required loss blocks readiness."""
     monkeypatch.setattr(
@@ -221,7 +223,7 @@ def test_packet_reads_marks_failed_optional_external_source_unavailable(
     )
     ref = {
         "id": "optional",
-        "locator": "/checkout/optional.md",
+        "locator": str(tmp_path / "checkout/optional.md"),
         "sha256": core.sha(b"expected"),
         "required": False,
     }

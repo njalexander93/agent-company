@@ -14,6 +14,7 @@ pytestmark = pytest.mark.unit
 
 def test_collect_candidates_uses_separate_sessions_and_bounded_requests(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """Send only explicit candidate requests with a per-issue cleanup request ID."""
     requests: list[dict[str, Any]] = []
@@ -31,7 +32,7 @@ def test_collect_candidates_uses_separate_sessions_and_bounded_requests(
         "issue_id": "AGENT-30",
         "request_id": "create-1",
         "session_id": "owner",
-        "worktree": "/checkout",
+        "worktree": str(tmp_path / "checkout"),
         "repo_id": "repo",
     }
     assert core.collect_candidates(object(), request) == [
@@ -45,7 +46,7 @@ def test_collect_candidates_uses_separate_sessions_and_bounded_requests(
             "schema_version": 1,
             "operation": "cleanup-commit",
             "request_id": "create-1:collect:AGENT-29",
-            "worktree": "/checkout",
+            "worktree": str(tmp_path / "checkout"),
             "repo_id": "repo",
         }
     ]
@@ -61,6 +62,7 @@ def test_collect_candidates_uses_separate_sessions_and_bounded_requests(
 )
 def test_collect_candidates_rejects_wrong_scope_before_dispatch(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
     candidates: list[dict[str, str]],
     code: str,
 ) -> None:
@@ -74,7 +76,7 @@ def test_collect_candidates_rejects_wrong_scope_before_dispatch(
                 "issue_id": "AGENT-30",
                 "request_id": "create-1",
                 "session_id": "owner",
-                "worktree": "/checkout",
+                "worktree": str(tmp_path / "checkout"),
                 "repo_id": "repo",
             },
         )
@@ -83,63 +85,76 @@ def test_collect_candidates_rejects_wrong_scope_before_dispatch(
 
 def test_permission_paths_selects_only_issue_control_and_binding_paths(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """Derive the narrow retry set from a checked root and explicit issue ID."""
+    root, main = tmp_path / "canonical", tmp_path / "main"
     monkeypatch.setattr(
         core,
         "repository",
-        lambda _root: (Path("/canonical"), Path("/common"), [Path("/canonical")]),
+        lambda _root: (root, tmp_path / "common", [root]),
     )
     assert core.permission_paths(
-        {"worktree": "/alias", "main_worktree": "/main", "issue_id": "AGENT-30"}
+        {"worktree": str(tmp_path / "alias"), "main_worktree": str(main), "issue_id": "AGENT-30"}
     ) == [
-        "/canonical/.task/.repository.json",
-        "/canonical/.task/.bindings",
-        "/main/.task/.control/repository.json",
-        "/main/.task/AGENT-30",
-        "/main/.task/.control/issues/AGENT-30",
+        str(root / ".task/.repository.json"),
+        str(root / ".task/.bindings"),
+        str(main / ".task/.control/repository.json"),
+        str(main / ".task/AGENT-30"),
+        str(main / ".task/.control/issues/AGENT-30"),
     ]
 
 
 def test_permission_paths_omits_unvalidated_issue_for_nonregister_operation(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """An invalid issue ID cannot widen permission requests to issue directories."""
+    root, main = tmp_path / "canonical", tmp_path / "main"
     monkeypatch.setattr(
         core,
         "repository",
-        lambda _root: (Path("/canonical"), Path("/common"), [Path("/canonical")]),
+        lambda _root: (root, tmp_path / "common", [root]),
     )
     assert core.permission_paths(
-        {"worktree": "/alias", "main_worktree": "/main", "issue_id": "bad", "operation": "ready"}
+        {
+            "worktree": str(tmp_path / "alias"),
+            "main_worktree": str(main),
+            "issue_id": "bad",
+            "operation": "ready",
+        }
     ) == [
-        "/canonical/.task/.repository.json",
-        "/canonical/.task/.bindings",
-        "/main/.task/.control/repository.json",
+        str(root / ".task/.repository.json"),
+        str(root / ".task/.bindings"),
+        str(main / ".task/.control/repository.json"),
     ]
 
 
 def test_permission_paths_retains_requested_root_when_repository_fails(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """Keep a bounded registration retry path when Git identity is unavailable."""
+    root, main = tmp_path / "checkout", tmp_path / "main"
     monkeypatch.setattr(core, "repository", lambda _root: (_ for _ in ()).throw(OSError("git")))
     assert core.permission_paths(
-        {"worktree": "/checkout", "main_worktree": "/main", "operation": "register"}
+        {"worktree": str(root), "main_worktree": str(main), "operation": "register"}
     ) == [
-        "/checkout/.task/.repository.json",
-        "/checkout/.task/.bindings",
-        "/main/.task/.control/repository.json",
-        "/main/.task",
-        "/main/.task/.control",
+        str(root / ".task/.repository.json"),
+        str(root / ".task/.bindings"),
+        str(main / ".task/.control/repository.json"),
+        str(main / ".task"),
+        str(main / ".task/.control"),
     ]
 
 
 def test_permission_paths_discovers_main_only_from_validated_local_registration(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """Read the canonical store path through direct handles when request omits it."""
-    monkeypatch.setattr(core, "repository", lambda _root: (Path("/checkout"), None, []))
+    root, main = tmp_path / "checkout", tmp_path / "main"
+    monkeypatch.setattr(core, "repository", lambda _root: (root, None, []))
 
     class Node:
         """Expose one validated local registration document."""
@@ -159,31 +174,33 @@ def test_permission_paths_discovers_main_only_from_validated_local_registration(
         def json(self, name: str) -> dict[str, str]:
             """Read only the local repository registration."""
             assert name == ".repository.json"
-            return {"main": "/main"}
+            return {"main": str(main)}
 
     monkeypatch.setattr(core.Directory, "absolute", lambda _root: Node())
-    assert core.permission_paths({"worktree": "/checkout", "issue_id": "AGENT-30"}) == [
-        "/checkout/.task/.repository.json",
-        "/checkout/.task/.bindings",
-        "/main/.task/.control/repository.json",
-        "/main/.task/AGENT-30",
-        "/main/.task/.control/issues/AGENT-30",
+    assert core.permission_paths({"worktree": str(root), "issue_id": "AGENT-30"}) == [
+        str(root / ".task/.repository.json"),
+        str(root / ".task/.bindings"),
+        str(main / ".task/.control/repository.json"),
+        str(main / ".task/AGENT-30"),
+        str(main / ".task/.control/issues/AGENT-30"),
     ]
 
 
 def test_permission_paths_does_not_invent_main_when_registration_unreadable(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """Keep retry paths at the selected checkout if local registration cannot be read."""
-    monkeypatch.setattr(core, "repository", lambda _root: (Path("/checkout"), None, []))
+    root = tmp_path / "checkout"
+    monkeypatch.setattr(core, "repository", lambda _root: (root, None, []))
     monkeypatch.setattr(
         core.Directory,
         "absolute",
         lambda _root: (_ for _ in ()).throw(PermissionError("denied")),
     )
-    assert core.permission_paths({"worktree": "/checkout", "issue_id": "AGENT-30"}) == [
-        "/checkout/.task/.repository.json",
-        "/checkout/.task/.bindings",
+    assert core.permission_paths({"worktree": str(root), "issue_id": "AGENT-30"}) == [
+        str(root / ".task/.repository.json"),
+        str(root / ".task/.bindings"),
     ]
 
 

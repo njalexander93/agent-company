@@ -15,6 +15,7 @@ pytestmark = pytest.mark.unit
 
 def test_git_uses_argument_vector_and_bounded_noninteractive_run(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """Keep the repository query out of shell interpretation."""
     observed: list[tuple[list[str], dict[str, object]]] = []
@@ -25,15 +26,18 @@ def test_git_uses_argument_vector_and_bounded_noninteractive_run(
         return SimpleNamespace(returncode=0, stdout="  root\n")
 
     monkeypatch.setattr(core.subprocess, "run", run)
-    assert core.git("/checkout", "rev-parse", "--show-toplevel") == "root"
+    checkout = tmp_path / "checkout"
+    assert core.git(checkout, "rev-parse", "--show-toplevel") == "root"
     argv, options = observed[0]
-    assert argv == ["git", "-C", "/checkout", "rev-parse", "--show-toplevel"]
+    assert argv == ["git", "-C", str(checkout), "rev-parse", "--show-toplevel"]
     assert options["timeout"] == 2
     assert options["check"] is False
     assert options["capture_output"] is True
 
 
-def test_git_rejects_failed_repository_query(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_git_rejects_failed_repository_query(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """Return a bounded repository diagnostic for Git failure."""
     monkeypatch.setattr(
         core.subprocess,
@@ -41,33 +45,32 @@ def test_git_rejects_failed_repository_query(monkeypatch: pytest.MonkeyPatch) ->
         lambda *_args, **_kwargs: SimpleNamespace(returncode=128, stdout="secret detail"),
     )
     with pytest.raises(core.WorkspaceError) as captured:
-        core.git("/checkout", "rev-parse")
+        core.git(tmp_path / "checkout", "rev-parse")
     assert captured.value.code == "REPOSITORY_MISMATCH"
     assert "secret detail" not in str(captured.value)
 
 
-def test_repository_requires_nonbare_member_worktree(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_repository_requires_nonbare_member_worktree(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """Retain only Git-reported worktree members under one common directory."""
+    root, common, other = tmp_path / "checkout", tmp_path / "git/common", tmp_path / "other"
     responses = {
-        ("rev-parse", "--show-toplevel"): "/checkout",
+        ("rev-parse", "--show-toplevel"): str(root),
         ("rev-parse", "--is-bare-repository"): "false",
-        ("rev-parse", "--path-format=absolute", "--git-common-dir"): "/git/common",
+        ("rev-parse", "--path-format=absolute", "--git-common-dir"): str(common),
         (
             "worktree",
             "list",
             "--porcelain",
             "-z",
-        ): "worktree /checkout\0HEAD abc\0worktree /other\0",
+        ): f"worktree {root}\0HEAD abc\0worktree {other}\0",
     }
     monkeypatch.setattr(core, "git", lambda _path, *args: responses[args])
-    assert core.repository("/checkout") == (
-        Path("/checkout"),
-        Path("/git/common"),
-        [Path("/checkout"), Path("/other")],
-    )
-    responses[("worktree", "list", "--porcelain", "-z")] = "worktree /other\0"
+    assert core.repository(root) == (root, common, [root, other])
+    responses[("worktree", "list", "--porcelain", "-z")] = f"worktree {other}\0"
     with pytest.raises(core.WorkspaceError) as captured:
-        core.repository("/checkout")
+        core.repository(root)
     assert captured.value.code == "REPOSITORY_MISMATCH"
 
 
@@ -113,8 +116,9 @@ def bare_store() -> core.Store:
     """Supply the methods under test with a selected registered identity."""
     store = core.Store.__new__(core.Store)
     store.request = {"host": "codex", "session_id": "session"}
-    store.root = Path("/linked")
-    store.registration = {"repo_id": "repo", "main": "/main"}
+    anchor = Path(Path.cwd().anchor)
+    store.root = anchor / "linked"
+    store.registration = {"repo_id": "repo", "main": str(anchor / "main")}
     store.bindings = BindingDirectory()  # type: ignore[assignment]
     store.local = BindingDirectory()  # type: ignore[assignment]
     store.task = BindingDirectory()  # type: ignore[assignment]
@@ -140,11 +144,12 @@ def test_store_view_exposes_only_selected_issue_link() -> None:
     """Open the canonical issue after publishing its exact linked view."""
     store = bare_store()
     store.view("AGENT-30")
-    assert store.local.views == [("AGENT-30", "/main/.task/AGENT-30")]
+    target = str(Path(store.registration["main"]) / ".task" / "AGENT-30")
+    assert store.local.views == [("AGENT-30", target)]
     assert store.task.children == ["AGENT-30"]
-    store.root = Path("/main")
+    store.root = Path(store.registration["main"])
     store.view("AGENT-31")
-    assert store.local.views == [("AGENT-30", "/main/.task/AGENT-30")]
+    assert store.local.views == [("AGENT-30", target)]
 
 
 def test_store_closes_tracked_handles_in_reverse_open_order() -> None:
@@ -196,7 +201,7 @@ class Node:
 
     def child(self, name: str, _create: bool = False) -> Node:
         """Open a direct child using the same document map."""
-        return Node(self.path + "/" + name, self.documents, self.closed)
+        return Node(str(Path(self.path) / name), self.documents, self.closed)
 
     def close(self) -> None:
         """Record native-handle release after use or partial initialization."""
@@ -222,11 +227,12 @@ class Node:
 
 def test_register_persists_and_reuses_exact_repository_identity(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """Keep the same repository ID on a matching registration retry."""
     documents: dict[str, dict[str, object]] = {}
-    root = Path("/main")
-    common = Path("/git/common")
+    root = tmp_path / "main"
+    common = tmp_path / "git/common"
     monkeypatch.setattr(core, "repository", lambda _path: (root, common, [root]))
     monkeypatch.setattr(
         core, "fs_identity", lambda path: [1, 2] if Path(path) == common else [3, 4]
@@ -243,18 +249,19 @@ def test_register_persists_and_reuses_exact_repository_identity(
     assert first == second
     assert first["code"] == "REGISTERED"
     assert (
-        documents["/main/.task/.control"]["repository.json"]
-        == documents["/main/.task"][".repository.json"]
+        documents[str(root / ".task/.control")]["repository.json"]
+        == documents[str(root / ".task")][".repository.json"]
     )
 
 
 def test_register_refuses_changed_local_identity_without_replacement(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """Preserve a conflicting local registration for explicit recovery."""
     documents: dict[str, dict[str, object]] = {}
-    root = Path("/main")
-    common = Path("/git/common")
+    root = tmp_path / "main"
+    common = tmp_path / "git/common"
     monkeypatch.setattr(core, "repository", lambda _path: (root, common, [root]))
     monkeypatch.setattr(
         core, "fs_identity", lambda path: [1, 2] if Path(path) == common else [3, 4]
@@ -267,21 +274,22 @@ def test_register_refuses_changed_local_identity_without_replacement(
         "session_id": "s",
     }
     core.register(request)
-    documents["/main/.task"][".repository.json"] = {"repo_id": "foreign"}
+    documents[str(root / ".task")][".repository.json"] = {"repo_id": "foreign"}
     with pytest.raises(core.WorkspaceError) as captured:
         core.register(request)
     assert captured.value.code == "REPOSITORY_MISMATCH"
-    assert documents["/main/.task"][".repository.json"] == {"repo_id": "foreign"}
+    assert documents[str(root / ".task")][".repository.json"] == {"repo_id": "foreign"}
 
 
 def test_store_initialization_verifies_registration_and_releases_handles(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """Validate local and canonical registrations before exposing store handles."""
     documents: dict[str, dict[str, object]] = {}
     closed: list[str] = []
-    root = Path("/main")
-    common = Path("/git/common")
+    root = tmp_path / "main"
+    common = tmp_path / "git/common"
     monkeypatch.setattr(core, "repository", lambda _path: (root, common, [root]))
     monkeypatch.setattr(
         core, "fs_identity", lambda path: [1, 2] if Path(path) == common else [3, 4]
@@ -294,17 +302,18 @@ def test_store_initialization_verifies_registration_and_releases_handles(
         assert store.registration["repo_id"] == registration["repo_id"]
         assert len(store.handles) == 7
     assert store.handles == []
-    assert closed[-2:] == ["/main/.task", "/main"]
+    assert closed[-2:] == [str(root / ".task"), str(root)]
 
 
 def test_store_initialization_closes_partial_handles_on_repo_mismatch(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """Reject a foreign request ID and close already opened local descriptors."""
     documents: dict[str, dict[str, object]] = {}
     closed: list[str] = []
-    root = Path("/main")
-    common = Path("/git/common")
+    root = tmp_path / "main"
+    common = tmp_path / "git/common"
     monkeypatch.setattr(core, "repository", lambda _path: (root, common, [root]))
     monkeypatch.setattr(
         core, "fs_identity", lambda path: [1, 2] if Path(path) == common else [3, 4]
@@ -316,15 +325,16 @@ def test_store_initialization_closes_partial_handles_on_repo_mismatch(
     with pytest.raises(core.WorkspaceError) as captured:
         core.Store({"worktree": str(root), "repo_id": "foreign"})
     assert captured.value.code == "REPOSITORY_MISMATCH"
-    assert closed[-2:] == ["/main/.task", "/main"]
+    assert closed[-2:] == [str(root / ".task"), str(root)]
 
 
 def test_register_persists_only_explicit_coordinator_startup_packet(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """Bind startup to the observed session and preserve an identical retry."""
     documents: dict[str, dict[str, object]] = {}
-    root, common = Path("/main"), Path("/git/common")
+    root, common = tmp_path / "main", tmp_path / "git/common"
     monkeypatch.setattr(core, "repository", lambda _path: (root, common, [root]))
     monkeypatch.setattr(
         core, "fs_identity", lambda path: [1, 2] if Path(path) == common else [3, 4]
@@ -352,7 +362,7 @@ def test_register_persists_only_explicit_coordinator_startup_packet(
     setup = {"issue_id": "AGENT-30", "issue_uuid": "uuid", "packet": packet, "coordinator": key}
     first = core.register({**request, "startup": setup})
     assert first["code"] == "REGISTERED"
-    binding_path = "/main/.task/.bindings"
+    binding_path = str(root / ".task/.bindings")
     assert documents[binding_path][key + ".startup.json"] == setup
     assert core.register({**request, "startup": setup})["repo_id"] == first["repo_id"]
     altered = {**setup, "issue_id": "AGENT-31"}

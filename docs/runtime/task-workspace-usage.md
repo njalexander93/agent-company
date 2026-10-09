@@ -72,10 +72,12 @@ does not confer permission or change the recovery allowlist.
 
 The startup prompt accepts exactly one standalone `Task: <issue-id>` line, for example
 `Task: ISSUE-1`. Codex records that identity without requiring registration first.
-Its exact direct Linear issue read is admitted before readiness only when the host
-exposes that MCP call and matching completion to the native hook. A wrapper-only
-`functions.exec` path has no verified nested callback delivery; if only the wrapper
-is observed, it is denied before readiness. Once the returned
+Its exact Linear issue read is admitted before readiness only when the native hook
+receives that MCP call and matching completion. Codex
+[documents hook decisions for tool calls nested in JavaScript code mode](https://learn.chatgpt.com/docs/hooks#tool-calls-from-code-mode).
+A model-visible `functions.exec` wrapper does not establish the native callback
+shape. If an actual hook event exposes only the outer wrapper, it is denied before
+readiness. Once the returned
 `id` matches and `uuid` is available, the Codex startup orchestrator derives the
 actual session and Git main worktree, registers or resumes, and creates a missing
 issue under the initiating session's coordinator key. It installs an initial packet

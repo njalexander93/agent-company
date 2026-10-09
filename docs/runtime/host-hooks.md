@@ -105,12 +105,14 @@ Provider text is data. The adapter does
 not treat a result descriptor alone as packet delivery: it reads and hashes each
 assigned source before acknowledgment. Local protocol tests use synthetic callbacks;
 actual installed callback delivery and provider round trips require separate evidence.
-This checkout does not establish that a Linear call nested inside `functions.exec`
-emits its own native tool callbacks. If the hook sees only the outer wrapper, the
-pending Task gate denies it as `TICKET_READ_REQUIRED`; no nested argument parser or
-general wrapper exception exists. The current wrapper-only Linear surface therefore
-does not prove automatic startup. Use an observed direct callback path or retain
-the host boundary as unverified.
+[Codex documents that hook decisions apply to tool calls nested in JavaScript code
+mode](https://learn.chatgpt.com/docs/hooks#tool-calls-from-code-mode). A
+model-visible `functions.exec` call therefore does not establish that the native
+hook sees only the outer wrapper. The adapter requires the exact nested Linear
+tool callback and its matching completion. If an actual hook event exposes only
+the outer wrapper, the pending Task gate denies it as `TICKET_READ_REQUIRED`;
+no nested argument parser or general wrapper exception exists. This checkout's
+local tests do not establish that the installed host delivered those callbacks.
 Claude Code and Cursor have no verified foreground Linear issue connector path in this
 checkout. Their existing preassigned recovery route remains the supported boundary.
 

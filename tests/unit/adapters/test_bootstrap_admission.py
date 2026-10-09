@@ -13,6 +13,9 @@ from agent_company.lifecycle import task_workspace as core
 
 pytestmark = pytest.mark.unit
 
+CHECKOUT = Path(Path.cwd().anchor) / "checkout"
+OTHER = Path(Path.cwd().anchor) / "other"
+
 
 def base(operation: str, **extra: object) -> dict[str, Any]:
     """Build one bounded command request for an observed Codex session."""
@@ -20,7 +23,7 @@ def base(operation: str, **extra: object) -> dict[str, Any]:
         "schema_version": 1,
         "operation": operation,
         "request_id": "request-1",
-        "worktree": "/checkout",
+        "worktree": str(CHECKOUT),
         "host": "codex",
         "session_id": "session",
         **extra,
@@ -34,14 +37,14 @@ def test_canonical_bootstrap_allows_exact_diagnostic_and_rejects_extra_unready_f
     monkeypatch.setattr(
         common.core,
         "repository",
-        lambda _path: (Path("/checkout"), Path("/common"), [Path("/checkout")]),
+        lambda _path: (CHECKOUT, CHECKOUT.parent / "common", [CHECKOUT]),
     )
     monkeypatch.setattr(
         common.core.Directory,
         "absolute",
         lambda _path: pytest.fail("opened binding for diagnosis"),
     )
-    event = {"cwd": "/checkout", "session_id": "session"}
+    event = {"cwd": str(CHECKOUT), "session_id": "session"}
     valid = common.bootstrap_command(base("diagnose"), "codex")
     assert common.canonical_bootstrap(event, valid, "codex", ready=False) is True
     extra = common.bootstrap_command(base("diagnose", arbitrary="injection"), "codex")
@@ -54,7 +57,7 @@ def test_canonical_bootstrap_requires_issue_to_match_persisted_assignment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Accept only the selected issue, never a command-supplied alternate issue."""
-    root = Path("/checkout")
+    root = CHECKOUT
     key = core.participant_key(base("read"))
     opened: list[str] = []
 
@@ -85,7 +88,7 @@ def test_canonical_bootstrap_requires_issue_to_match_persisted_assignment(
 
     monkeypatch.setattr(common.core, "repository", lambda _path: (root, None, [root]))
     monkeypatch.setattr(common.core.Directory, "absolute", lambda _path: Node())
-    event = {"cwd": "/checkout", "session_id": "session"}
+    event = {"cwd": str(CHECKOUT), "session_id": "session"}
     matching = common.bootstrap_command(base("read", issue_id="AGENT-30"), "codex")
     foreign = common.bootstrap_command(base("read", issue_id="AGENT-31"), "codex")
     assert common.canonical_bootstrap(event, matching, "codex", ready=False) is True
@@ -103,8 +106,8 @@ def test_canonical_bootstrap_rejects_foreign_worktree_before_binding_lookup(
         "absolute",
         lambda _path: pytest.fail("opened assignment for foreign worktree"),
     )
-    event = {"cwd": "/checkout", "session_id": "session"}
-    request = base("read", issue_id="AGENT-30", worktree="/other")
+    event = {"cwd": str(CHECKOUT), "session_id": "session"}
+    request = base("read", issue_id="AGENT-30", worktree=str(OTHER))
     command = common.bootstrap_command(request, "codex")
     assert common.canonical_bootstrap(event, command, "codex", ready=False) is False
 

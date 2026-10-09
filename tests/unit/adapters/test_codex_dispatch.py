@@ -15,10 +15,11 @@ pytestmark = pytest.mark.unit
 
 def test_codex_wrappers_fix_the_host_and_defer_to_shared_contracts(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """Keep Codex identity fixed in common request, prompt, and attach calls."""
     seen: list[tuple[object, ...]] = []
-    event = {"cwd": "/checkout", "session_id": "s"}
+    event = {"cwd": str(tmp_path / "checkout"), "session_id": "s"}
     monkeypatch.setattr(
         codex.common,
         "request_for",
@@ -178,10 +179,10 @@ def test_codex_main_uses_exit_zero_supervision(monkeypatch: pytest.MonkeyPatch) 
     ],
 )
 def test_startup_lookup_reads_only_explicit_session_marker(
-    monkeypatch: pytest.MonkeyPatch, entries: set[str], expected: bool
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, entries: set[str], expected: bool
 ) -> None:
     """Check the selected worktree's assignment marker through direct handles."""
-    root = Path("/checkout")
+    root = tmp_path / "checkout"
     key = core.participant_key({"host": "codex", "session_id": "s"})
 
     class Node:
@@ -217,7 +218,7 @@ def test_startup_lookup_reads_only_explicit_session_marker(
     monkeypatch.setattr(codex.core, "repository", lambda _cwd: (root, None, [root]))
     monkeypatch.setattr(codex.core.Directory, "absolute", lambda _path: Node())
     assert (
-        codex.startup_lookup_state({"cwd": "/checkout", "session_id": "s"}, ".lookup-required.json")
+        codex.startup_lookup_state({"cwd": str(root), "session_id": "s"}, ".lookup-required.json")
         is expected
     )
 

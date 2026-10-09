@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import subprocess
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -97,12 +98,13 @@ def test_runner_returns_worker_result_after_bounded_input(
 
 def test_runner_selects_script_entrypoint_by_source_stem(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """A direct file hook entry uses its known adapter filename for worker selection."""
     input_bytes(monkeypatch, b'{"hook_event_name":"PreToolUse"}')
     namespace: dict[str, object] = {
         "__name__": "__main__",
-        "__file__": "/checkout/src/agent_company/adapters/codex.py",
+        "__file__": str(tmp_path / "checkout/src/agent_company/adapters/codex.py"),
     }
     exec("def direct_handler(event):\n    return {}", namespace)
     direct_handler = namespace["direct_handler"]
