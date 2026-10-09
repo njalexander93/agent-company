@@ -204,6 +204,40 @@ def test_child_create_preserves_existing_and_checks_private_acl(
     assert checked == [True]
 
 
+def test_child_create_success_opens_and_checks_new_directory(
+    windows: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Successful private creation still opens and validates the new entry."""
+    item = directory(windows)
+    child = directory(windows)
+    events: list[str] = []
+
+    @contextmanager
+    def security() -> Any:
+        yield windows.SecurityAttributes()
+
+    monkeypatch.setattr(item, "names", lambda: [])
+    monkeypatch.setattr(windows, "private_security", security)
+    monkeypatch.setattr(windows, "CreateDirectory", lambda *_args: events.append("create") or True)
+    monkeypatch.setattr(
+        windows.Directory,
+        "absolute",
+        classmethod(lambda _cls, _path: events.append("open") or child),
+    )
+    monkeypatch.setattr(
+        windows,
+        "validate_security",
+        lambda _handle, private: events.append(f"private={private}"),
+    )
+    monkeypatch.setattr(
+        windows.c,
+        "get_last_error",
+        lambda: (_ for _ in ()).throw(AssertionError("successful creation has no error")),
+    )
+    assert item.child("issue", create=True) is child
+    assert events == ["create", "open", "private=True"]
+
+
 def test_file_opens_exclusive_private_handle(windows: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """File opens exclusive private handle."""
     item = directory(windows)
@@ -372,6 +406,62 @@ def test_write_releases_temp_after_failed_publication(
         item.write("state.json", b"payload")
     assert captured.value.winerror == 5
     assert len(removed) == 1 and removed[0].startswith(".write-")
+
+
+def test_write_closes_native_handle_when_crt_adoption_fails(
+    windows: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed descriptor transfer closes the handle and removes its temp file."""
+    item = directory(windows)
+    events: list[str] = []
+    monkeypatch.setattr(item, "names", lambda: [])
+    monkeypatch.setattr(item, "exists", lambda name: name.startswith(".write-"))
+    monkeypatch.setattr(item, "_file", lambda *_args, **_kwargs: 91)
+    monkeypatch.setattr(item, "unlink", lambda _name: events.append("unlink-temp"))
+    monkeypatch.setattr(
+        windows.msvcrt,
+        "open_osfhandle",
+        lambda *_args: (_ for _ in ()).throw(OSError("CRT adoption failed")),
+    )
+    monkeypatch.setattr(windows, "CloseHandle", lambda _handle: events.append("close") or True)
+    monkeypatch.setattr(
+        windows,
+        "MoveFile",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("must not publish")),
+    )
+    with pytest.raises(OSError, match="CRT adoption failed"):
+        item.write("state.json", b"data")
+    assert events == ["close", "unlink-temp"]
+
+
+def test_write_leaves_no_cleanup_after_successful_publication(
+    windows: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A moved temporary name is absent; cleanup must not unlink the target."""
+    item = directory(windows)
+    published: list[bool] = []
+    effects: list[str] = []
+
+    class Stream(io.BytesIO):
+        def fileno(self) -> int:
+            return 55
+
+    monkeypatch.setattr(item, "names", lambda: [])
+    monkeypatch.setattr(
+        item, "exists", lambda name: False if name == "state.json" else not published
+    )
+    monkeypatch.setattr(item, "_file", lambda *_args, **_kwargs: 91)
+    monkeypatch.setattr(item, "unlink", lambda _name: effects.append("unlink"))
+    monkeypatch.setattr(windows.msvcrt, "open_osfhandle", lambda *_args: 55)
+    monkeypatch.setattr(windows.os, "fdopen", lambda *_args: Stream())
+    monkeypatch.setattr(windows.os, "fsync", lambda _fd: effects.append("fsync"))
+    monkeypatch.setattr(
+        windows,
+        "MoveFile",
+        lambda *_args: published.append(True) or effects.append("publish") or True,
+    )
+    item.write("state.json", b"data")
+    assert effects == ["fsync", "publish"]
 
 
 def test_child_create_surfaces_native_denial_without_opening(

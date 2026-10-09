@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -65,10 +65,20 @@ def test_codex_bootstrap_rejects_alternate_tool_shapes_before_parser(
     )
 
 
+@pytest.mark.parametrize(
+    ("platform", "shell", "foreign_shell"),
+    [
+        pytest.param("nt", "powershell.exe", "/bin/sh", id="windows-powershell"),
+        pytest.param("posix", "/bin/sh", "powershell.exe", id="posix-sh"),
+    ],
+)
 def test_codex_bootstrap_passes_exact_eligible_shell_call(
     monkeypatch: pytest.MonkeyPatch,
+    platform: str,
+    shell: str,
+    foreign_shell: str,
 ) -> None:
-    """Forward one canonical shell candidate with the observed readiness flag."""
+    """Forward only the shell supported by the selected native adapter platform."""
     captured: list[tuple[object, ...]] = []
 
     def canonical(*args: object) -> bool:
@@ -77,16 +87,18 @@ def test_codex_bootstrap_passes_exact_eligible_shell_call(
         return True
 
     monkeypatch.setattr(codex.common, "canonical_bootstrap", canonical)
+    monkeypatch.setattr(codex, "os", SimpleNamespace(name=platform))
     event = {
         "tool_name": "exec_command",
-        "tool_input": {
-            "cmd": "command",
-            "login": False,
-            "shell": "powershell.exe" if os.name == "nt" else "/bin/sh",
-        },
+        "tool_input": {"cmd": "command", "login": False, "shell": shell},
     }
     assert codex.bootstrap(event, ready=True) is True
     assert captured == [(event, "command", "codex", True, codex.PYTHON, codex.LIFECYCLE)]
+    assert (
+        codex.bootstrap({**event, "tool_input": {**event["tool_input"], "shell": foreign_shell}})
+        is False
+    )
+    assert len(captured) == 1
 
 
 def test_codex_pretool_denies_child_creation_without_binding_lookup(

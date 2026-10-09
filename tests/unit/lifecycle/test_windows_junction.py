@@ -214,3 +214,96 @@ def test_issue_view_creation_race_removes_only_temporary_junction(
         "get",
         "close",
     ]
+
+
+def test_issue_view_rejects_unexpected_publish_failure_and_removes_temp(
+    windows: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A noncollision rename failure is reported and its temp junction is removed."""
+    item = directory(windows)
+    target_scope(windows, monkeypatch)
+    effects: list[str] = []
+
+    @contextmanager
+    def child(_name: str, **_kwargs: Any) -> Any:
+        effects.append("create-temp")
+        yield None
+
+    monkeypatch.setattr(item, "_entry", lambda _name: Path(r"C:\work\AGENT-30"))
+    monkeypatch.setattr(item, "child", child)
+    monkeypatch.setattr(item, "exists", lambda name: name.startswith(".view-"))
+    monkeypatch.setattr(
+        windows, "open_handle", lambda *_args, **_kwargs: effects.append("open") or 91
+    )
+    monkeypatch.setattr(windows, "information", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(windows, "DeviceIoControl", lambda *_args: effects.append("set") or True)
+    monkeypatch.setattr(windows, "CloseHandle", lambda _handle: effects.append("close") or True)
+    monkeypatch.setattr(
+        windows, "MoveFile", lambda *_args: effects.append("publish-failed") or False
+    )
+    monkeypatch.setattr(windows.c, "get_last_error", lambda: 5)
+    monkeypatch.setattr(
+        windows,
+        "RemoveDirectory",
+        lambda _path: effects.append("remove-temp") or True,
+    )
+    with pytest.raises(OSError) as captured:  # noqa: PT011 - native code is asserted.
+        item.issue_view("AGENT-30", r"C:\store\AGENT-30")
+    assert captured.value.winerror == 5
+    assert effects == [
+        "create-temp",
+        "open",
+        "set",
+        "close",
+        "publish-failed",
+        "remove-temp",
+    ]
+
+
+def test_issue_view_after_publish_checks_new_view_without_unlinking_target(
+    windows: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Successful publication still rejects an entry lacking reparse status."""
+    item = directory(windows)
+    target_scope(windows, monkeypatch)
+    effects: list[str] = []
+    published = False
+
+    @contextmanager
+    def child(_name: str, **_kwargs: Any) -> Any:
+        effects.append("create-temp")
+        yield None
+
+    def exists(name: str) -> bool:
+        return name.startswith(".view-") and not published
+
+    def move(*_args: Any) -> bool:
+        nonlocal published
+        published = True
+        effects.append("publish")
+        return True
+
+    def info(*_args: Any, **_kwargs: Any) -> Any:
+        if published:
+            return SimpleNamespace(attributes=windows.DIRECTORY)
+        return SimpleNamespace(attributes=windows.DIRECTORY | windows.REPARSE)
+
+    monkeypatch.setattr(item, "_entry", lambda _name: Path(r"C:\work\AGENT-30"))
+    monkeypatch.setattr(item, "child", child)
+    monkeypatch.setattr(item, "exists", exists)
+    monkeypatch.setattr(
+        windows, "open_handle", lambda *_args, **_kwargs: effects.append("open") or 91
+    )
+    monkeypatch.setattr(windows, "information", info)
+    monkeypatch.setattr(windows, "DeviceIoControl", lambda *_args: effects.append("set") or True)
+    monkeypatch.setattr(windows, "CloseHandle", lambda _handle: effects.append("close") or True)
+    monkeypatch.setattr(windows, "MoveFile", move)
+    monkeypatch.setattr(
+        windows,
+        "RemoveDirectory",
+        lambda _path: (_ for _ in ()).throw(AssertionError("published target must remain")),
+    )
+    with pytest.raises(WorkspaceError) as captured:
+        item.issue_view("AGENT-30", r"C:\store\AGENT-30")
+    assert captured.value.code == "UNSAFE_PATH"
+    assert effects == ["create-temp", "open", "set", "close", "publish", "open", "close"]

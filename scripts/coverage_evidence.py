@@ -40,6 +40,11 @@ WINDOWS_NONCANONICAL_PARAMS = (
     r"C:\..\store",
 )
 WINDOWS_UNIT_NODES = (
+    "tests/unit/lifecycle/test_windows_operations.py::test_child_create_success_opens_and_checks_new_directory",
+    "tests/unit/lifecycle/test_windows_operations.py::test_write_closes_native_handle_when_crt_adoption_fails",
+    "tests/unit/lifecycle/test_windows_operations.py::test_write_leaves_no_cleanup_after_successful_publication",
+    "tests/unit/lifecycle/test_windows_junction.py::test_issue_view_rejects_unexpected_publish_failure_and_removes_temp",
+    "tests/unit/lifecycle/test_windows_junction.py::test_issue_view_after_publish_checks_new_view_without_unlinking_target",
     "tests/unit/lifecycle/test_windows_contracts.py::test_native_layout_and_declarations",
     "tests/unit/lifecycle/test_windows_contracts.py::test_api_sets_native_signature",
     "tests/unit/lifecycle/test_windows_contracts.py::test_checked_preserves_native_error",

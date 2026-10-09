@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -137,6 +138,40 @@ def test_bootstrap_parser_rejects_control_bytes_and_nonobject_request() -> None:
     else:
         with pytest.raises(ValueError, match="Invalid request object"):
             common.bootstrap_request(scalar, "codex", common.PYTHON, common.LIFECYCLE)
+
+
+def test_windows_claude_bootstrap_uses_exact_posix_parser_without_global_os_change(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Claude's Bash transport stays literal even when the host is Windows."""
+    monkeypatch.setattr(common, "os", SimpleNamespace(name="nt"))
+    request = {"operation": "diagnose", "session_id": "s"}
+    command = common.bootstrap_command(request, "claude-code")
+    assert (
+        common.bootstrap_request(command, "claude-code", common.PYTHON, common.LIFECYCLE) == request
+    )
+    with pytest.raises(ValueError, match="Unexpected bootstrap entry"):
+        common.bootstrap_request(
+            command.replace("--request-json", "--other"),
+            "claude-code",
+            common.PYTHON,
+            common.LIFECYCLE,
+        )
+    with pytest.raises(ValueError, match="Noncanonical shell command"):
+        common.bootstrap_request(" " + command, "claude-code", common.PYTHON, common.LIFECYCLE)
+    scalar = common.bootstrap_command("text", "claude-code")
+    with pytest.raises(ValueError, match="Invalid request object"):
+        common.bootstrap_request(scalar, "claude-code", common.PYTHON, common.LIFECYCLE)
+
+
+def test_windows_bootstrap_rejects_unsafe_native_python_argument(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reject a PowerShell command if its interpreter path cannot be quoted safely."""
+    monkeypatch.setattr(common, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr(common, "PYTHON", 'C:\\unsafe"path\\python.exe')
+    with pytest.raises(ValueError, match="Unsupported PowerShell argument"):
+        common.bootstrap_command({"operation": "diagnose"}, "codex")
 
 
 def test_bootstrap_command_rejects_oversized_or_controlled_arguments() -> None:
