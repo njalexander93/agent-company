@@ -50,6 +50,7 @@ def test_standalone_combiner_accepts_only_complete_full_native_records(
         "tool_versions": TOOLS,
         "systems": {"Linux", "Windows"},
         "allow_full": True,
+        "source_root": tmp_path,
     }
     assert set(valid_matrix(tmp_path, **kwargs)) == {("Linux", "test"), ("Windows", "test")}
     windows = tmp_path / "Windows/test"

@@ -11,6 +11,7 @@ import pytest
 from coverage import CoverageData
 
 from scripts import test_quality as quality
+from scripts.coverage_evidence import regenerated_report
 
 pytestmark = pytest.mark.unit
 
@@ -313,6 +314,9 @@ def test_tooling_receipt_detects_a_changed_report(
     root = tmp_path / "records"
     monkeypatch.setattr(quality, "ROOT", tmp_path)
     (tmp_path / "pyproject.toml").write_text("[tool.coverage.run]\nbranch = true\n")
+    source = tmp_path / "scripts/sample.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("value = 1\n")
     config = hashlib.sha256((tmp_path / "pyproject.toml").read_bytes()).hexdigest()
     versions = {
         name: importlib.metadata.version(name) for name in ("coverage", "pytest", "pytest-cov")
@@ -325,26 +329,12 @@ def test_tooling_receipt_detects_a_changed_report(
         database.add_arcs({"scripts/sample.py": [(-1, 1), (1, -1)]})
         database.write()
         database.close()
+        database = CoverageData(basename=str(directory / ".coverage"))
+        database.read()
         (directory / "coverage.json").write_text(
-            json.dumps(
-                {
-                    "meta": {"branch_coverage": True, "version": versions["coverage"]},
-                    "files": {
-                        "scripts/sample.py": {
-                            "executed_lines": [1],
-                            "missing_lines": [],
-                            "executed_branches": [],
-                        }
-                    },
-                    "totals": {
-                        "num_statements": 1,
-                        "covered_lines": 1,
-                        "num_branches": 0,
-                        "covered_branches": 0,
-                    },
-                }
-            )
+            json.dumps(regenerated_report(database, tmp_path, True))
         )
+        database.close()
         (directory / "coverage.xml").write_text(
             '<coverage lines-valid="1" lines-covered="1" branches-valid="0" '
             'branches-covered="0"><packages><package><classes><class name="sample"/>'

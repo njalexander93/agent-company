@@ -111,6 +111,7 @@ def main() -> int:
         },
         systems={"Windows", "Linux"},
         allow_full=True,
+        source_root=ROOT,
     )
     inputs = [str(path) for path in records.values()]
     output = args.output_dir.resolve()

@@ -6,7 +6,13 @@ from pathlib import Path
 import pytest
 from coverage import CoverageData
 
-from scripts.coverage_evidence import ARTIFACTS, digest, valid_matrix, valid_suite
+from scripts.coverage_evidence import (
+    ARTIFACTS,
+    digest,
+    regenerated_report,
+    valid_matrix,
+    valid_suite,
+)
 
 pytestmark = pytest.mark.unit
 TOOLS = {"coverage": "7.16.2", "pytest": "9.1.1", "pytest-cov": "7.1.0"}
@@ -16,30 +22,20 @@ def record(root: Path, system: str, suite: str) -> Path:
     """Create a complete fixture record with an actual branch database."""
     directory = root / system / suite
     directory.mkdir(parents=True)
+    source = root / "src/agent_company/sample.py"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("value = 1\n")
+    (root / "pyproject.toml").write_text(
+        "[tool.coverage.run]\nbranch = true\nrelative_files = true\n"
+    )
     data = CoverageData(basename=str(directory / ".coverage"))
     data.add_arcs({"src/agent_company/sample.py": [(-1, 1), (1, -1)]})
     data.write()
     data.close()
-    (directory / "coverage.json").write_text(
-        json.dumps(
-            {
-                "meta": {"branch_coverage": True, "version": "7.16.2"},
-                "files": {
-                    "src/agent_company/sample.py": {
-                        "executed_lines": [1],
-                        "missing_lines": [],
-                        "executed_branches": [],
-                    }
-                },
-                "totals": {
-                    "num_statements": 1,
-                    "covered_lines": 1,
-                    "num_branches": 0,
-                    "covered_branches": 0,
-                },
-            }
-        )
-    )
+    data = CoverageData(basename=str(directory / ".coverage"))
+    data.read()
+    (directory / "coverage.json").write_text(json.dumps(regenerated_report(data, root, False)))
+    data.close()
     (directory / "coverage.xml").write_text(
         '<coverage lines-valid="1" lines-covered="1" branches-valid="0"'
         ' branches-covered="0"><packages><package><classes><class name="sample"/></classes>'
@@ -113,6 +109,7 @@ def check(directory: Path) -> tuple[str, str, Path]:
         tracked_digest="bytes",
         config_digest="config",
         tool_versions=TOOLS,
+        source_root=directory.parents[1],
     )
 
 
@@ -254,6 +251,7 @@ def test_matrix_requires_six_unique_native_suite_records(tmp_path: Path) -> None
         tracked_digest="bytes",
         config_digest="config",
         tool_versions=TOOLS,
+        source_root=tmp_path,
     )
     assert set(matrix) == {
         (system, suite)
@@ -270,6 +268,7 @@ def test_matrix_requires_six_unique_native_suite_records(tmp_path: Path) -> None
             tracked_digest="bytes",
             config_digest="config",
             tool_versions=TOOLS,
+            source_root=tmp_path,
         )
     missing.write_bytes(original)
     assert set(
@@ -279,6 +278,7 @@ def test_matrix_requires_six_unique_native_suite_records(tmp_path: Path) -> None
             tracked_digest="bytes",
             config_digest="config",
             tool_versions=TOOLS,
+            source_root=tmp_path,
         )
     ) == set(matrix)
 
@@ -294,11 +294,27 @@ def test_subtest_calls_are_distinct_but_duplicate_main_call_is_rejected(tmp_path
         {"phase": "call", "outcome": "passed", "subtest_index": 0, "subtest": "case (value=1)"},
     )
     path.write_text(json.dumps(content))
+    junit = directory / "tests.xml"
+    junit.write_text(
+        '<testsuites><testsuite tests="2"><testcase name="test_sample"/></testsuite></testsuites>'
+    )
     manifest_path = directory / "manifest.json"
     manifest = json.loads(manifest_path.read_text())
     manifest["artifacts_sha256"]["pytest-evidence.json"] = digest(path)
+    manifest["artifacts_sha256"]["tests.xml"] = digest(junit)
     manifest_path.write_text(json.dumps(manifest))
     assert check(directory)[0:2] == ("Darwin", "integration")
+    junit.write_text(
+        '<testsuites><testsuite tests="1"><testcase name="test_sample"/></testsuite></testsuites>'
+    )
+    manifest["artifacts_sha256"]["tests.xml"] = digest(junit)
+    manifest_path.write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match="JUnit outcomes disagree with collection"):
+        check(directory)
+    junit.write_text(
+        '<testsuites><testsuite tests="2"><testcase name="test_sample"/></testsuite></testsuites>'
+    )
+    manifest["artifacts_sha256"]["tests.xml"] = digest(junit)
     content["reports"][nodeid].insert(3, {"phase": "call", "outcome": "passed"})
     path.write_text(json.dumps(content))
     manifest["artifacts_sha256"]["pytest-evidence.json"] = digest(path)
@@ -407,9 +423,9 @@ def test_windows_unit_skip_uses_exact_parameter_and_native_applicability(tmp_pat
         ("wrong-system", "unknown native system"),
         ("artifact-index", "missing or unexpected artifact receipt"),
         ("branch-json", "missing branch JSON or source rows"),
-        ("unmapped-file", "measured file missing from JSON"),
-        ("line-disagreement", "JSON lines disagree with database"),
-        ("arc-disagreement", "JSON branches disagree with database"),
+        ("unmapped-file", "coverage JSON disagrees with source and database"),
+        ("line-disagreement", "coverage JSON disagrees with source and database"),
+        ("arc-disagreement", "coverage JSON disagrees with source and database"),
     ],
 )
 def test_native_record_rejects_precise_receipt_corruption(
@@ -464,6 +480,7 @@ def test_native_record_rejects_precise_receipt_corruption(
         ("empty-junit", "empty JUnit results"),
         ("failed-outcomes", "failed or malformed pytest outcome record"),
         ("junit-count", "JUnit outcomes disagree with collection"),
+        ("junit-failure", "JUnit outcomes disagree with collection"),
         ("missing-phases", "missing test outcome"),
         ("expected-failure", "failed or expected-failure outcome"),
         ("missing-teardown", "missing teardown outcome"),
@@ -497,6 +514,11 @@ def test_native_record_rejects_inconsistent_outcome_and_xml(
     elif defect == "empty-junit":
         changed = "tests.xml"
         (directory / changed).write_text('<testsuite tests="0"/>')
+    elif defect == "junit-failure":
+        changed = "tests.xml"
+        (directory / changed).write_text(
+            '<testsuite tests="1" failures="1"><testcase name="test_sample"/></testsuite>'
+        )
     else:
         changed = "pytest-evidence.json"
         path = directory / changed

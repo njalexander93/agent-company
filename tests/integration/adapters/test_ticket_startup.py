@@ -9,6 +9,8 @@ import pytest
 from agent_company.adapters import codex, common, startup
 from agent_company.lifecycle import task_workspace as core
 
+pytestmark = pytest.mark.integration
+
 
 def repository(tmp_path: Path) -> Path:
     """Create an unregistered Git worktree for startup tests."""

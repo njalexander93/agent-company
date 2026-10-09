@@ -1,6 +1,6 @@
 """Check the pytest receipt emitted for native quality validation."""
 
-import importlib
+import importlib.util
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -18,9 +18,16 @@ def test_receipt_keeps_collection_errors_and_subtest_outcomes(
     """A partial run retains exact nodes, markers, subtests, and failure causes."""
     destination = tmp_path / "receipt.json"
     monkeypatch.setenv("AGENT_COMPANY_PYTEST_EVIDENCE", str(destination))
-    # pytest imports plugins before pytest-cov starts tracing the test body.
-    importlib.reload(evidence)
-    evidence.pytest_sessionstart(SimpleNamespace())
+    # Exercise a separate module instance. Reloading the active pytest plugin
+    # erases this parent run's collection and corrupts its native receipt.
+    active_items = list(evidence._items)
+    active_reports = {node: list(phases) for node, phases in evidence._reports.items()}
+    active_errors = list(evidence._collection_errors)
+    spec = importlib.util.spec_from_file_location("isolated_pytest_evidence", evidence.__file__)
+    assert spec is not None and spec.loader is not None
+    isolated = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(isolated)
+    isolated.pytest_sessionstart(SimpleNamespace())
 
     class Item:
         nodeid = "tests/unit/tooling/test_sample.py::test_case"
@@ -33,14 +40,14 @@ def test_receipt_keeps_collection_errors_and_subtest_outcomes(
                 SimpleNamespace(name="slow", kwargs={}),
             ]
 
-    evidence.pytest_collection_finish(SimpleNamespace(items=[Item()]))
-    evidence.pytest_collectreport(SimpleNamespace(failed=False, longrepr="ignored"))
-    evidence.pytest_collectreport(SimpleNamespace(failed=True, longrepr="import failed"))
+    isolated.pytest_collection_finish(SimpleNamespace(items=[Item()]))
+    isolated.pytest_collectreport(SimpleNamespace(failed=False, longrepr="ignored"))
+    isolated.pytest_collectreport(SimpleNamespace(failed=True, longrepr="import failed"))
     node = Item.nodeid
-    evidence.pytest_runtest_logreport(
+    isolated.pytest_runtest_logreport(
         SimpleNamespace(nodeid=node, when="setup", outcome="passed", duration=0.01, skipped=False)
     )
-    evidence.pytest_runtest_logreport(
+    isolated.pytest_runtest_logreport(
         SimpleNamespace(
             nodeid=node,
             when="call",
@@ -52,7 +59,7 @@ def test_receipt_keeps_collection_errors_and_subtest_outcomes(
             wasxfail="expected failure",
         )
     )
-    evidence.pytest_runtest_logreport(
+    isolated.pytest_runtest_logreport(
         SimpleNamespace(
             nodeid=node,
             when="call",
@@ -64,7 +71,7 @@ def test_receipt_keeps_collection_errors_and_subtest_outcomes(
             longrepr="skip reason",
         )
     )
-    evidence.pytest_sessionfinish(SimpleNamespace(), 1)
+    isolated.pytest_sessionfinish(SimpleNamespace(), 1)
     receipt = json.loads(destination.read_text())
     assert receipt["exit_code"] == 1
     assert receipt["collection_errors"] == ["import failed"]
@@ -75,9 +82,12 @@ def test_receipt_keeps_collection_errors_and_subtest_outcomes(
     assert receipt["reports"][node][2]["subtest_index"] == 1
     assert receipt["reports"][node][2]["reason"] == "skip reason"
 
-    evidence.pytest_sessionstart(SimpleNamespace())
+    isolated.pytest_sessionstart(SimpleNamespace())
     monkeypatch.delenv("AGENT_COMPANY_PYTEST_EVIDENCE")
-    evidence.pytest_sessionfinish(SimpleNamespace(), 0)
-    assert evidence._items == []
-    assert evidence._reports == {}
-    assert evidence._collection_errors == []
+    isolated.pytest_sessionfinish(SimpleNamespace(), 0)
+    assert isolated._items == []
+    assert isolated._reports == {}
+    assert isolated._collection_errors == []
+    assert evidence._items == active_items
+    assert evidence._reports == active_reports
+    assert evidence._collection_errors == active_errors

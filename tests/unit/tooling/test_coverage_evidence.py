@@ -1,8 +1,10 @@
 """Check exact native record topology before coverage combination."""
 
+import json
 from pathlib import Path
 
 import pytest
+from coverage import Coverage, CoverageData
 
 from scripts import coverage_evidence as evidence
 
@@ -15,6 +17,80 @@ def test_report_file_index_rejects_malformed_paths() -> None:
         evidence.normalized_report_files({"files": ["src/sample.py"]})
     with pytest.raises(ValueError, match="malformed coverage source path"):
         evidence.normalized_report_files({"files": {"": {}}})
+
+
+def test_regeneration_retains_a_measured_file_with_no_arcs(tmp_path: Path) -> None:
+    """An empty native module remains measured even when it is visited first."""
+    source = tmp_path / "src/agent_company/sample.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("value = 1\n")
+    (tmp_path / "pyproject.toml").write_text("[tool.coverage.run]\nbranch = true\n")
+    database = CoverageData(basename=str(tmp_path / ".coverage"))
+    database.add_arcs({})
+    database.touch_file("src/agent_company/sample.py")
+    database.write()
+    database.close()
+    database = CoverageData(basename=str(tmp_path / ".coverage"))
+    database.read()
+    report = evidence.regenerated_report(database, tmp_path, False)
+    database.close()
+    row = report["files"]["src/agent_company/sample.py"]
+    assert row["executed_lines"] == []
+    assert row["missing_lines"] == [1]
+
+
+@pytest.mark.parametrize(
+    ("measured", "reason"),
+    [
+        ("../outside.py", "unsafe or duplicate measured source"),
+        ("src/agent_company/missing.py", "missing or unsafe source file"),
+    ],
+)
+def test_regeneration_rejects_unsafe_or_absent_source(
+    tmp_path: Path, measured: str, reason: str
+) -> None:
+    """A recorded arc cannot authorize a source outside the exact checkout."""
+    (tmp_path / "pyproject.toml").write_text("[tool.coverage.run]\nbranch = true\n")
+    database = CoverageData(basename=str(tmp_path / ".coverage"))
+    database.add_arcs({measured: [(-1, 1), (1, -1)]})
+    database.write()
+    database.close()
+    database = CoverageData(basename=str(tmp_path / ".coverage"))
+    database.read()
+    with pytest.raises(ValueError, match=reason):
+        evidence.regenerated_report(database, tmp_path, False)
+    database.close()
+
+
+def test_regeneration_rejects_output_path_aliases(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A reporter emitting absolute and relative aliases cannot double-count one file."""
+    source = tmp_path / "src/agent_company/sample.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("value = 1\n")
+    (tmp_path / "pyproject.toml").write_text("[tool.coverage.run]\nbranch = true\n")
+    database = CoverageData(basename=str(tmp_path / ".coverage"))
+    database.add_arcs({"src/agent_company/sample.py": [(-1, 1), (1, -1)]})
+    database.write()
+    database.close()
+    database = CoverageData(basename=str(tmp_path / ".coverage"))
+    database.read()
+    original = Coverage.json_report
+
+    def alias_report(self: Coverage, *, outfile: str, **kwargs: object) -> float:
+        result = original(self, outfile=outfile, **kwargs)
+        path = Path(outfile)
+        report = json.loads(path.read_text())
+        row = next(iter(report["files"].values()))
+        report["files"]["src/agent_company/sample.py"] = row
+        path.write_text(json.dumps(report))
+        return result
+
+    monkeypatch.setattr(Coverage, "json_report", alias_report)
+    with pytest.raises(ValueError, match="duplicate regenerated source"):
+        evidence.regenerated_report(database, tmp_path, False)
+    database.close()
 
 
 def test_matrix_rejects_missing_and_duplicate_native_suites(

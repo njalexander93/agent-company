@@ -168,6 +168,7 @@ def valid_tooling(root: Path, identity: dict[str, str]) -> dict[str, dict[str, A
                 tracked_digest=identity["tracked_digest"],
                 config_digest=config,
                 tool_versions=tools,
+                source_root=ROOT,
             )
             if observed != system or suite != "tooling-unit":
                 raise ValueError(f"misplaced tooling unit record: {system}")
@@ -204,6 +205,7 @@ def inspect_native(root: Path, identity: dict[str, str]) -> dict[tuple[str, str]
                 tracked_digest=identity["tracked_digest"],
                 config_digest=config,
                 tool_versions=tools,
+                source_root=ROOT,
             )
             if directory != root / system / suite:
                 raise ValueError("native record has wrong platform or suite location")

@@ -121,6 +121,11 @@ and [coverage policy](../../pyproject.toml) are canonical. Coverage includes
 branches and uses one 80% floor across the production package. Platform collection
 suspends the per-run floor so Windows-only and POSIX-only code can be combined.
 The strict `test`, `check` and `ci` commands retain the single-run 80% floor.
+Native receipt validation regenerates the JSON report from its raw branch
+database and the exact checkout source with the pinned Coverage.py version.
+It compares every source row and total after normalizing native path separators,
+so translated multiline lines and branches validate without accepting a
+rehash of fabricated coverage rows. JUnit totals include recorded subtest calls.
 The coverage policy selects `ctrace`. On the pinned Python 3.14 interpreter,
 `sysmon` missed both entry and exit arcs of the startup-binding context manager
 in `register`, even though its real unit contract passed. The

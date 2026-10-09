@@ -3,12 +3,15 @@
 import hashlib
 import json
 import math
+import tempfile
 import xml.etree.ElementTree as ET
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, cast
 
-from coverage import CoverageData
-from coverage.exceptions import DataError
+from coverage import Coverage, CoverageData
+from coverage.exceptions import CoverageException
+
+ROOT = Path(__file__).resolve().parents[1]
 
 SYSTEMS = {"Linux", "Windows", "Darwin"}
 SUITES = {
@@ -28,6 +31,14 @@ ARTIFACTS = {
 PROBE_LINES = {1, 2, 3, 4}
 PROBE_ARCS = {(2, 3), (2, 4)}
 WINDOWS_FILESYSTEM = "tests/integration/lifecycle/test_filesystem.py::"
+WINDOWS_NONCANONICAL_PARAMS = (
+    "C:relative",
+    r"\\server\share\store",
+    r"\\?\C:\store",
+    r"\\.\pipe\store",
+    r"C:\store:stream",
+    r"C:\..\store",
+)
 WINDOWS_UNIT_NODES = (
     "tests/unit/lifecycle/test_windows_contracts.py::test_native_layout_and_declarations",
     "tests/unit/lifecycle/test_windows_contracts.py::test_api_sets_native_signature",
@@ -102,11 +113,14 @@ WINDOWS_UNIT_NODES = (
 WINDOWS_UNIT_REASON = "Windows native CreateFileW and NTFS handle APIs are unavailable on POSIX"
 APPROVED_NATIVE_SKIPS: dict[str, tuple[set[str], str]] = {
     **{node: ({"Linux", "Darwin"}, WINDOWS_UNIT_REASON) for node in WINDOWS_UNIT_NODES},
-    "tests/integration/adapters/test_platform_processes.py::"
-    "test_windows_bootstrap_survives_literal_paths_and_json": (
-        {"Linux", "Darwin"},
-        "Native Windows PowerShell transport; POSIX has shell tests",
-    ),
+    **{
+        "tests/integration/adapters/test_platform_processes.py::"
+        f"test_windows_bootstrap_survives_literal_paths_and_json[{shell}]": (
+            {"Linux", "Darwin"},
+            "Native Windows PowerShell transport; POSIX has shell tests",
+        )
+        for shell in ("powershell.exe", "pwsh.exe")
+    },
     WINDOWS_FILESYSTEM + "test_windows_case_alias_and_pinned_ancestor": (
         {"Linux", "Darwin"},
         "Requires native Windows NTFS handles and ACLs",
@@ -115,10 +129,13 @@ APPROVED_NATIVE_SKIPS: dict[str, tuple[set[str], str]] = {
         {"Linux", "Darwin"},
         "Requires native Windows security descriptors",
     ),
-    WINDOWS_FILESYSTEM + "test_windows_noncanonical_roots_are_rejected": (
-        {"Linux", "Darwin"},
-        "Requires native Windows path namespaces",
-    ),
+    **{
+        WINDOWS_FILESYSTEM + f"test_windows_noncanonical_roots_are_rejected[{path}]": (
+            {"Linux", "Darwin"},
+            "Requires native Windows path namespaces",
+        )
+        for path in (value.replace("\\", "\\\\") for value in WINDOWS_NONCANONICAL_PARAMS)
+    },
     WINDOWS_FILESYSTEM + "test_windows_competing_process_cannot_redirect_held_ancestor": (
         {"Linux", "Darwin"},
         "Requires native Windows cross-process sharing",
@@ -157,6 +174,64 @@ def normalized_report_files(report: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+def regenerated_report(data: CoverageData, source_root: Path, tooling: bool) -> dict[str, Any]:
+    """Analyze actual source from a disposable normalized copy of native arcs."""
+    root = source_root.resolve()
+    prefix = "scripts/" if tooling else "src/agent_company/"
+    measured: dict[str, str] = {}
+    with tempfile.TemporaryDirectory(prefix="agent-company-coverage-") as temporary:
+        database = Path(temporary) / ".coverage"
+        copy = CoverageData(basename=str(database))
+        try:
+            copy.add_arcs({})
+            for source in data.measured_files():
+                normalized = source.replace("\\", "/")
+                relative_path = PurePosixPath(normalized)
+                if (
+                    not normalized.startswith(prefix)
+                    or relative_path.is_absolute()
+                    or ".." in relative_path.parts
+                    or normalized in measured
+                ):
+                    raise ValueError(f"unsafe or duplicate measured source: {source}")
+                path = (root / normalized).resolve()
+                if not path.is_relative_to(root) or not path.is_file():
+                    raise ValueError(f"missing or unsafe source file: {source}")
+                measured[normalized] = str(path)
+                arcs = data.arcs(source) or []
+                if arcs:
+                    copy.add_arcs({str(path): arcs})
+                else:
+                    copy.touch_file(str(path))
+            copy.write()
+        finally:
+            copy.close()
+        coverage = Coverage(data_file=str(database), config_file=str(root / "pyproject.toml"))
+        # Absolute copy names need matching analysis lookups even when the
+        # native collector stored relative names.
+        coverage.set_option("run:relative_files", False)
+        if tooling:
+            coverage.set_option("run:source", ["scripts"])
+        try:
+            coverage.load()
+            output = Path(temporary) / "coverage.json"
+            coverage.json_report(outfile=str(output), ignore_errors=False)
+            report: dict[str, Any] = json.loads(output.read_text(encoding="utf-8"))
+        finally:
+            coverage.get_data().close()
+    files: dict[str, Any] = {}
+    for source, row in normalized_report_files(report).items():
+        path = Path(source)
+        relative_name = (
+            path.resolve().relative_to(root).as_posix() if path.is_absolute() else source
+        )
+        if relative_name in files:
+            raise ValueError(f"duplicate regenerated source: {relative_name}")
+        files[relative_name] = row
+    report["files"] = files
+    return report
+
+
 def valid_suite(
     directory: Path,
     *,
@@ -165,6 +240,7 @@ def valid_suite(
     config_digest: str,
     tool_versions: dict[str, str],
     require_clean: bool = True,
+    source_root: Path = ROOT,
 ) -> tuple[str, str, Path]:
     """Reject stale, partial, failed, uninstrumented or malformed native evidence."""
     manifest_path = directory / "manifest.json"
@@ -274,21 +350,14 @@ def valid_suite(
                 or not report.get("files")
             ):
                 raise ValueError("missing branch JSON or source rows")
-            files = normalized_report_files(report)
-            for source in data.measured_files():
-                normalized = source.replace("\\", "/")
-                row = files.get(normalized)
-                if row is None:
-                    raise ValueError(f"measured file missing from JSON: {source}")
-                executed = set(row["executed_lines"])
-                executable = executed | set(row["missing_lines"])
-                raw_lines = set(data.lines(source) or [])
-                if executed != raw_lines & executable:
-                    raise ValueError(f"JSON lines disagree with database: {source}")
-                raw_arcs = set(data.arcs(source) or [])
-                reported_arcs = {tuple(arc) for arc in row["executed_branches"]}
-                if not reported_arcs <= raw_arcs:
-                    raise ValueError(f"JSON branches disagree with database: {source}")
+            regenerated = regenerated_report(data, source_root, tooling)
+            if (
+                normalized_report_files(report) != regenerated["files"]
+                or report["totals"] != regenerated["totals"]
+                or {key: value for key, value in report["meta"].items() if key != "timestamp"}
+                != {key: value for key, value in regenerated["meta"].items() if key != "timestamp"}
+            ):
+                raise ValueError("coverage JSON disagrees with source and database")
         finally:
             data.close()
         xml_root = ET.parse(directory / "coverage.xml").getroot()
@@ -317,17 +386,14 @@ def valid_suite(
         if len(ids) != len(set(ids)) or set(reports) != set(ids):
             raise ValueError("duplicate or missing outcome IDs")
         suites = [junit] if junit.tag == "testsuite" else junit.findall("testsuite")
-        if (
-            sum(int(row.attrib["tests"]) for row in suites) != len(cases)
-            or len(cases) < len(ids)
-            or any(
-                int(row.attrib.get(key, "0")) for row in suites for key in ("errors", "failures")
-            )
+        if len(cases) < len(ids) or any(
+            int(row.attrib.get(key, "0")) for row in suites for key in ("errors", "failures")
         ):
             raise ValueError("JUnit outcomes disagree with collection")
         if outcomes.get("collection_errors"):
             raise ValueError("collection errors")
         executed_cases = 0
+        subtest_count = 0
         full_executed: set[str] = set()
         for item in collected:
             nodeid = item["nodeid"]
@@ -349,6 +415,7 @@ def valid_suite(
             phase_names = [phase["phase"] for phase in phases]
             primary = [phase["phase"] for phase in phases if "subtest_index" not in phase]
             subtests = [phase for phase in phases if "subtest_index" in phase]
+            subtest_count += len(subtests)
             if (
                 len(primary) != len(set(primary))
                 or phase_names[0] != "setup"
@@ -379,6 +446,8 @@ def valid_suite(
                 raise ValueError(f"no executed outcome: {nodeid}")
         if executed_cases == 0:
             raise ValueError("all tests skipped")
+        if sum(int(row.attrib["tests"]) for row in suites) != len(cases) + subtest_count:
+            raise ValueError("JUnit outcomes disagree with collection")
         if suite == "test" and full_executed != {"unit", "integration"}:
             raise ValueError("full suite did not execute both unit and integration tests")
         return system, suite, directory / ".coverage"
@@ -388,7 +457,7 @@ def valid_suite(
         TypeError,
         IndexError,
         AttributeError,
-        DataError,
+        CoverageException,
         json.JSONDecodeError,
         ET.ParseError,
     ) as error:
@@ -404,6 +473,7 @@ def valid_matrix(
     tool_versions: dict[str, str],
     systems: set[str] = SYSTEMS,
     allow_full: bool = False,
+    source_root: Path = ROOT,
 ) -> dict[tuple[str, str], Path]:
     """Require exact split records, or allow one full suite per OS for legacy combine."""
     records: dict[tuple[str, str], Path] = {}
@@ -414,6 +484,7 @@ def valid_matrix(
             tracked_digest=tracked_digest,
             config_digest=config_digest,
             tool_versions=tool_versions,
+            source_root=source_root,
         )
         key = (system, suite)
         if key in records:
