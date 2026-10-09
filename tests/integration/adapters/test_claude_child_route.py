@@ -1,0 +1,469 @@
+"""Exercise the Claude Agent-tool subagent route through the real adapter and core.
+
+Events are synthetic shapes from https://code.claude.com/docs/en/hooks (common
+``agent_id``/``agent_type`` fields, SubagentStart and SubagentStop). They are not
+retained live Desktop payloads, so these tests do not verify native delivery.
+"""
+
+import copy
+import uuid
+from collections.abc import Iterator
+from pathlib import Path
+
+import pytest
+
+from agent_company.adapters import claude, common, cursor
+from agent_company.lifecycle import task_workspace as core
+from tests.support import Fixture
+from tests.types import JsonObject, JsonValue
+
+pytestmark = pytest.mark.integration
+
+PARENT = "coordinator"
+AGENT = "agent-1"
+CHILD = PARENT + "/agent/" + AGENT
+
+
+@pytest.fixture
+def case(monkeypatch: pytest.MonkeyPatch) -> Iterator[Fixture]:
+    """Create a disposable repository whose coordinator is a Claude parent session.
+
+    Args:
+        monkeypatch: Removes Cursor markers so the Claude entry point handles events.
+
+    Yields:
+        Real-core fixture with the issue created but no packet acknowledged.
+    """
+    # Exercise Claude's own entry point with a Claude-host coordinator identity.
+    monkeypatch.delenv("CURSOR_VERSION", raising=False)
+    fixture = Fixture()
+    fixture.setUp()
+    fixture.base["host"] = claude.HOST
+    fixture.base["coordinator"] = core.participant_key(fixture.base)
+    # Release disposable stores even when an assertion fails.
+    try:
+        fixture.create()
+        yield fixture
+    finally:
+        fixture.doCleanups()
+
+
+def event(case: Fixture, name: str, child: bool = False, **fields: JsonValue) -> JsonObject:
+    """Build one Claude hook envelope for the parent or its subagent.
+
+    Args:
+        case: Disposable repository fixture.
+        name: Native hook event name.
+        child: Whether the hook fires inside the subagent (adds agent_id/agent_type).
+        **fields: Event-specific fields and intentional overrides.
+
+    Returns:
+        A native envelope with the parent's raw session ID and the real checkout.
+    """
+    # Every Claude hook carries the parent session; subagent hooks add agent fields.
+    envelope: JsonObject = {"hook_event_name": name, "session_id": PARENT, "cwd": str(case.root)}
+    if child:
+        envelope.update(agent_id=AGENT, agent_type="general-purpose")
+    envelope.update(fields)
+    return envelope
+
+
+def agent_call(
+    case: Fixture, name: str, inputs: JsonObject | None = None, **fields: JsonValue
+) -> JsonObject:
+    """Build the parent's Agent tool envelope.
+
+    Args:
+        case: Disposable repository fixture.
+        name: PreToolUse, PostToolUse or PostToolUseFailure.
+        inputs: Agent tool_input overrides.
+        **fields: Event fields such as tool_response or error.
+
+    Returns:
+        The parent's Agent tool event under the native call ID ``agent-call``.
+    """
+    tool_input: JsonObject = {"description": "step", "prompt": "fixture", **(inputs or {})}
+    return event(
+        case, name, tool_name="Agent", tool_use_id="agent-call", tool_input=tool_input, **fields
+    )
+
+
+def read_call(case: Fixture, name: str, tool_id: str, **fields: JsonValue) -> JsonObject:
+    """Build a subagent Read tool envelope for the issue roadmap.
+
+    Args:
+        case: Disposable repository fixture.
+        name: PreToolUse or PostToolUse.
+        tool_id: Native tool-use ID.
+        **fields: Extra event fields such as tool_response.
+
+    Returns:
+        A child Read tool event.
+    """
+    return event(
+        case,
+        name,
+        child=True,
+        tool_name="Read",
+        tool_use_id=tool_id,
+        tool_input={"file_path": str(case.root / ".task/TEST-1/roadmap.md")},
+        **fields,
+    )
+
+
+def denied(response: JsonObject) -> bool:
+    """Report whether a PreToolUse response denies the native call.
+
+    Args:
+        response: Adapter response.
+
+    Returns:
+        Whether Claude's permission decision is a denial.
+    """
+    return response.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
+
+
+def key(session: str) -> str:
+    """Derive the Claude participant key for a lifecycle session.
+
+    Args:
+        session: Raw or normalized Claude session ID.
+
+    Returns:
+        The SHA-256 participant key.
+    """
+    return core.participant_key({"host": claude.HOST, "session_id": session})
+
+
+def bindings(case: Fixture) -> Path:
+    """Locate the checkout's local binding directory.
+
+    Args:
+        case: Disposable repository fixture.
+
+    Returns:
+        The ``.task/.bindings`` path of the main worktree.
+    """
+    return case.root / ".task" / ".bindings"
+
+
+def child_request(case: Fixture, operation: str, **fields: JsonValue) -> JsonObject:
+    """Build a lifecycle request bound to the child session.
+
+    Args:
+        case: Disposable repository fixture.
+        operation: Core operation.
+        **fields: Operation fields.
+
+    Returns:
+        A request carrying the child's session and recorded binding generation.
+    """
+    generation = case.state()["participants"][key(CHILD)]["generation"]
+    return {
+        "schema_version": 1,
+        "operation": operation,
+        "request_id": str(uuid.uuid4()),
+        "worktree": str(case.root),
+        "host": claude.HOST,
+        "session_id": CHILD,
+        "repo_id": case.base["repo_id"],
+        "issue_id": "TEST-1",
+        "binding_generation": generation,
+        **fields,
+    }
+
+
+def start_child(case: Fixture) -> JsonObject:
+    """Make the parent ready, admit its Agent call and deliver SubagentStart.
+
+    Args:
+        case: Disposable repository fixture.
+
+    Returns:
+        The SubagentStart response.
+
+    Raises:
+        AssertionError: The parent Agent call is not admitted.
+    """
+    # A ready parent's foreground Agent call becomes ordinary pending work.
+    case.ready()
+    assert not denied(claude.handle(agent_call(case, "PreToolUse")))
+    return claude.handle(event(case, "SubagentStart", child=True))
+
+
+def test_ready_parent_agent_child_joins_works_and_stops(case: Fixture) -> None:
+    """Run the full child route while the parent stays ready.
+
+    Args:
+        case: Disposable repository fixture.
+
+    Raises:
+        AssertionError: A route step is refused or the parent loses readiness.
+    """
+    # The parent's Agent call is pending under its native call ID.
+    response = start_child(case)
+    state = case.state()
+    assert "agent-call" in state["participants"][case.base["coordinator"]]["pending"]
+    # SubagentStart returns only fixed text plus the child's key and packet digest.
+    context = response["hookSpecificOutput"]["additionalContext"]
+    member = state["participants"][key(CHILD)]
+    assert response["hookSpecificOutput"]["hookEventName"] == "SubagentStart"
+    assert context.startswith("TASK_WORKSPACE_CHILD_READY: participant " + key(CHILD))
+    assert member["ack"] in context
+    assert "fixture" not in context
+    # The adapter records the child's issue assignment for its own bootstrap gate.
+    assert (bindings(case) / (key(CHILD) + ".assignment.json")).exists()
+    # The child is ready on its own roadmap-only join packet, never the parent's.
+    assert member["status"] == "ready"
+    assert [ref["locator"] for ref in member["packet"]] == ["roadmap.md"]
+    assert member["packet"][0]["reason"] == "issue-resume"
+    assert state["coordinator"] == case.base["coordinator"]
+    # A child Read is admitted and settled under the child participant only.
+    assert not denied(claude.handle(read_call(case, "PreToolUse", "child-read")))
+    assert "child-read" in case.state()["participants"][key(CHILD)]["pending"]
+    claude.handle(read_call(case, "PostToolUse", "child-read", tool_response={"ok": True}))
+    state = case.state()
+    assert state["participants"][key(CHILD)]["pending"] == {}
+    assert "child-read" not in state["participants"][case.base["coordinator"]]["pending"]
+    # SubagentStop is an observation: no detach and no settlement of the parent call.
+    stopped = claude.handle(
+        event(case, "SubagentStop", child=True, stop_hook_active=False, last_assistant_message="")
+    )
+    assert stopped == {}
+    state = case.state()
+    assert state["participants"][key(CHILD)]["status"] == "ready"
+    assert "agent-call" in state["participants"][case.base["coordinator"]]["pending"]
+    # The parent remained ready throughout and its Agent call settles on PostToolUse.
+    assert case.call("ready")["ok"]
+    claude.handle(agent_call(case, "PostToolUse", tool_response=[{"type": "text", "text": "x"}]))
+    assert case.state()["participants"][case.base["coordinator"]]["pending"] == {}
+
+
+def test_parent_agent_failure_settles_through_failure_path(case: Fixture) -> None:
+    """Settle a failed parent Agent call through PostToolUseFailure.
+
+    Args:
+        case: Disposable repository fixture.
+    """
+    start_child(case)
+    claude.handle(agent_call(case, "PostToolUseFailure", error="stopped", is_interrupt=True))
+    assert case.state()["participants"][case.base["coordinator"]]["pending"] == {}
+
+
+def test_unready_parent_child_stays_unbound(case: Fixture) -> None:
+    """Leave a child of an unready parent unbound and deny its first tool.
+
+    Args:
+        case: Disposable repository fixture.
+    """
+    # The unready parent's Agent call itself is denied before any pending work.
+    before = copy.deepcopy(case.state())
+    assert denied(claude.handle(agent_call(case, "PreToolUse")))
+    # SubagentStart cannot block: it only advises and joins nobody.
+    response = claude.handle(event(case, "SubagentStart", child=True))
+    assert set(response) == {"systemMessage"}
+    assert "TASK_WORKSPACE_NOT_READY" in response["systemMessage"]
+    assert case.state() == before
+    # The child's first tool has no binding or assignment of its own and is denied.
+    assert denied(claude.handle(read_call(case, "PreToolUse", "child-read")))
+    assert case.state() == before
+    assert not (bindings(case) / (key(CHILD) + ".assignment.json")).exists()
+
+
+def test_child_without_pending_agent_call_is_not_joined(case: Fixture) -> None:
+    """Refuse a join when the ready parent has no pending admitted Agent call.
+
+    Args:
+        case: Disposable repository fixture.
+    """
+    case.ready()
+    before = copy.deepcopy(case.state())
+    response = claude.handle(event(case, "SubagentStart", child=True))
+    assert "HOST_UNSUPPORTED_CHILD_IDENTITY" in response["systemMessage"]
+    assert case.state() == before
+    assert denied(claude.handle(read_call(case, "PreToolUse", "child-read")))
+
+
+def test_settled_agent_call_no_longer_authorizes_a_join(case: Fixture) -> None:
+    """Ignore a recorded Agent call ID once the core no longer holds it pending.
+
+    Args:
+        case: Disposable repository fixture.
+    """
+    case.ready()
+    claude.handle(agent_call(case, "PreToolUse"))
+    claude.handle(agent_call(case, "PostToolUse", tool_response="done"))
+    response = claude.handle(event(case, "SubagentStart", child=True))
+    assert "HOST_UNSUPPORTED_CHILD_IDENTITY" in response["systemMessage"]
+    assert key(CHILD) not in case.state()["participants"]
+
+
+@pytest.mark.parametrize(
+    ("inputs", "code"),
+    [
+        ({"run_in_background": True}, "HOST_UNSUPPORTED_BACKGROUND"),
+        ({"isolation": "worktree"}, "HOST_UNSUPPORTED_CHILD_IDENTITY"),
+    ],
+)
+def test_background_or_isolated_agent_is_denied(
+    case: Fixture, inputs: JsonObject, code: str
+) -> None:
+    """Deny background and worktree-isolated Agent calls before pending work.
+
+    Args:
+        case: Disposable repository fixture.
+        inputs: Agent tool_input fields that make the child unsupported.
+        code: Expected diagnostic.
+    """
+    case.ready()
+    before = copy.deepcopy(case.state())
+    response = claude.handle(agent_call(case, "PreToolUse", inputs))
+    assert denied(response)
+    assert code in response["hookSpecificOutput"]["permissionDecisionReason"]
+    assert case.state() == before
+
+
+def test_child_cannot_start_nested_agent(case: Fixture) -> None:
+    """Deny an Agent call from a ready child without recording pending work.
+
+    Args:
+        case: Disposable repository fixture.
+    """
+    start_child(case)
+    before = copy.deepcopy(case.state())
+    nested = event(
+        case,
+        "PreToolUse",
+        child=True,
+        tool_name="Agent",
+        tool_use_id="nested-call",
+        tool_input={"description": "nested", "prompt": "fixture"},
+    )
+    response = claude.handle(nested)
+    assert denied(response)
+    assert (
+        "HOST_UNSUPPORTED_CHILD_IDENTITY"
+        in response["hookSpecificOutput"]["permissionDecisionReason"]
+    )
+    assert case.state() == before
+
+
+def test_agent_id_without_parent_binding_is_not_joined(case: Fixture) -> None:
+    """Refuse a child whose parent session has no binding in this checkout.
+
+    Args:
+        case: Disposable repository fixture.
+    """
+    case.ready()
+    before = copy.deepcopy(case.state())
+    response = claude.handle(event(case, "SubagentStart", child=True, session_id="stranger"))
+    assert "BINDING_MISSING" in response["systemMessage"]
+    assert case.state() == before
+    tool = read_call(case, "PreToolUse", "child-read", session_id="stranger")
+    assert denied(claude.handle(tool))
+
+
+def test_agent_id_without_session_id_is_refused(case: Fixture) -> None:
+    """Refuse child hooks that lack the parent session.
+
+    Args:
+        case: Disposable repository fixture.
+    """
+    start = event(case, "SubagentStart", child=True)
+    del start["session_id"]
+    assert "HOST_UNSUPPORTED_CHILD_IDENTITY" in claude.handle(start)["systemMessage"]
+    tool = read_call(case, "PreToolUse", "child-read")
+    del tool["session_id"]
+    assert denied(claude.handle(tool))
+
+
+def test_child_bash_bootstrap_limits_and_core_authority(case: Fixture) -> None:
+    """Admit child read/acknowledge/resume bootstraps but not scope or create.
+
+    Args:
+        case: Disposable repository fixture.
+    """
+    # A coordinator re-scope leaves the child attached and unacknowledged.
+    start_child(case)
+    packet = case.state()["assignments"][key(CHILD)]["packet"]
+    case.call(
+        "scope",
+        expected_revision=case.state()["revision"],
+        target_participant=key(CHILD),
+        packet=packet,
+    )
+    assert case.state()["participants"][key(CHILD)]["ack"] is None
+
+    def bash(request: JsonObject) -> JsonObject:
+        """Dispatch a child Bash bootstrap of the given request.
+
+        Args:
+            request: Lifecycle request encoded into the canonical command.
+
+        Returns:
+            The adapter's PreToolUse response.
+        """
+        return claude.handle(
+            event(
+                case,
+                "PreToolUse",
+                child=True,
+                tool_name="Bash",
+                tool_use_id="child-bash",
+                tool_input={"command": common.bootstrap_command(request, claude.HOST)},
+            )
+        )
+
+    # Recovery operations bound to the child session pass the exact bootstrap gate.
+    for operation, fields in (
+        ("read", {}),
+        ("acknowledge", {"packet_digest": "0" * 64}),
+        ("resume", {}),
+    ):
+        assert bash(child_request(case, operation, **fields)) == {}
+    # Coordinator-only and creation requests are denied for the unready child.
+    scope = child_request(
+        case,
+        "scope",
+        expected_revision=case.state()["revision"],
+        target_participant=key(CHILD),
+        packet=[],
+    )
+    assert denied(bash(scope))
+    create = child_request(case, "create", coordinator=key(CHILD), issue_uuid="fixture-issue-uuid")
+    assert denied(bash(create))
+    # The child bootstrap cannot impersonate the parent session either.
+    assert denied(bash({**child_request(case, "read"), "session_id": PARENT}))
+    # After the child re-acknowledges, the core still refuses its scope request.
+    read = core.execute(child_request(case, "read"))
+    acknowledged = core.execute(
+        child_request(
+            case,
+            "acknowledge",
+            expected_revision=read["revision"],
+            packet_digest=read["packet_digest"],
+        )
+    )
+    assert acknowledged["ok"]
+    refused = core.execute({**scope, "expected_revision": case.state()["revision"]})
+    assert not refused["ok"]
+    assert refused["code"] == "NOT_OWNER"
+    assert case.state()["coordinator"] == case.base["coordinator"]
+
+
+def test_cursor_subagent_start_is_unchanged(case: Fixture) -> None:
+    """Keep Cursor's subagentStart denial independent of the Claude child route.
+
+    Args:
+        case: Disposable repository fixture.
+    """
+    response = cursor.handle(
+        {
+            "hook_event_name": "subagentStart",
+            "conversation_id": PARENT,
+            "workspace_roots": [str(case.root)],
+            "agent_id": AGENT,
+        }
+    )
+    assert response["permission"] == "deny"
+    assert "HOST_UNSUPPORTED_CHILD_IDENTITY" in response["user_message"]

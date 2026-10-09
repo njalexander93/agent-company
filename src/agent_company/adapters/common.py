@@ -926,20 +926,28 @@ def native_identity(event: core.JSONObject, host: str) -> core.JSONObject:
         host: Either claude-code or cursor, selected by the entry point.
 
     Returns:
-        A normalized envelope retaining native tool IDs and inputs.
+        A normalized envelope retaining native tool IDs and inputs. A Claude subagent
+        event is keyed by ``<session_id>/agent/<agent_id>``, marked ``child`` and keeps
+        the raw parent session in ``parent_session_id``.
 
     Raises:
-        core.WorkspaceError: If identity is absent, ambiguous, or belongs to a child.
+        core.WorkspaceError: If identity is absent, ambiguous, or belongs to an
+            unsupported child.
     """
-    # Children and remote/background sessions have no supported binding here.
+    # Only Claude's documented agent_id marks a supported child; every other child,
+    # remote or background marker has no supported binding here.
+    child = host == "claude-code" and event.get("agent_id") is not None
     core.require(
-        event.get("agent_id") is None
+        (event.get("agent_id") is None or child)
         and event.get("subagent_id") is None
         and event.get("parent_conversation_id") is None,
         "HOST_UNSUPPORTED_CHILD_IDENTITY",
     )
     core.require(event.get("is_background_agent", False) is False, "HOST_UNSUPPORTED_BACKGROUND")
-    normalized = event.copy()
+    # Derived child markers come only from this function, never from the raw envelope.
+    normalized = {
+        key: value for key, value in event.items() if key not in {"child", "parent_session_id"}
+    }
     # Cursor identity comes from its conversation and single workspace root.
     if host == "cursor":
         session = native_token(event.get("conversation_id"))
@@ -954,10 +962,23 @@ def native_identity(event: core.JSONObject, host: str) -> core.JSONObject:
             "REPOSITORY_MISMATCH",
         )
     else:
+        # A child cannot be keyed without the parent session it runs under.
+        if child:
+            core.require(
+                isinstance(event.get("session_id"), str), "HOST_UNSUPPORTED_CHILD_IDENTITY"
+            )
         # Claude binds to its native session and absolute working directory.
         session = native_token(event.get("session_id"))
         cwd = event.get("cwd")
         core.require(isinstance(cwd, str) and Path(cwd).is_absolute(), "REPOSITORY_MISMATCH")
+        # Key a subagent deterministically under its parent; separators stay unambiguous.
+        if child:
+            agent = native_token(event.get("agent_id"))
+            core.require(
+                "/" not in agent and "/agent/" not in session, "HOST_UNSUPPORTED_CHILD_IDENTITY"
+            )
+            normalized.update(child=True, parent_session_id=session)
+            session = core.token(session + "/agent/" + agent)
     normalized.update(session_id=session, cwd=cwd)
     return normalized
 
@@ -1036,9 +1057,22 @@ def native_tool(event: core.JSONObject, host: str) -> str:
     if tool.startswith(("mcp__", "MCP:")) or event.get("mcp_server") is not None:
         core.require(_linear_provider_tool(event, host) is not None, "HOST_UNSUPPORTED_PROVIDER")
         return tool
-    # Child and delegation tools require their own verified identity.
+    # Child and delegation tools require their own verified identity. Only a Claude
+    # parent's foreground Agent call has one: SubagentStart joins its child.
     if tool in {"Agent", "Task", "TaskOutput", "TaskStop", "SpawnAgent"}:
-        raise core.WorkspaceError("HOST_UNSUPPORTED_CHILD_IDENTITY")
+        core.require(
+            host == "claude-code" and tool == "Agent" and event.get("child") is not True,
+            "HOST_UNSUPPORTED_CHILD_IDENTITY",
+        )
+        # A background child outlives this call's synchronous correlation.
+        core.require(
+            args.get("run_in_background", False) is False
+            and not any(key in args for key in ("background", "is_background", "async")),
+            "HOST_UNSUPPORTED_BACKGROUND",
+        )
+        # An isolated child runs in another worktree that this binding does not cover.
+        core.require(args.get("isolation") is None, "HOST_UNSUPPORTED_CHILD_IDENTITY")
+        return tool
     # The project disables Claude auto-backgrounding; never assume an unconfigured host did so.
     if host == "claude-code" and tool == "Bash":
         core.require(
@@ -1103,6 +1137,9 @@ def native_pre(event: core.JSONObject, host: str) -> None:
     # A ready session's no-effect schema or skill load needs no settlement.
     if host == "claude-code" and tool in CLAUDE_NO_EFFECT_TOOLS:
         return
+    # Remember the parent's Agent call so SubagentStart can require it to be pending.
+    if tool == "Agent":
+        record_agent_call(event, host)
     result = core.execute(
         {
             **request,
@@ -1209,6 +1246,144 @@ def native_post(event: core.JSONObject, host: str, failed: bool) -> None:
     core.require(result["ok"], result["code"])
 
 
+AGENT_CALL_LIMIT = 16
+
+
+def _agent_calls_name(event: core.JSONObject, host: str) -> str:
+    """Name the local marker that lists one parent session's admitted Agent call IDs.
+
+    Args:
+        event: Identity-validated parent envelope.
+        host: Explicit adapter identity.
+
+    Returns:
+        The binding-directory file name for this parent participant.
+    """
+    return core.participant_key({"host": host, "session_id": event["session_id"]}) + (
+        ".agent-calls.json"
+    )
+
+
+def record_agent_call(event: core.JSONObject, host: str) -> None:
+    """Record a parent's admitted foreground Agent call ID before its tool-start.
+
+    The core keeps pending work by tool ID only, so this bounded marker names which
+    pending IDs are Agent calls. SubagentStart intersects it with the parent's core
+    pending set; a stale entry therefore never authorizes a join.
+
+    Args:
+        event: Identity-validated parent PreToolUse envelope for the Agent tool.
+        host: Explicit adapter identity.
+
+    Raises:
+        core.WorkspaceError: If the checkout or tool identity is invalid.
+        OSError: If the binding directory cannot be written.
+    """
+    # Resolve this checkout's binding directory under the shared assignment lock.
+    root, _, _ = core.repository(event["cwd"])
+    name = _agent_calls_name(event, host)
+    with (
+        core.Directory.absolute(root) as worktree,
+        worktree.child(".task", True) as local,
+        local.child(".bindings", True) as bindings,
+        bindings.lock("assignment.lock"),
+    ):
+        # Append the native call ID and keep only the most recent bounded entries.
+        calls = bindings.json(name)["tool_ids"] if bindings.exists(name) else []
+        calls = [call for call in calls if call != event["tool_use_id"]]
+        calls.append(native_token(event["tool_use_id"]))
+        bindings.put(name, {"tool_ids": calls[-AGENT_CALL_LIMIT:]})
+
+
+def child_start(event: core.JSONObject, host: str) -> str:
+    """Join a Claude subagent as its own reader when its ready parent awaits an Agent call.
+
+    Args:
+        event: Identity-validated SubagentStart envelope marked as a child.
+        host: Explicit adapter identity.
+
+    Returns:
+        Fixed control text naming only the child's participant key and packet digest.
+
+    Raises:
+        core.WorkspaceError: If the event is not a child, the parent binding is not
+            ready, no admitted parent Agent call is pending, or a lifecycle step fails.
+        OSError: If binding or issue state cannot be accessed.
+    """
+    # Only a normalized Claude child carries the parent session it runs under.
+    core.require(event.get("child") is True, "HOST_UNSUPPORTED_CHILD_IDENTITY")
+    parent_event = {**event, "session_id": event["parent_session_id"]}
+    # The parent's own binding must be ready; a child never borrows an unready parent.
+    parent = request_for(parent_event, "ready", host)
+    result = core.execute(parent)
+    core.require(result["ok"], result["code"])
+    identifier = parent["issue_id"]
+    # Read committed issue state for the parent's pending work and the join fields.
+    with core.Store(parent) as store, store.issues.child(identifier) as control, control.lock():
+        issue = core.Issue(store, control, identifier)
+        issue.recover()
+        state = issue.committed_state()
+    # Derive the parent's pending call IDs and the child's own participant key.
+    pending = set(state["participants"][core.participant_key(parent)]["pending"])
+    child_key = core.participant_key({"host": host, "session_id": event["session_id"]})
+    root, _, _ = core.repository(event["cwd"])
+    # Require a pending admitted Agent call, then record the child's issue assignment.
+    with (
+        core.Directory.absolute(root) as worktree,
+        worktree.child(".task") as local,
+        local.child(".bindings") as bindings,
+        bindings.lock("assignment.lock"),
+    ):
+        name = _agent_calls_name(parent_event, host)
+        calls = set(bindings.json(name)["tool_ids"]) if bindings.exists(name) else set()
+        core.require(bool(calls & pending), "HOST_UNSUPPORTED_CHILD_IDENTITY")
+        assignment = child_key + ".assignment.json"
+        # A child identity already recorded for another issue is never reassigned.
+        if bindings.exists(assignment):
+            core.require(bindings.json(assignment)["issue_id"] == identifier, "BINDING_CONFLICT")
+        bindings.put(assignment, {"issue_id": identifier})
+    # A new child joins with the core-chosen roadmap-only packet for the parent's issue.
+    if child_key not in state["participants"]:
+        joined = core.execute(
+            {
+                "schema_version": 1,
+                "operation": "join",
+                "request_id": str(uuid.uuid4()),
+                "worktree": event["cwd"],
+                "host": host,
+                "session_id": event["session_id"],
+                "repo_id": parent["repo_id"],
+                "issue_id": identifier,
+                "issue_uuid": state["issue_uuid"],
+                "expected_revision": state["revision"],
+            }
+        )
+        core.require(joined["ok"], joined["code"])
+    # Read, acknowledge and verify the child's own packet under its own binding.
+    child = request_for(event, "read", host)
+    read = core.execute(child)
+    core.require(read["ok"], read["code"])
+    acknowledged = core.execute(
+        {
+            **child,
+            "operation": "acknowledge",
+            "request_id": str(uuid.uuid4()),
+            "expected_revision": read["revision"],
+            "packet_digest": read["packet_digest"],
+        }
+    )
+    core.require(acknowledged["ok"], acknowledged["code"])
+    ready = core.execute({**child, "operation": "ready", "request_id": str(uuid.uuid4())})
+    core.require(ready["ok"], ready["code"])
+    # Report identifiers and digests only; task text stays in the packet sources.
+    return (
+        f"TASK_WORKSPACE_CHILD_READY: participant {child_key}; packet {read['packet_digest']}. "
+        "This subagent holds its own reader binding for the parent's issue. Read the packet "
+        "through the lifecycle read operation, write only paths the coordinator scopes to "
+        "this participant, and do not start nested Agent calls."
+    )
+
+
 def native_context(event: core.JSONObject, host: str) -> str:
     """Report readiness or a recovery route without granting tool permission.
 
@@ -1296,6 +1471,15 @@ def _recovery_route(code: str, host: str) -> str:
         return f"No lifecycle operation admits this tool. Use one of the correlated tools: {tools}."
     # Child work requires its own verified identity, never the parent binding.
     if code == "HOST_UNSUPPORTED_CHILD_IDENTITY":
+        # Claude's only child route is a ready parent's foreground, non-isolated Agent call.
+        if host == "claude-code":
+            return (
+                "Child or delegation work cannot reuse the parent binding. Only a foreground "
+                "Agent call without isolation from a ready parent session is admitted; its "
+                "subagent receives its own reader binding at SubagentStart. Nested Agent "
+                "calls, Task, TaskOutput, TaskStop, SpawnAgent and children of an unready "
+                "parent stay unsupported; perform that step in the parent session."
+            )
         return (
             "Child or delegation work has no verified child identity on this host and cannot "
             "reuse the parent binding. Perform the step in this session or dispatch it through "

@@ -267,7 +267,7 @@ These rules are implemented in `adapters/common.py`, `adapters/claude.py`, and `
 
 | Boundary | Claude Code | Cursor Agent |
 | --- | --- | --- |
-| Identity | Exact native session ID; reject child markers | Exact conversation ID; require any session ID to match; one workspace root |
+| Identity | Exact native session ID. A hook carrying `agent_id` with a valid `session_id` is a subagent keyed `<session_id>/agent/<agent_id>`; `subagent_id`, `parent_conversation_id`, background markers and `agent_id` without `session_id` are rejected | Exact conversation ID; require any session ID to match; one workspace root |
 | Ordinary tools | Read, Write, Edit, Glob, Grep, NotebookEdit; foreground Bash under the setting above. `ToolSearch` and `Skill` are readiness-checked no-effect operations with no pending entry; a tool they surface is evaluated on its own call | Read, Write, Edit, Grep, Delete; Shell with supported foreground arguments |
 | Linear provider after readiness | Configured connector only (same server name and `mcp_server.source` checks as the ticket read): `get_issue` (any ID), `get_user`, `list_users`, `list_issue_statuses`, `list_comments`, `save_issue`, `save_comment`. Each call is pending work under its native `tool_use_id`, settled by `PostToolUse` (any non-null `tool_response`, including Desktop's content-block list) or `PostToolUseFailure` | No native provider admission; `MCP:` tools are denied |
 | Ticket-first startup | Exact configured Linear issue read before readiness; matching native completion runs shared startup | Exact Linear issue read with generic call-ID and MCP server checks before shared startup |
@@ -275,10 +275,29 @@ These rules are implemented in `adapters/common.py`, `adapters/claude.py`, and `
 | File-tool completion | Supported success/failure event and required payload settle the observed call | Same; native failure type is checked |
 | Shell completion | Successful Bash result with string stdout/stderr, `interrupted: false`, and no async markers | Successful Shell result with integer `exitCode` and no async markers |
 | Ambiguous shell result/failure | Retain pending operation and report recovery | Same; booleans are not exit codes |
-| Child/provider/background tools | Deny unsupported tool names, unconfigured servers, other provider operations (including document/archive operations) and observed child/background identities | Same; `subagentStart` also denies; remote sessions denied |
+| Child/provider/background tools | Deny unsupported tool names, unconfigured servers, other provider operations (including document/archive operations) and background identities. A ready parent's foreground `Agent` call (no `run_in_background: true`, no `isolation`) is pending work under its `tool_use_id`; `Task`, `TaskOutput`, `TaskStop`, `SpawnAgent` and `Agent` from a child are denied. `SubagentStart` joins the child (restricted/unverified, below); `SubagentStop` is an observation | Same; `subagentStart` also denies; remote sessions denied |
 | Session start | Advisory recovery/readiness context; no readiness grant | Advisory context only |
 | Compaction | PreCompact/PostCompact observations only; no context or decision output | Advisory context only |
 | Stop/session end | Optional observation only | Optional observation only; no automatic follow-up |
+
+### Claude subagent child route (restricted/unverified)
+
+This route is implemented and covered by synthetic protocol tests only. It stays
+**restricted/unverified** until a live Desktop session/tool pair is retained. On
+`SubagentStart` the adapter requires the parent binding (host plus raw `session_id`)
+to be ready and one admitted parent `Agent` call to be pending. It then runs core
+`join` for the child session (a roadmap-only reader packet, `issue_uuid` checked)
+followed by `read`, `acknowledge` and `ready`, and records the child's issue
+assignment for its bootstrap gate. Its `additionalContext` contains fixed text with the
+child's participant key and packet digest only. Otherwise it returns a non-blocking
+`systemMessage`, because `SubagentStart` cannot block; the unbound child's first tool
+is then denied. Child tool calls are admitted and settled under the child session.
+Before readiness the child's lifecycle bootstrap admits only the recovery shapes
+(`read`, `acknowledge`, `resume` and the like), never `scope` or `create`; the core
+refuses a child `scope` (`NOT_OWNER`). The coordinator may `scope` the child's key with
+owned `context/` paths. `SubagentStop` records an observation and never detaches. No
+field links a `SubagentStart` to a specific `Agent` call, so the check is "some admitted
+parent `Agent` call is pending", not an exact pairing.
 
 Claude discards `systemMessage` and `continue` from both compaction events.
 [PreCompact](https://code.claude.com/docs/en/hooks#precompact) supports blocking, but this

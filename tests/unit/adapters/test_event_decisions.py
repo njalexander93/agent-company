@@ -420,16 +420,19 @@ def test_claude_failure_blocks_prompt_and_reports_advisory_fallback() -> None:
 def test_claude_unknown_child_and_permission_events_do_not_grant_access(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Keep child identity unsupported and leave host permission decisions untouched.
+    """Refuse subagent hooks without a child identity and leave host permissions untouched.
 
     Args:
         monkeypatch: Pytest fixture that isolates external state for this case.
     """
     monkeypatch.delenv("CURSOR_VERSION", raising=False)
     monkeypatch.setattr(claude.common, "native_identity", lambda event, _host: event)
+    monkeypatch.setattr(claude.common, "native_observe", lambda *_args: pytest.fail("observe"))
     assert claude.handle({"hook_event_name": "PermissionRequest"}) == {}
-    child = claude.handle({"hook_event_name": "SubagentStart"})
-    assert "HOST_UNSUPPORTED_CHILD_IDENTITY" in child["systemMessage"]
+    # Subagent hooks without a normalized child identity only advise; they cannot block.
+    for name in ("SubagentStart", "SubagentStop"):
+        child = claude.handle({"hook_event_name": name})
+        assert "HOST_UNSUPPORTED_CHILD_IDENTITY" in child["systemMessage"]
     unknown = claude.handle({"hook_event_name": "Unknown"})
     assert "HOST_UNSUPPORTED_EVENT" in unknown["systemMessage"]
 

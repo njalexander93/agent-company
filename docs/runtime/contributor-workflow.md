@@ -54,7 +54,7 @@ Before writing Python, read [source documentation and logic comments](developmen
 ## 5. Dispatch fresh step threads
 
 1. Start **one fresh thread per approved numbered step**. Give it the bounded objective, governing criteria, allowed source references, owned outputs, dependencies, verification, exit criteria and return destination. Keep private reasoning out of public artifacts.
-2. Verify the actual child host/session identity. Record its thread identity and ownership in the master roadmap, then install its own lifecycle scope. A created-chat ID or inherited parent context alone does not prove a runtime child identity or readiness.
+2. Verify the actual child host/session identity. Record its thread identity and ownership in the master roadmap, then install its own lifecycle scope. A created-chat ID or inherited parent context alone does not prove a runtime child identity or readiness. On Claude Code, a foreground `Agent` call (no background, no worktree isolation) from the ready master is the supported child route: `SubagentStart` joins the subagent as `<master session>/agent/<agent_id>` with a roadmap-only packet, and the master then `scope`s that key with the step's owned `context/` paths. This route is restricted/unverified until a live session/tool pair is retained, so record manual lifecycle evidence when hooks do not run.
 3. Run independent steps in parallel when their ownership and inputs permit it. Start dependent steps only after the master verifies prerequisite outputs. Resolve overlapping writes explicitly.
 
 **Exit:** every active step has a verified identity, bounded packet, recorded owner and satisfied dependencies. An unsupported child path blocks dispatch until a supported path is established; do not infer native-hook coverage from a manual attachment.
@@ -111,7 +111,7 @@ Apply these steps when creating a PR and when updating it after review or scope 
 
 ## Step-thread route
 
-1. Use the supplied bounded assignment and actual host/session identity. Follow the [bootstrap prerequisite](#before-ordinary-tools-bootstrap-readiness) with the master’s assigned packet; report missing identity or setup before ordinary tools.
+1. Use the supplied bounded assignment and actual host/session identity. Follow the [bootstrap prerequisite](#before-ordinary-tools-bootstrap-readiness) with the master’s assigned packet; report missing identity or setup before ordinary tools. A Claude `Agent`-tool subagent uses session `<master session>/agent/<agent_id>`; after the master re-scopes it, it runs `read`, `acknowledge` and `ready` through the lifecycle command and never `scope`, `create` or a nested `Agent` call.
 2. After scoped read, exact-digest acknowledgment and readiness, read the permitted governing references and verify the selected checkout before implementation. Stop affected work and request refresh when required sources become stale.
 3. Implement only your approved step within its owned paths. Preserve other work and use the assigned checks. Leave master roadmap ownership and issue delivery transitions with the master unless explicitly assigned.
 4. Return the [handoff](#6-verify-handoffs-and-preserve-evidence) and await the master’s verification or correction request. Do not restart issue planning or infer a new approval gate for this already approved assignment.

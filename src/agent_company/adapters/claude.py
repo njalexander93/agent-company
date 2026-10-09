@@ -57,7 +57,8 @@ def handle(event: core.JSONObject) -> core.JSONObject:
     name = event.get("hook_event_name", "")
     # Normalize the native identity before considering any lifecycle action.
     try:
-        # Never reuse a coordinator binding for a child or fabricate a missing identity.
+        # Never reuse a coordinator binding for a child or fabricate a missing identity;
+        # a Claude subagent is keyed by its own normalized child session.
         observed = common.native_identity(event, HOST)
         # The first issue-provider call after Task selection must read the selected ticket.
         if name == "PreToolUse":
@@ -113,9 +114,20 @@ def handle(event: core.JSONObject) -> core.JSONObject:
         if name in {"Stop", "SessionEnd"}:
             common.native_observe(observed, HOST)
             return {}
-        # Child hooks lack the independent identity required for a join.
-        if name in {"SubagentStart", "SubagentStop"}:
-            return failure(name, "HOST_UNSUPPORTED_CHILD_IDENTITY")
+        # A subagent of a ready parent with a pending Agent call joins as its own reader.
+        # SubagentStart cannot block, so any refusal is only an advisory systemMessage.
+        if name == "SubagentStart":
+            return {
+                "hookSpecificOutput": {
+                    "hookEventName": name,
+                    "additionalContext": common.child_start(observed, HOST),
+                }
+            }
+        # A subagent ending is an observation; it neither settles nor detaches the child.
+        if name == "SubagentStop":
+            core.require(observed.get("child") is True, "HOST_UNSUPPORTED_CHILD_IDENTITY")
+            common.native_observe(observed, HOST)
+            return {}
         # Leave host permission decisions with Claude Code.
         if name == "PermissionRequest":
             return {}  # This adapter never supplies allow or changes permission settings.

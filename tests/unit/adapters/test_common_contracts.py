@@ -42,8 +42,15 @@ def test_native_identity_preserves_claude_session_and_cwd(tmp_path: Path) -> Non
 @pytest.mark.parametrize(
     ("extra", "code"),
     [
-        ({"agent_id": "child"}, "HOST_UNSUPPORTED_CHILD_IDENTITY"),
+        ({"agent_id": "child", "session_id": None}, "HOST_UNSUPPORTED_CHILD_IDENTITY"),
+        ({"agent_id": "child", "session_id": 2}, "HOST_UNSUPPORTED_CHILD_IDENTITY"),
+        ({"agent_id": "a/b"}, "HOST_UNSUPPORTED_CHILD_IDENTITY"),
+        ({"agent_id": 7}, "INVALID_REQUEST"),
+        ({"agent_id": "child", "session_id": "s/agent/t"}, "HOST_UNSUPPORTED_CHILD_IDENTITY"),
+        ({"agent_id": "child", "subagent_id": "child"}, "HOST_UNSUPPORTED_CHILD_IDENTITY"),
+        ({"agent_id": "child", "is_background_agent": True}, "HOST_UNSUPPORTED_BACKGROUND"),
         ({"subagent_id": "child"}, "HOST_UNSUPPORTED_CHILD_IDENTITY"),
+        ({"parent_conversation_id": "parent"}, "HOST_UNSUPPORTED_CHILD_IDENTITY"),
         ({"is_background_agent": True}, "HOST_UNSUPPORTED_BACKGROUND"),
         ({"session_id": 2}, "INVALID_REQUEST"),
         ({"cwd": "relative"}, "REPOSITORY_MISMATCH"),
@@ -64,6 +71,51 @@ def test_native_identity_rejects_unbound_claude_context(
     with pytest.raises(core.WorkspaceError) as captured:
         common.native_identity(event, "claude-code")
     assert captured.value.code == code
+
+
+def test_native_identity_keys_claude_child_under_parent_session(tmp_path: Path) -> None:
+    """Key a Claude subagent by its parent session and host-issued agent ID.
+
+    Args:
+        tmp_path: Absolute checkout path used in the native event.
+    """
+    event = {"session_id": "parent", "cwd": str(tmp_path), "agent_id": "agent-1"}
+    normalized = common.native_identity(event, "claude-code")
+    # The child session is derived deterministically and keeps the raw parent session.
+    assert normalized["session_id"] == "parent/agent/agent-1"
+    assert normalized["parent_session_id"] == "parent"
+    assert normalized["child"] is True
+    assert core.participant_key({"host": "claude-code", "session_id": "parent"}) != (
+        core.participant_key({"host": "claude-code", "session_id": normalized["session_id"]})
+    )
+
+
+def test_native_identity_ignores_forged_child_markers(tmp_path: Path) -> None:
+    """Drop envelope-supplied child markers from a main-thread Claude event.
+
+    Args:
+        tmp_path: Absolute checkout path used in the native event.
+    """
+    event = {"session_id": "s", "cwd": str(tmp_path), "child": True, "parent_session_id": "x"}
+    normalized = common.native_identity(event, "claude-code")
+    assert normalized == {"session_id": "s", "cwd": str(tmp_path)}
+
+
+def test_native_identity_keeps_rejecting_cursor_agent_id(tmp_path: Path) -> None:
+    """Keep Cursor's identity grammar unchanged when an agent_id appears.
+
+    Args:
+        tmp_path: Absolute checkout path used as the single workspace root.
+    """
+    event = {
+        "conversation_id": "c",
+        "workspace_roots": [str(tmp_path)],
+        "agent_id": "agent-1",
+    }
+    # Only the Claude adapter has a supported child route.
+    with pytest.raises(core.WorkspaceError) as captured:
+        common.native_identity(event, "cursor")
+    assert captured.value.code == "HOST_UNSUPPORTED_CHILD_IDENTITY"
 
 
 def test_native_identity_requires_single_cursor_root(
@@ -136,6 +188,61 @@ def test_native_tool_rejects_uncorrelated_or_async_work(
     # Unsupported provider, child, unknown, async, and uncorrelated calls all fail admission.
     with pytest.raises(core.WorkspaceError) as captured:
         common.native_tool(event, "cursor")
+    assert captured.value.code == code
+
+
+def test_native_tool_admits_claude_parent_foreground_agent() -> None:
+    """Admit a Claude parent's foreground, non-isolated Agent call as ordinary work."""
+    args = {"description": "d", "prompt": "p", "subagent_type": "general-purpose"}
+    assert common.native_tool(native_event("Agent", args), "claude-code") == "Agent"
+    explicit = {**args, "run_in_background": False}
+    assert common.native_tool(native_event("Agent", explicit), "claude-code") == "Agent"
+
+
+@pytest.mark.parametrize(
+    ("event", "host", "code"),
+    [
+        (
+            native_event("Agent", {"run_in_background": True}),
+            "claude-code",
+            "HOST_UNSUPPORTED_BACKGROUND",
+        ),
+        (native_event("Agent", {"async": True}), "claude-code", "HOST_UNSUPPORTED_BACKGROUND"),
+        (
+            native_event("Agent", {"isolation": "worktree"}),
+            "claude-code",
+            "HOST_UNSUPPORTED_CHILD_IDENTITY",
+        ),
+        (
+            native_event("Agent", {"isolation": "remote"}),
+            "claude-code",
+            "HOST_UNSUPPORTED_CHILD_IDENTITY",
+        ),
+        (
+            {**native_event("Agent"), "child": True},
+            "claude-code",
+            "HOST_UNSUPPORTED_CHILD_IDENTITY",
+        ),
+        (native_event("Agent"), "cursor", "HOST_UNSUPPORTED_CHILD_IDENTITY"),
+        (native_event("Task"), "claude-code", "HOST_UNSUPPORTED_CHILD_IDENTITY"),
+        (native_event("TaskOutput"), "claude-code", "HOST_UNSUPPORTED_CHILD_IDENTITY"),
+        (native_event("TaskStop"), "claude-code", "HOST_UNSUPPORTED_CHILD_IDENTITY"),
+        (native_event("SpawnAgent"), "claude-code", "HOST_UNSUPPORTED_CHILD_IDENTITY"),
+    ],
+)
+def test_native_tool_denies_unsupported_agent_routes(
+    event: dict[str, object], host: str, code: str
+) -> None:
+    """Deny background, isolated, nested, Cursor and other delegation tool calls.
+
+    Args:
+        event: Hook event supplied to the adapter under test.
+        host: Native adapter identity.
+        code: Expected boundary diagnostic.
+    """
+    # Only the foreground non-isolated Agent call from a Claude parent is admitted.
+    with pytest.raises(core.WorkspaceError) as captured:
+        common.native_tool(event, host)
     assert captured.value.code == code
 
 
@@ -392,7 +499,12 @@ def test_recovery_message_preserves_exact_diagnostic_without_task_content() -> N
         ("HOST_UNSUPPORTED_PROVIDER", "cursor", ["exact selected-ticket get_issue"]),
         ("HOST_UNSUPPORTED_TOOL", "claude-code", ["ToolSearch or Skill"]),
         ("HOST_UNSUPPORTED_TOOL", "cursor", ["Delete or foreground Shell"]),
-        ("HOST_UNSUPPORTED_CHILD_IDENTITY", "claude-code", ["cannot reuse the parent binding"]),
+        (
+            "HOST_UNSUPPORTED_CHILD_IDENTITY",
+            "claude-code",
+            ["cannot reuse the parent binding", "foreground Agent", "SubagentStart"],
+        ),
+        ("HOST_UNSUPPORTED_CHILD_IDENTITY", "cursor", ["cannot reuse the parent binding"]),
         ("BUSY", "claude-code", ["Retry the same operation once", "diagnose"]),
         ("NOT_ACKNOWLEDGED", "cursor", ["diagnose, register, resume, read and acknowledge"]),
     ],

@@ -727,8 +727,17 @@ def test_native_unsupported_provider_or_child_tool_denies(native: NativeCase, to
     case.create()
     case.ready()
     before = case.state()
+    # Claude admits a foreground Agent call (see test_claude_child_route), so its
+    # worktree-isolated form is the unsupported child launch exercised here.
+    inputs: JsonObject = (
+        {"prompt": "fixture", "isolation": "worktree"}
+        if host == "claude" and tool == "Agent"
+        else {}
+    )
     # Missing child identity must not be synthesized from the ready root session.
-    result = dispatch(host, native_event(host, case, "PreToolUse", tool_name=tool, tool_input={}))
+    result = dispatch(
+        host, native_event(host, case, "PreToolUse", tool_name=tool, tool_input=inputs)
+    )
     assert_decision(host, result, False)
     assert case.state() == before
 
