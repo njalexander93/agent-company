@@ -483,9 +483,11 @@ def test_child_provider_read_is_admitted_and_settled(case: Fixture) -> None:
     Args:
         case: Disposable repository fixture.
     """
+    # Join the child, then admit its read as pending work under the child key only.
     start_child(case)
     assert not denied(claude.handle(provider_call(case, "get_issue", "child-get")))
     assert "child-get" in case.state()["participants"][key(CHILD)]["pending"]
+    # Settle the read through the child's own PostToolUse completion.
     claude.handle(provider_call(case, "get_issue", "child-get", tool_response=[{"type": "text"}]))
     assert case.state()["participants"][key(CHILD)]["pending"] == {}
 
