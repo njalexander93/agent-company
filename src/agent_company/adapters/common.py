@@ -302,13 +302,22 @@ def _linear_tool(event: core.JSONObject, host: str) -> tuple[str, core.JSONObjec
     if host == "claude-code":
         server = event.get("mcp_server")
         name = event.get("tool_name")
-        # Ignore unrelated Claude tools before accessing provider metadata.
-        if name not in {"mcp__linear__get_issue", "mcp__linear-server__get_issue"}:
+        # Bind opaque Desktop names only through explicit, operator-verified configuration.
+        providers = {
+            "linear": {"user", "project", "plugin", "sdk"},
+            "linear-server": {"user", "project", "plugin", "sdk"},
+        }
+        connector = os.environ.get("AGENT_COMPANY_CLAUDE_LINEAR_CONNECTOR_ID", "")
+        if re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", connector):
+            providers[connector] = {"claudeai", "dynamic", "sdk"}
+        # Ignore other operations and unconfigured connectors; no UUID-wide exception.
+        if name not in {f"mcp__{provider}__get_issue" for provider in providers}:
             return None
         core.require(
             isinstance(server, dict)
-            and server.get("name") in {"linear", "linear-server"}
-            and server.get("source") in {"user", "project", "plugin", "sdk"}
+            and isinstance(server.get("name"), str)
+            and server["name"] in providers
+            and server.get("source") in providers[server["name"]]
             and name == "mcp__" + server["name"] + "__get_issue",
             "HOST_UNSUPPORTED_PROVIDER",
         )
@@ -473,6 +482,10 @@ def native_ticket_lookup(
                 raise core.WorkspaceError("PROVIDER_RESPONSE_INVALID") from error
         from agent_company.adapters import startup
 
+        # Desktop reports successful MCP content blocks directly on PostToolUse.
+        # Restore only that envelope; the shared parser still validates every block and ID.
+        if host == "claude-code" and isinstance(response, list):
+            response = {"isError": False, "content": response}
         verified = startup.ticket(response, identifier)
     # Remove only this attempt when provider validation fails.
     except core.WorkspaceError:

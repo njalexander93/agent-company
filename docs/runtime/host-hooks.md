@@ -101,7 +101,7 @@ provider envelopes are adapter details.
 | Runtime | Ticket-read routing | Completion and identity |
 | --- | --- | --- |
 | Codex | Exact `mcp__codex_apps__linear_get_issue` with `{id: ISSUE-ID}`. | `PreToolUse` and `PostToolUse` correlate the native `tool_use_id`; read `tool_response`. |
-| Claude Code | Configured `linear` or `linear-server` MCP `get_issue` with `{id: ISSUE-ID}`. | `PreToolUse` and `PostToolUse` correlate the native `tool_use_id`; read `tool_response`. MCP metadata requires Claude Code 2.1.274 or later; accepted definition scopes are `user`, `project`, `plugin` and `sdk`. |
+| Claude Code | Configured `linear` or `linear-server` MCP `get_issue`, or an explicitly mapped Desktop Linear connector, with `{id: ISSUE-ID}`. | `PreToolUse` and `PostToolUse` correlate the native `tool_use_id`; read `tool_response`. MCP metadata requires Claude Code 2.1.274 or later; named-server definition scopes are `user`, `project`, `plugin` and `sdk`. Desktop mappings require `claudeai`, `dynamic` or `sdk`. |
 | Cursor Agent | Generic `preToolUse` records `MCP:get_issue`, the exact arguments and native call ID; `beforeMCPExecution` checks the configured `linear` or `linear-server` name and official HTTPS MCP URL. | Both pre-hook validations are required. Generic `postToolUse` settles the matching native call using JSON `tool_output`. `afterMCPExecution` does not establish startup readiness. |
 
 The mappings follow the [Claude hook reference](https://code.claude.com/docs/en/hooks#pretooluse-input)
@@ -114,6 +114,46 @@ MCP-specific completion cannot settle a fresh retry. The Cursor adapter accepts
 server metadata is an unsupported provider configuration, not a missing ticket.
 After a local startup failure, Cursor retains the Task assignment and allows a
 fresh lookup with either pre-hook order.
+
+#### Claude Desktop connector mapping
+
+Local Claude Code sessions in Desktop can expose a connected Linear server as
+`mcp__<connector-uuid>__get_issue`. Verify the connector is Linear in Desktop's
+connector settings before mapping its ID. A UUID-shaped name alone does not
+identify Linear. Merge this environment setting into the ignored
+`.claude/settings.local.json`, preserving any existing settings:
+
+```json
+{
+  "env": {
+    "AGENT_COMPANY_CLAUDE_LINEAR_CONNECTOR_ID": "<verified-linear-connector-uuid>"
+  }
+}
+```
+
+Use the exact lowercase UUID from that connector's settings URL. Reload the
+Claude Code session so the hook process receives the environment setting.
+This is local routing configuration, not an OAuth credential or a grant of
+Claude permissions. Never populate it from a tool argument or accept arbitrary
+UUIDs as Linear. Missing or malformed mappings leave opaque connectors blocked.
+
+The tool name and native `mcp_server.name` must match that configured ID, and
+`mcp_server.source` must be `claudeai`, `dynamic` or `sdk`. Desktop 2.1.293
+was observed reporting `sdk` for its Linear connector; the other two are
+documented remote configuration sources in [Anthropic's provenance contract](https://code.claude.com/docs/en/agent-sdk/typescript#mcpserverprovenance).
+Missing or other provenance remains unsupported. The exact-ticket argument,
+native call correlation, provider response validation and startup readiness
+checks still apply. Other tools, including `ToolSearch`, gain no blanket
+exception. This does not add support for cloud/Cowork workspaces.
+
+For a successful Claude `PostToolUse`, Desktop can supply `tool_response` as a
+content-block list. The adapter restores its success envelope before invoking
+the shared parser; it still requires exactly one text block containing the
+requested issue and a canonical immutable UUID. Failed native calls retain the
+separate `PostToolUseFailure` path. On 2026-10-09, the local Desktop 2.1.293
+AGENT-2 session exercised both callbacks with `sdk` provenance and this list
+shape, ending in `TASK_WORKSPACE_READY`. This establishes that observed local
+path, not cloud/Cowork support or another platform's installed-host coverage.
 
 The provider parser accepts two explicit input contracts: the observed Codex
 connector `CallToolResult` containing one JSON-text issue with shorthand `id` and
