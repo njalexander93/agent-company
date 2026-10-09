@@ -370,6 +370,8 @@ LINEAR_PROVIDER_OPERATIONS = frozenset(
         "save_comment",
     }
 )
+# A child subagent receives only the read operations; writes stay with its parent.
+LINEAR_CHILD_OPERATIONS = LINEAR_PROVIDER_OPERATIONS - {"save_issue", "save_comment"}
 PREPARATION_FILES = ("docs/runtime/contributor-workflow.md", "AGENTS.md")
 
 
@@ -1055,7 +1057,13 @@ def native_tool(event: core.JSONObject, host: str) -> str:
     # Only the configured Claude Linear connector's allowlisted operations become
     # ordinary pending work; every other provider route stays unsupported.
     if tool.startswith(("mcp__", "MCP:")) or event.get("mcp_server") is not None:
-        core.require(_linear_provider_tool(event, host) is not None, "HOST_UNSUPPORTED_PROVIDER")
+        operation = _linear_provider_tool(event, host)
+        core.require(operation is not None, "HOST_UNSUPPORTED_PROVIDER")
+        # A child subagent gets no provider writes; issue delivery stays with the parent.
+        core.require(
+            event.get("child") is not True or operation in LINEAR_CHILD_OPERATIONS,
+            "HOST_UNSUPPORTED_PROVIDER",
+        )
         return tool
     # Child and delegation tools require their own verified identity. Only a Claude
     # parent's foreground Agent call has one: SubagentStart joins its child.
@@ -1436,16 +1444,59 @@ def _recovery_route(code: str, host: str) -> str:
             "then read that ticket with the configured Linear get_issue call; startup "
             f"registers or resumes the workspace. A pre-registration diagnose uses {command}."
         )
+    # A current packet whose acknowledgment is missing or outdated needs a new cycle.
+    if code == "NOT_READY":
+        return (
+            "Acknowledgment is missing or outdated for the current packet (for example after "
+            "your own committed roadmap update): run read, then acknowledge the returned "
+            f"packet_digest, then ready, using {command}."
+        )
     # Coordinators and readers refresh a stale packet through different owners.
     if code == "SOURCE_STALE":
         return (
-            "A required packet source changed after acknowledgment. Coordinator: after your "
-            "own committed roadmap update, run read, then acknowledge the returned digest "
-            f"and ready, using {command}; for another changed source, submit "
+            "A required packet source changed after acknowledgment. Coordinator: submit "
             "`Task: <issue-id>` again and repeat the exact get_issue read so startup "
             "re-scopes your packet. Reader: ask the coordinator to refresh your packet with "
             "scope, or resubmit the Task line and exact get_issue read to refresh a "
-            "roadmap-only packet; then read, acknowledge and ready."
+            f"roadmap-only packet; then read, acknowledge and ready, using {command}."
+        )
+    # Background or asynchronous work must be re-issued in the foreground.
+    if code in {"HOST_UNSUPPORTED_BACKGROUND", "HOST_UNSUPPORTED_ASYNC"}:
+        return (
+            "No lifecycle operation changes this outcome. Re-issue the call in the "
+            "foreground, without background execution or isolation, so its completion can "
+            "be correlated."
+        )
+    # A stale revision is resolved by rereading and reapplying the change.
+    if code == "REVISION_CONFLICT":
+        return (
+            "The issue revision changed. Read the current revision and file digest, reapply "
+            f"the change and retry with the new expected_revision, using {command}."
+        )
+    # A session bound to another issue keeps that binding until an explicit rebind.
+    if code == "BINDING_CONFLICT":
+        return (
+            "This session is bound to another issue or call. Continue the bound issue, or "
+            "run an explicit rebind to a target that already assigns this session, using "
+            f"{command}."
+        )
+    # Lifecycle requests must name the registered checkout.
+    if code == "REPOSITORY_MISMATCH":
+        return (
+            "The request names another repository or worktree. Retry from the registered "
+            "checkout or one of its registered worktrees."
+        )
+    # A rejected ticket response needs a fresh exact read.
+    if code in {"PROVIDER_RESPONSE_INVALID", "ISSUE_MISMATCH"}:
+        return (
+            "The ticket response did not verify. Repeat the exact selected-ticket get_issue "
+            "call under a new native tool call; no workspace was created from this response."
+        )
+    # Ownership and scope come only from the coordinator.
+    if code in {"NOT_OWNER", "SCOPE_MISSING"}:
+        return (
+            "This participant does not own the path or lacks an assignment. Ask the "
+            "coordinator to scope the path or participant, then read, acknowledge and ready."
         )
     # Provider admission is fixed by host, readiness and the configured connector.
     if code == "HOST_UNSUPPORTED_PROVIDER":

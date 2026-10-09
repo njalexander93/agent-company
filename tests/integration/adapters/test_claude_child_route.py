@@ -158,7 +158,9 @@ def child_request(case: Fixture, operation: str, **fields: JsonValue) -> JsonObj
     Returns:
         A request carrying the child's session and recorded binding generation.
     """
+    # Read the child's current binding generation from committed issue state.
     generation = case.state()["participants"][key(CHILD)]["generation"]
+    # Build the request under the child's own session and recorded generation.
     return {
         "schema_version": 1,
         "operation": operation,
@@ -449,6 +451,66 @@ def test_child_bash_bootstrap_limits_and_core_authority(case: Fixture) -> None:
     assert not refused["ok"]
     assert refused["code"] == "NOT_OWNER"
     assert case.state()["coordinator"] == case.base["coordinator"]
+
+
+def provider_call(case: Fixture, operation: str, tool_id: str, **fields: JsonValue) -> JsonObject:
+    """Build a child call to the configured named Linear server.
+
+    Args:
+        case: Disposable repository fixture.
+        operation: Linear connector operation name.
+        tool_id: Native tool-use ID.
+        **fields: Extra event fields such as tool_response.
+
+    Returns:
+        A child MCP tool event with the configured server provenance.
+    """
+    return event(
+        case,
+        "PreToolUse" if "tool_response" not in fields else "PostToolUse",
+        child=True,
+        tool_name="mcp__linear-server__" + operation,
+        tool_use_id=tool_id,
+        tool_input={"id": "TEST-1"},
+        mcp_server={"name": "linear-server", "source": "user"},
+        **fields,
+    )
+
+
+def test_child_provider_read_is_admitted_and_settled(case: Fixture) -> None:
+    """Admit a ready child's Linear read as its own pending work.
+
+    Args:
+        case: Disposable repository fixture.
+    """
+    start_child(case)
+    assert not denied(claude.handle(provider_call(case, "get_issue", "child-get")))
+    assert "child-get" in case.state()["participants"][key(CHILD)]["pending"]
+    claude.handle(provider_call(case, "get_issue", "child-get", tool_response=[{"type": "text"}]))
+    assert case.state()["participants"][key(CHILD)]["pending"] == {}
+
+
+@pytest.mark.parametrize("operation", ["save_issue", "save_comment"])
+def test_child_provider_writes_are_denied(case: Fixture, operation: str) -> None:
+    """Deny Linear writes from a ready child while its parent keeps them.
+
+    Args:
+        case: Disposable repository fixture.
+        operation: Linear write operation the child attempts.
+    """
+    # The ready child's write is denied without recording pending work.
+    start_child(case)
+    before = copy.deepcopy(case.state())
+    response = claude.handle(provider_call(case, operation, "child-write"))
+    assert denied(response)
+    reason = response["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "HOST_UNSUPPORTED_PROVIDER" in reason
+    assert case.state() == before
+    # The same write from the ready parent remains admitted as pending work.
+    parent = provider_call(case, operation, "parent-write")
+    del parent["agent_id"], parent["agent_type"]
+    assert not denied(claude.handle(parent))
+    assert "parent-write" in case.state()["participants"][case.base["coordinator"]]["pending"]
 
 
 def test_cursor_subagent_start_is_unchanged(case: Fixture) -> None:

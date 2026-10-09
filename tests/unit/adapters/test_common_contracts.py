@@ -489,8 +489,27 @@ def test_recovery_message_preserves_exact_diagnostic_without_task_content() -> N
         (
             "SOURCE_STALE",
             "claude-code",
-            ["Coordinator:", "run read, then acknowledge", "Reader:", "scope"],
+            ["Coordinator:", "`Task: <issue-id>` again", "Reader:", "scope"],
         ),
+        *[
+            ("NOT_READY", host, ["run read, then acknowledge", "packet_digest", "then ready"])
+            for host in ("claude-code", "cursor")
+        ],
+        *[
+            (code, host, fragments)
+            for code, fragments in (
+                ("HOST_UNSUPPORTED_BACKGROUND", ["Re-issue the call in the foreground"]),
+                ("HOST_UNSUPPORTED_ASYNC", ["Re-issue the call in the foreground"]),
+                ("REVISION_CONFLICT", ["Read the current revision", "reapply"]),
+                ("BINDING_CONFLICT", ["Continue the bound issue", "rebind"]),
+                ("REPOSITORY_MISMATCH", ["registered checkout"]),
+                ("PROVIDER_RESPONSE_INVALID", ["exact selected-ticket get_issue", "new native"]),
+                ("ISSUE_MISMATCH", ["exact selected-ticket get_issue", "new native"]),
+                ("NOT_OWNER", ["coordinator to scope"]),
+                ("SCOPE_MISSING", ["coordinator to scope"]),
+            )
+            for host in ("claude-code", "cursor")
+        ],
         (
             "HOST_UNSUPPORTED_PROVIDER",
             "claude-code",
@@ -531,6 +550,8 @@ def test_recovery_names_the_admitted_next_operation_per_code(
     if host == "cursor":
         assert "ToolSearch" not in message
         assert "save_comment" not in message
+        assert "Agent" not in message
+        assert "Skill" not in message
 
 
 def test_native_post_does_not_settle_cursor_without_output(

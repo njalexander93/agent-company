@@ -159,7 +159,9 @@ checks still apply. Before that read, `ToolSearch` has only a narrow
 preparation exception: a `select:` query naming nothing but configured
 `get_issue` tools (`mcp__linear__get_issue`, `mcp__linear-server__get_issue` or
 the mapped connector's), or a keyword query of at most 128 letters, digits,
-spaces, `_`, `+` or `-` that contains `get_issue`. A `Read` or `Bash` call
+spaces, `_`, `+` or `-` that contains `get_issue`. Either form allows only
+`query` and an integer `max_results` from 1 to 20, and the whole query is at
+most 256 characters. A `Read` or `Bash` call
 qualifies only when it names exactly `<checkout>/docs/runtime/contributor-workflow.md`
 or `<checkout>/AGENTS.md`; the comparison is lexical, no path entry may be a
 symbolic link or junction, and `Bash` must split to exactly `cat` plus that
@@ -269,7 +271,7 @@ These rules are implemented in `adapters/common.py`, `adapters/claude.py`, and `
 | --- | --- | --- |
 | Identity | Exact native session ID. A hook carrying `agent_id` with a valid `session_id` is a subagent keyed `<session_id>/agent/<agent_id>`; `subagent_id`, `parent_conversation_id`, background markers and `agent_id` without `session_id` are rejected | Exact conversation ID; require any session ID to match; one workspace root |
 | Ordinary tools | Read, Write, Edit, Glob, Grep, NotebookEdit; foreground Bash under the setting above. `ToolSearch` and `Skill` are readiness-checked no-effect operations with no pending entry; a tool they surface is evaluated on its own call | Read, Write, Edit, Grep, Delete; Shell with supported foreground arguments |
-| Linear provider after readiness | Configured connector only (same server name and `mcp_server.source` checks as the ticket read): `get_issue` (any ID), `get_user`, `list_users`, `list_issue_statuses`, `list_comments`, `save_issue`, `save_comment`. Each call is pending work under its native `tool_use_id`, settled by `PostToolUse` (any non-null `tool_response`, including Desktop's content-block list) or `PostToolUseFailure` | No native provider admission; `MCP:` tools are denied |
+| Linear provider after readiness | Configured connector only (same server name and `mcp_server.source` checks as the ticket read): `get_issue` (any ID), `get_user`, `list_users`, `list_issue_statuses`, `list_comments`, `save_issue`, `save_comment` (a subagent child gets the read operations only). Each call is pending work under its native `tool_use_id`, settled by `PostToolUse` (any non-null `tool_response`, including Desktop's content-block list) or `PostToolUseFailure` | No native provider admission; `MCP:` tools are denied |
 | Ticket-first startup | Exact configured Linear issue read before readiness; matching native completion runs shared startup | Exact Linear issue read with generic call-ID and MCP server checks before shared startup |
 | Admission | Deny on failed readiness outside the ticket-read/recovery exceptions; otherwise preserve native permission decisions | Allow only the particular validated ticket-read, recovery or ordinary tool call |
 | File-tool completion | Supported success/failure event and required payload settle the observed call | Same; native failure type is checked |
@@ -292,6 +294,9 @@ assignment for its bootstrap gate. Its `additionalContext` contains fixed text w
 child's participant key and packet digest only. Otherwise it returns a non-blocking
 `systemMessage`, because `SubagentStart` cannot block; the unbound child's first tool
 is then denied. Child tool calls are admitted and settled under the child session.
+A child gets only the Linear read operations (`get_issue`, `get_user`, `list_users`,
+`list_issue_statuses`, `list_comments`); its `save_issue` and `save_comment` are denied
+with `HOST_UNSUPPORTED_PROVIDER`, so provider writes stay with the parent.
 Before readiness the child's lifecycle bootstrap admits only the recovery shapes
 (`read`, `acknowledge`, `resume` and the like), never `scope` or `create`; the core
 refuses a child `scope` (`NOT_OWNER`). The coordinator may `scope` the child's key with

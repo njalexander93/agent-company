@@ -64,13 +64,23 @@ substitutions and unrelated commands are not bootstrap exceptions.
 An adapter denial starts with `TASK_WORKSPACE_NOT_READY: <code>` and names the
 admitted next operation for that code. `TICKET_READ_REQUIRED` names the exact
 ticket read and, on Claude Code, the preparation reads. `BINDING_MISSING` names
-the `Task:` line and ticket read. `SOURCE_STALE` gives the coordinator route
-(`read`, `acknowledge`, `ready`, or a repeated Task line and ticket read) and the
-reader route (coordinator `scope` or a repeated Task line and ticket read).
-`HOST_UNSUPPORTED_PROVIDER`, `HOST_UNSUPPORTED_TOOL` and
-`HOST_UNSUPPORTED_CHILD_IDENTITY` state that no lifecycle operation changes the
-outcome and name the admitted alternative. `BUSY` asks for one retry, then
-`diagnose`. Other codes keep the general bootstrap route.
+the `Task:` line and ticket read. `NOT_READY`, which a coordinator sees after
+its own committed roadmap update, names `read`, `acknowledge` with the returned
+`packet_digest`, then `ready`. `SOURCE_STALE` gives the coordinator route (a
+repeated Task line and ticket read) and the reader route (coordinator `scope` or
+a repeated Task line and ticket read). `HOST_UNSUPPORTED_PROVIDER`,
+`HOST_UNSUPPORTED_TOOL` and `HOST_UNSUPPORTED_CHILD_IDENTITY` state that no
+lifecycle operation changes the outcome and name the admitted alternative.
+`HOST_UNSUPPORTED_BACKGROUND` and `HOST_UNSUPPORTED_ASYNC` ask for a foreground,
+non-isolated re-issue. `REVISION_CONFLICT` asks for a reread and reapply.
+`BINDING_CONFLICT` names the bound issue or an explicit `rebind` to a target
+that already assigns the session. `REPOSITORY_MISMATCH` names the registered
+checkout or worktree. `PROVIDER_RESPONSE_INVALID` and `ISSUE_MISMATCH` ask for
+the exact selected-ticket `get_issue` under a new native call. `NOT_OWNER` and
+`SCOPE_MISSING` ask the coordinator to `scope` the path or participant. `BUSY`
+asks for one retry, then `diagnose`. Every remaining code uses the general
+bootstrap route (`diagnose`, `register`, `resume`, `read`, `acknowledge`); this
+is an explicit boundary, not a per-code route.
 
 ```python
 from agent_company.adapters.common import bootstrap_command
