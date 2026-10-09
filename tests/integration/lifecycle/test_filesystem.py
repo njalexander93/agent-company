@@ -167,11 +167,11 @@ def test_windows_case_alias_and_pinned_ancestor(tmp_path: Path) -> None:
             pinned.write("note.md", b"safe")
             with pytest.raises(core.WorkspaceError, match="UNSAFE_PATH"):
                 pinned.write("NOTE.md", b"bad")
-            with pytest.raises(OSError):
+            with pytest.raises(OSError):  # noqa: PT011 - Windows denial varies; released rename below must succeed.
                 (root / "pinned").rename(root / "moved")
             with pinned.child("nested", True) as nested:
                 nested.write("inside.md", b"contained")
-                with pytest.raises(OSError):
+                with pytest.raises(OSError):  # noqa: PT011 - Pinned ancestor and content are checked below.
                     (root / "pinned").rename(root / "substituted")
                 assert nested.read("inside.md") == b"contained"
             assert pinned.read("note.md") == b"safe"

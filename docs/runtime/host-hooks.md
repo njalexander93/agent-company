@@ -59,9 +59,14 @@ local lifecycle integration, not proposal approval.
    definition alone is insufficient evidence of trusted execution. If trust or callback
    delivery is unverified, retain that limit; a successful manual lifecycle call does
    not demonstrate a native callback or identify a runtime defect.
-3. Submit exactly one `Task: ISSUE-ID` line. The adapter records an explicit assignment for
-   that host/session. It uses only an existing coordinator assignment or an explicitly registered
-   startup packet; it does not invent scope or infer authority from prose.
+3. Submit exactly one `Task: ISSUE-ID` line. On Codex, the prompt callback records only
+   that identifier. Its first issue tool call is the direct
+   `mcp__codex_apps__linear_get_issue({id: "ISSUE-ID"})` read. The pre-tool adapter
+   admits only that observed native tool name with the recorded identifier and a
+   matching completion callback. The provider's
+   `id` is the human identifier; its `uuid` is the immutable issue identity. The
+   adapter creates no issue workspace for a typed missing-ticket response. A new
+   Task line fences ordinary tools even when this session was previously ready.
 4. Recover with `agent_company.adapters.common.bootstrap_command(request, host)`
    from the intended worktree's Poetry environment. On POSIX and Claude's Bash
    tool it emits the exact `shlex.join` lifecycle invocation. Native Windows
@@ -71,15 +76,43 @@ local lifecycle integration, not proposal approval.
    same lifecycle implementation and checks. Include the adapter's host value and
    actual session identity. Claude uses `session_id`; Cursor uses
    `conversation_id` as lifecycle `session_id`.
-5. Register the selected checkout if needed; attach or resume existing issue state.
-   The master establishes explicit coordination and installs reader-specific packets.
-   Assigned steps attach with their verified actual host/session identity and own scope.
-   Follow [explicit lifecycle setup](task-workspace-usage.md#explicit-setup-and-bootstrap)
-   for coordinator assignment and payload-relative note locators. Read the installed
-   packet, acknowledge its exact digest and verify `ready` before ordinary tools.
-   The recovery operation/field allowlist and assignment checks live in `adapters/common.py`.
-   Wrappers, chaining, redirection, alternate interpreters, conflicting worktrees, and
-   cross-host/session bootstrap requests receive no recovery exemption.
+5. A successful matching direct Codex issue callback invokes the startup orchestrator. It derives the
+   main worktree from Git, registers or resumes, creates a new issue with the observed
+   master as coordinator, installs an initial reader packet, reads its source bytes,
+   acknowledges the exact digest and verifies `ready`. Existing roadmap bytes,
+   coordinator and packet survive repeated starts. A coordinator's committed roadmap
+   update refreshes only that owned packet reference; out-of-band edits remain conflicts.
+   Governing files come from the selected checkout; task bytes come from the main
+   worktree's canonical issue directory. A new session without an assignment
+   joins as a roadmap-only reader; it cannot replace another coordinator or edit
+   coordinator-owned notes. Coordinator handoff still requires the recorded owner
+   and explicit transfer. Assigned steps attach with their verified actual
+   host/session identity and own scope. Follow [explicit lifecycle setup](task-workspace-usage.md#explicit-setup-and-bootstrap)
+   for recovery. The recovery operation/field allowlist and assignment checks live in
+   `adapters/common.py`. Wrappers, chaining, redirection, alternate interpreters,
+   conflicting worktrees, and cross-host/session bootstrap requests receive no exemption.
+
+The Codex path consumes the foreground connector's successful `CallToolResult` with one
+JSON text issue object containing matching `id` and `uuid`. A typed `NOT_FOUND` or
+the observed exact missing-reference envelope stops without creating an issue workspace.
+That envelope has `isError: true`, `structuredContent.error_code: INVALID_ARGUMENT`,
+and one JSON text error with `error: invalid_request`, `status: 400`, the exact
+`Could not find referenced Issue.` message, and a nonempty `requestId`. Other
+invalid arguments remain provider errors. The diagnostic says Linear could not find
+the requested identifier; it does not claim global nonexistence. Authentication,
+permission, network and invalid-response errors also leave the workspace untouched.
+Provider text is data. The adapter does
+not treat a result descriptor alone as packet delivery: it reads and hashes each
+assigned source before acknowledgment. Local protocol tests use synthetic callbacks;
+actual installed callback delivery and provider round trips require separate evidence.
+This checkout does not establish that a Linear call nested inside `functions.exec`
+emits its own native tool callbacks. If the hook sees only the outer wrapper, the
+pending Task gate denies it as `TICKET_READ_REQUIRED`; no nested argument parser or
+general wrapper exception exists. The current wrapper-only Linear surface therefore
+does not prove automatic startup. Use an observed direct callback path or retain
+the host boundary as unverified.
+Claude Code and Cursor have no verified foreground Linear issue connector path in this
+checkout. Their existing preassigned recovery route remains the supported boundary.
 
 ### Codex bootstrap tool input
 

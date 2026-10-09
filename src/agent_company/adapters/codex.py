@@ -8,7 +8,7 @@ import os
 import sys
 from pathlib import Path
 
-from agent_company.adapters import common, runner
+from agent_company.adapters import common, runner, startup
 from agent_company.lifecycle import task_workspace as core
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -207,7 +207,93 @@ def prompt(event: core.JSONObject) -> core.JSONObject:
         core.WorkspaceError: If workspace registration or setup fails.
         OSError: If assignment persistence fails.
     """
-    return common.prompt(event, "codex")
+    return common.prompt(event, "codex", attempt_attach=False)
+
+
+def startup_lookup_state(event: core.JSONObject, suffix: str) -> bool:
+    """Check whether this session has a pending explicit Task lookup marker."""
+    root, _, _ = core.repository(event["cwd"])
+    key = core.participant_key({"host": "codex", "session_id": event["session_id"]})
+    with core.Directory.absolute(root) as directory:
+        if not directory.exists(".task"):
+            return False
+        with directory.child(".task") as task:
+            if not task.exists(".bindings"):
+                return False
+            with task.child(".bindings") as bindings:
+                return bindings.exists(key + suffix)
+
+
+def ticket_lookup(event: core.JSONObject, complete: bool = False) -> core.JSONObject | None:
+    """Admit and settle the direct issue read for the exact recorded Task identity."""
+    if event.get("tool_name") != "mcp__codex_apps__linear_get_issue":
+        return None
+    root, _, _ = core.repository(event["cwd"])
+    key = core.participant_key({"host": "codex", "session_id": event["session_id"]})
+    with (
+        core.Directory.absolute(root) as directory,
+        directory.child(".task") as task,
+        task.child(".bindings") as bindings,
+        bindings.lock("assignment.lock"),
+    ):
+        assignment = bindings.json(key + ".assignment.json")
+        identifier = assignment["issue_id"]
+        core.require(bindings.json(key + ".lookup-required.json") == assignment, "BINDING_CONFLICT")
+        if event.get("tool_input") != {"id": identifier}:
+            raise core.WorkspaceError("BINDING_CONFLICT")
+        tool_id = core.token(event["tool_use_id"])
+        name = key + ".lookup.json"
+        if not complete:
+            if bindings.exists(name):
+                core.require(
+                    bindings.json(name) == {"id": identifier, "tool_id": tool_id},
+                    "BINDING_CONFLICT",
+                )
+            else:
+                bindings.put(name, {"id": identifier, "tool_id": tool_id})
+            return {}
+        core.require(bindings.exists(name), "BINDING_MISSING")
+        core.require(
+            bindings.json(name) == {"id": identifier, "tool_id": tool_id}, "BINDING_CONFLICT"
+        )
+    try:
+        response = event.get("tool_response")
+        if isinstance(response, str):
+            try:
+                response = json.loads(response)
+            except ValueError as error:
+                raise core.WorkspaceError("PROVIDER_RESPONSE_INVALID") from error
+        verified = startup.ticket(response, identifier)
+    except core.WorkspaceError:
+        with (
+            core.Directory.absolute(root) as directory,
+            directory.child(".task") as task,
+            task.child(".bindings") as bindings,
+            bindings.lock("assignment.lock"),
+        ):
+            bindings.unlink(name)
+        raise
+    ready = startup.start(event, verified)
+    with (
+        core.Directory.absolute(root) as directory,
+        directory.child(".task") as task,
+        task.child(".bindings") as bindings,
+        bindings.lock("assignment.lock"),
+    ):
+        bindings.unlink(name)
+        bindings.unlink(key + ".lookup-required.json")
+    message = (
+        "TASK_WORKSPACE_READY: Linear ticket "
+        + identifier
+        + " read; assigned source bytes verified and packet acknowledged."
+    )
+    if ready["participant_id"] != ready["coordinator"]:
+        message += (
+            " Reader scope only. Coordinator "
+            + ready["coordinator"]
+            + " retains roadmap ownership; use explicit coordinator transfer for edits."
+        )
+    return {"systemMessage": message}
 
 
 def handle(event: core.JSONObject) -> core.JSONObject:
@@ -233,6 +319,15 @@ def handle(event: core.JSONObject) -> core.JSONObject:
         return {}  # Never grant host permissions.
     # Require readiness or an exact recovery route before admitting tool work.
     if name == "PreToolUse":
+        if startup_lookup_state(event, ".lookup-required.json"):
+            if event.get("tool_name") != "mcp__codex_apps__linear_get_issue":
+                return denial("TICKET_READ_REQUIRED")
+            try:
+                ticket_lookup(event)
+                return {}
+            except (core.WorkspaceError, OSError, KeyError, TypeError) as error:
+                code = error.code if isinstance(error, core.WorkspaceError) else "RECOVERY_REQUIRED"
+                return denial(code)
         # Allow only the exact scoped bootstrap route before ordinary readiness checks.
         if bootstrap(event):
             return {}
@@ -289,6 +384,33 @@ def handle(event: core.JSONObject) -> core.JSONObject:
         return {} if result["ok"] else denial(result["code"])
     # Settle work only from typed completion facts and validated handle correlation.
     if name == "PostToolUse":
+        if event.get("tool_name") == "mcp__codex_apps__linear_get_issue" and startup_lookup_state(
+            event, ".lookup.json"
+        ):
+            try:
+                lookup_result = ticket_lookup(event, complete=True)
+                assert lookup_result is not None
+                return lookup_result
+            except (core.WorkspaceError, OSError, KeyError, TypeError) as error:
+                code = error.code if isinstance(error, core.WorkspaceError) else "RECOVERY_REQUIRED"
+                return {
+                    "systemMessage": (
+                        "TASK_WORKSPACE_NOT_READY: "
+                        + code
+                        + (
+                            " for " + str(event.get("tool_input", {}).get("id", ""))
+                            if code == "ISSUE_NOT_FOUND"
+                            else ""
+                        )
+                        + (
+                            " Linear could not find requested issue "
+                            + str(event.get("tool_input", {}).get("id", ""))
+                            + "."
+                            if code == "LINEAR_ISSUE_UNRESOLVED"
+                            else ""
+                        )
+                    )
+                }
         # Build the request from explicit caller or observed session identities.
         request = request_for(event, "tool-complete")
         response = event.get("tool_response", {})

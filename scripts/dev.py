@@ -12,6 +12,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import cast
 
 ROOT = Path(__file__).resolve().parents[1]
 COMMANDS: dict[str, list[list[str]]] = {
@@ -31,6 +32,8 @@ COMMANDS: dict[str, list[list[str]]] = {
     "test": [["poetry", "run", "pytest", "--cov", "--cov-report=term-missing"]],
     "test-unit": [["poetry", "run", "pytest", "tests/unit"]],
     "test-integration": [["poetry", "run", "pytest", "tests/integration"]],
+    "test-tooling": [["poetry", "run", "pytest", "tests/integration/tooling"]],
+    "test-tooling-unit": [["poetry", "run", "pytest", "tests/unit/tooling"]],
     "build": [["poetry", "build", "--format", "wheel"]],
 }
 TEST_TASKS = {"test", "test-unit", "test-integration"}
@@ -112,6 +115,7 @@ def identity() -> dict[str, object]:
         "machine": platform.machine(),
         "launcher_python": sys.version,
         "launcher_executable": sys.executable,
+        "config_sha256": hashlib.sha256((ROOT / "pyproject.toml").read_bytes()).hexdigest(),
         **checkout_state(),
     }
     if sys.platform == "linux":
@@ -123,13 +127,16 @@ def identity() -> dict[str, object]:
                 "run",
                 "python",
                 "-c",
-                "import json,sys; print(json.dumps({'version': sys.version,"
-                " 'executable': sys.executable}))",
+                "import importlib.metadata,json,sys; print(json.dumps({'version': sys.version,"
+                " 'executable': sys.executable, 'tool_versions': {name:"
+                " importlib.metadata.version(name) for name in"
+                " ('coverage', 'pytest', 'pytest-cov')}}))",
             ],
             cwd=ROOT,
             text=True,
         )
     )
+    result["tool_versions"] = cast(dict[str, object], result["tool_python"])["tool_versions"]
     return result
 
 
@@ -225,6 +232,20 @@ def main() -> int:
     results: list[dict[str, object]] = []
     if evidence:
         evidence.mkdir(parents=True, exist_ok=True)
+        for name in (
+            "manifest.json",
+            ".coverage",
+            "coverage.xml",
+            "coverage.json",
+            "tests.xml",
+            "pytest-evidence.json",
+            "instrumentation.json",
+            "instrumentation.log",
+        ):
+            (evidence / name).unlink(missing_ok=True)
+        for shard in evidence.glob(".coverage.*"):
+            if shard.is_file() or shard.is_symlink():
+                shard.unlink()
     environment = os.environ.copy()
     if args.platform_coverage:
         print(
@@ -236,17 +257,59 @@ def main() -> int:
         manifest["coverage_gate"] = "pending native Windows + Linux combination"
     if evidence:
         environment["COVERAGE_FILE"] = str(evidence / ".coverage")
+
+    def artifact_hashes(directory: Path) -> dict[str, str]:
+        """Hash complete artifacts after the producing command exits."""
+        return {
+            name: hashlib.sha256((directory / name).read_bytes()).hexdigest()
+            for name in {
+                ".coverage",
+                "coverage.xml",
+                "coverage.json",
+                "tests.xml",
+                "pytest-evidence.json",
+                "instrumentation.json",
+                "instrumentation.log",
+            }
+            | {cast(str, result["log"]) for result in results}
+            if (directory / name).is_file()
+        }
+
     for task in tasks:
         for number, command in enumerate(COMMANDS[task]):
             command = list(command)
+            smoke_code = 0
             if args.platform_coverage and task in TEST_TASKS:
+                assert evidence is not None
+                tool_python = manifest.get("tool_python")
+                smoke_python = (
+                    str(tool_python["executable"])
+                    if isinstance(tool_python, dict)
+                    and isinstance(tool_python.get("executable"), str)
+                    else sys.executable
+                )
+                smoke = [
+                    smoke_python,
+                    str(Path(__file__).with_name("coverage_smoke.py")),
+                    "--output",
+                    str(evidence / "instrumentation.json"),
+                ]
+                smoke_code = run_command(smoke, environment, evidence / "instrumentation.log")
+                manifest["instrumentation_exit_code"] = smoke_code
                 if task != "test":
                     command.extend(["--cov", "--cov-report=term-missing"])
                 command.append("--cov-fail-under=0")
-            if evidence and task in TEST_TASKS:
+            if task in {"test-tooling", "test-tooling-unit"}:
+                command.extend(["--cov=scripts", "--cov-report=term-missing", "--cov-fail-under=0"])
+            if evidence and task in {*TEST_TASKS, "test-tooling", "test-tooling-unit"}:
+                command.extend(["-p", "scripts.pytest_evidence", "--durations=20"])
+                environment["AGENT_COMPANY_PYTEST_EVIDENCE"] = str(
+                    evidence / "pytest-evidence.json"
+                )
                 command.append(f"--junitxml={evidence / 'tests.xml'}")
-                if task == "test" or args.platform_coverage:
+                if task in {"test", "test-tooling", "test-tooling-unit"} or args.platform_coverage:
                     command.append(f"--cov-report=xml:{evidence / 'coverage.xml'}")
+                    command.append(f"--cov-report=json:{evidence / 'coverage.json'}")
             print(" ".join(command), flush=True)
             started = time.monotonic()
             log = f"{task}-{number}.log"
@@ -267,6 +330,7 @@ def main() -> int:
                 manifest["candidate_unchanged"] = all(
                     manifest[key] == value for key, value in final.items()
                 )
+                manifest["artifacts_sha256"] = artifact_hashes(evidence)
                 (evidence / "manifest.json").write_text(
                     json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
                 )
@@ -280,6 +344,8 @@ def main() -> int:
                     return code or 1
             if code:
                 return code
+            if smoke_code:
+                return smoke_code
     return 0
 
 

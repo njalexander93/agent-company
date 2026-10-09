@@ -16,7 +16,7 @@ WORKFLOW = ROOT / ".github/workflows/pr-checks.yml"
 
 
 def test_workflow_exposes_five_checks_without_masking_failed_steps() -> None:
-    """Require explicit continuation, independent platforms and a separate coverage result.
+    """Require explicit continuation, native platforms and a named quality result.
 
     Raises:
         AssertionError: A failed check is masked or prevents a later required check.
@@ -24,7 +24,7 @@ def test_workflow_exposes_five_checks_without_masking_failed_steps() -> None:
     jobs = yaml.safe_load(WORKFLOW.read_text())["jobs"]
     assert set(jobs) == {"quality", "tests", "coverage"}
     assert jobs["quality"]["name"] == "Code Quality Check"
-    assert jobs["coverage"]["name"] == "Test Coverage Check"
+    assert jobs["coverage"]["name"] == "Test Quality Check"
     tests = jobs["tests"]
     assert tests["name"] == "${{ matrix.name }} Tests (Unit/Integration)"
     assert tests["strategy"]["fail-fast"] is False
@@ -36,6 +36,19 @@ def test_workflow_exposes_five_checks_without_masking_failed_steps() -> None:
     assert "needs" not in jobs["quality"] and "needs" not in tests
     assert jobs["coverage"]["needs"] == "tests"
     assert jobs["coverage"]["if"] == "${{ !cancelled() }}"
+    download_names = {
+        step["with"]["name"]
+        for step in jobs["coverage"]["steps"]
+        if "download-artifact" in step.get("uses", "")
+    }
+    assert download_names == {
+        "python-tests-linux",
+        "python-tests-windows",
+        "python-tests-macos",
+        "python-tooling-linux",
+        "python-tooling-windows",
+        "python-tooling-macos",
+    }
     for job in jobs.values():
         assert "continue-on-error" not in job
         for step in job["steps"]:
@@ -68,7 +81,7 @@ def test_workflow_collectors_retain_failure_and_run_later_checks(
     assert tasks == (
         ["validate-config", "format-check", "lint", "type-check"]
         if job == "quality"
-        else ["test-unit", "test-integration"]
+        else ["test-unit", "test-integration", "test-tooling-unit"]
     )
     state = {"sha": "fixture", "status": "", "tracked_digest": "bytes"}
     monkeypatch.setattr(dev, "ROOT", tmp_path)
@@ -98,7 +111,8 @@ def test_workflow_collectors_retain_failure_and_run_later_checks(
         assert (tmp_path / task).is_file()
         if job == "tests":
             command = manifest["commands"][0]["command"]
-            assert "--cov" in command and "--cov-fail-under=0" in command
+            assert "--cov" in command if task != "test-tooling-unit" else "--cov=scripts" in command
+            assert "--cov-fail-under=0" in command
             assert any(arg.startswith("--junitxml=") for arg in command)
             contexts.append((evidence / f"{task}-0.log").read_text().strip())
     assert results == [7, *([0] * (len(tasks) - 1))]

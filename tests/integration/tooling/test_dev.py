@@ -175,6 +175,44 @@ def test_local_collection_is_explicit_and_does_not_weaken_full_check(
     assert manifest["candidate_unchanged"] is True
 
 
+def test_failed_instrumentation_still_runs_suite_for_diagnostics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Retain a suite result after the independent child-only smoke fails."""
+    state = {"sha": "fixture", "status": "", "tracked_digest": "fixture"}
+    monkeypatch.setattr(dev, "ROOT", tmp_path)
+    monkeypatch.setattr(dev, "identity", lambda: dict(state))
+    monkeypatch.setattr(dev, "checkout_state", lambda: dict(state))
+    monkeypatch.setattr(
+        dev,
+        "COMMANDS",
+        {"test-unit": [[sys.executable, "-c", "print('suite executed')"]]},
+    )
+    real_run = dev.run_command
+
+    def smoke_fails(
+        command: list[str], environment: dict[str, str], log: Path | None = None
+    ) -> int:
+        if "coverage_smoke.py" in " ".join(command):
+            assert log is not None
+            log.write_text("smoke failed\n")
+            return 1
+        return real_run(command, environment, log)
+
+    monkeypatch.setattr(dev, "run_command", smoke_fails)
+    evidence = tmp_path / "unit"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["dev.py", "test-unit", "--platform-coverage", "--evidence-dir", str(evidence)],
+    )
+    assert dev.main() == 1
+    manifest = json.loads((evidence / "manifest.json").read_text())
+    assert manifest["instrumentation_exit_code"] == 1
+    assert manifest["commands"][0]["exit_code"] == 0
+    assert "suite executed" in (evidence / "test-unit-0.log").read_text()
+
+
 def test_command_stream_retains_partial_output_before_child_exit(tmp_path: Path) -> None:
     """Flush unterminated progress output while the actual child process is still running.
 

@@ -90,6 +90,9 @@ jobs:
       - name: Integration tests
         if: ${{ !cancelled() }}
         run: poetry run python scripts/dev.py test-integration --platform-coverage --evidence-dir "$RUNNER_TEMP/python-tests/integration"
+      - name: Tooling unit tests
+        if: ${{ !cancelled() }}
+        run: poetry run python scripts/dev.py test-tooling-unit --evidence-dir "$RUNNER_TEMP/python-tooling-unit"
       # Stable names belong to this run. Partial reruns replace only their own
       # platform's unit and integration evidence; previous attempt logs remain.
       - name: Retain native test evidence
@@ -102,9 +105,19 @@ jobs:
           if-no-files-found: error
           overwrite: true
           retention-days: 14
+      - name: Retain tooling unit evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: python-tooling-${{ matrix.artifact }}
+          path: ${{ runner.temp }}/python-tooling-unit
+          include-hidden-files: true
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 14
 
   coverage:
-    name: Test Coverage Check
+    name: Test Quality Check
     if: ${{ !cancelled() }}
     needs: tests
     runs-on: ubuntu-24.04
@@ -113,6 +126,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version-file: .python-version
@@ -134,15 +148,41 @@ jobs:
         with:
           name: python-tests-windows
           path: ${{ runner.temp }}/python-coverage-inputs/Windows
-      - name: Enforce complete suites and configured coverage floor
+      - name: Download macOS suite coverage
         if: ${{ !cancelled() }}
-        run: poetry run python scripts/combine_coverage.py "$RUNNER_TEMP/python-coverage-inputs" --output-dir "$RUNNER_TEMP/python-coverage-combined"
-      - name: Retain combined coverage evidence
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: python-tests-macos
+          path: ${{ runner.temp }}/python-coverage-inputs/Darwin
+      - name: Download Linux tooling unit evidence
+        if: ${{ !cancelled() }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: python-tooling-linux
+          path: ${{ runner.temp }}/python-tooling-inputs/Linux/tooling-unit
+      - name: Download Windows tooling unit evidence
+        if: ${{ !cancelled() }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: python-tooling-windows
+          path: ${{ runner.temp }}/python-tooling-inputs/Windows/tooling-unit
+      - name: Download macOS tooling unit evidence
+        if: ${{ !cancelled() }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: python-tooling-macos
+          path: ${{ runner.temp }}/python-tooling-inputs/Darwin/tooling-unit
+      - name: Enforce named test quality controls
+        if: ${{ !cancelled() }}
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: poetry run python scripts/test_quality.py "$RUNNER_TEMP/python-coverage-inputs" --tooling-dir "$RUNNER_TEMP/python-tooling-inputs" --output-dir "$RUNNER_TEMP/python-test-quality" --base "$PR_BASE"
+      - name: Retain test quality evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: python-combined-coverage
-          path: ${{ runner.temp }}/python-coverage-combined
+          name: python-test-quality
+          path: ${{ runner.temp }}/python-test-quality
           include-hidden-files: true
           if-no-files-found: error
           overwrite: true
@@ -155,7 +195,7 @@ jobs:
           TESTED_SHA: ${{ github.sha }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
           TEST_RESULT: ${{ needs.tests.result }}
-          COVERAGE_RESULT: ${{ job.status }}
+          QUALITY_RESULT: ${{ job.status }}
         run: |
           {
             printf '| Identity | Value |\n| --- | --- |\n'
@@ -164,5 +204,5 @@ jobs:
             printf '| Tested merge commit | `%s` |\n' "$TESTED_SHA"
             printf '| Run attempt | `%s` |\n' "$RUN_ATTEMPT"
             printf '| Native tests | %s |\n' "$TEST_RESULT"
-            printf '| Coverage | %s |\n' "$COVERAGE_RESULT"
+            printf '| Test quality | %s |\n' "$QUALITY_RESULT"
           } >> "$GITHUB_STEP_SUMMARY"

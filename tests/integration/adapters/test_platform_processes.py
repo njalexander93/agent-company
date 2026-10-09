@@ -142,6 +142,37 @@ def test_supervisor_reaps_worker_and_preserves_failure_contract(
         assert "BINDING_CONFLICT" in result.stdout
 
 
+def test_supervisor_rejects_oversized_worker_output(tmp_path: Path) -> None:
+    """The real worker transport bounds a handler response before host publication."""
+    source = tmp_path / "src"
+    shutil.copytree(ROOT / "src", source, ignore=shutil.ignore_patterns("__pycache__"))
+    adapter = source / "agent_company/adapters/codex.py"
+    original = adapter.read_text(encoding="utf-8")
+    marker = '\nif __name__ == "__main__":'
+    assert marker in original
+    adapter.write_text(
+        original.replace(
+            marker,
+            '\ndef handle(event):\n    return {"oversized": "x" * (1024 * 1024)}\n' + marker,
+        ),
+        encoding="utf-8",
+    )
+    environment = {**os.environ, "PYTHONPATH": str(source)}
+    result = subprocess.run(
+        [sys.executable, str(adapter)],
+        input=json.dumps({"hook_event_name": "PreToolUse"}),
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=6,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    response = json.loads(result.stdout)
+    assert response["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "SIZE_LIMIT" in response["hookSpecificOutput"]["permissionDecisionReason"]
+    assert len(result.stdout) < 2048
+
+
 @pytest.mark.skipif(
     os.name != "nt", reason="Native Windows PowerShell transport; POSIX has shell tests"
 )

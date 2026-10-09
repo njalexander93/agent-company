@@ -1,0 +1,640 @@
+"""Verify native adapter recovery and observation boundaries."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from agent_company.adapters import common
+from agent_company.lifecycle import task_workspace as core
+
+pytestmark = pytest.mark.unit
+
+
+def event() -> dict[str, Any]:
+    """Supply one identity-validated native hook event."""
+    return {
+        "session_id": "session",
+        "cwd": "/checkout",
+        "tool_use_id": "tool-1",
+        "tool_name": "Shell",
+        "tool_input": {"command": "echo ok"},
+    }
+
+
+def test_native_bootstrap_rejects_non_shell_or_extra_args_before_parser(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only the documented shell input can reach canonical bootstrap parsing."""
+    monkeypatch.setattr(common, "canonical_bootstrap", lambda *_args: pytest.fail("parsed"))
+    assert common.native_bootstrap({**event(), "tool_name": "Read"}, "cursor") is False
+    assert (
+        common.native_bootstrap(
+            {**event(), "tool_input": {"command": "echo ok", "async": True}}, "cursor"
+        )
+        is False
+    )
+
+
+def test_native_bootstrap_rejects_foreign_working_directory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reject a native directory override outside the observed repository."""
+    monkeypatch.setattr(common.core, "repository", lambda path: (Path(path), None, []))
+    monkeypatch.setattr(common, "canonical_bootstrap", lambda *_args: pytest.fail("parsed"))
+    altered = {**event(), "tool_input": {"command": "echo ok", "working_directory": "/other"}}
+    assert common.native_bootstrap(altered, "cursor") is False
+
+
+def test_native_bootstrap_passes_exact_shell_command_to_shared_parser(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pass one eligible native command and the readiness state unchanged."""
+    observed: list[tuple[object, ...]] = []
+
+    def canonical(native: dict[str, Any], command: object, host: str, ready: bool) -> bool:
+        """Capture the precise canonical parser inputs."""
+        observed.append((native, command, host, ready))
+        return True
+
+    monkeypatch.setattr(common, "canonical_bootstrap", canonical)
+    native = event()
+    assert common.native_bootstrap(native, "cursor", ready=True) is True
+    assert observed == [(native, "echo ok", "cursor", True)]
+
+
+def test_native_bootstrap_rejects_background_and_repository_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unproven background shell or failed root check cannot become bootstrap."""
+    monkeypatch.setattr(common, "canonical_bootstrap", lambda *_args: pytest.fail("parsed"))
+    claude = {
+        **event(),
+        "tool_name": "Bash",
+        "tool_input": {"command": "echo ok", "run_in_background": True},
+    }
+    assert common.native_bootstrap(claude, "claude-code") is False
+    monkeypatch.setattr(
+        common.core,
+        "repository",
+        lambda _path: (_ for _ in ()).throw(core.WorkspaceError("UNSAFE_PATH")),
+    )
+    cursor = {**event(), "tool_input": {"command": "echo ok", "working_directory": "/checkout"}}
+    assert common.native_bootstrap(cursor, "cursor") is False
+
+
+def test_native_context_reports_readiness_or_bounded_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Report core readiness without granting tool permission or losing diagnostics."""
+    monkeypatch.setattr(
+        common, "request_for", lambda _event, operation, _host: {"operation": operation}
+    )
+    calls: list[dict[str, Any]] = []
+
+    def execute(request: dict[str, Any]) -> dict[str, Any]:
+        """Record a readiness query and return a validated success."""
+        calls.append(request)
+        return {"ok": True, "code": "READY"}
+
+    monkeypatch.setattr(common.core, "execute", execute)
+    assert "Read the assigned packet" in common.native_context(event(), "cursor")
+    assert calls == [{"operation": "ready"}]
+    monkeypatch.setattr(
+        common,
+        "request_for",
+        lambda *_args: (_ for _ in ()).throw(core.WorkspaceError("BINDING_MISSING")),
+    )
+    assert "TASK_WORKSPACE_NOT_READY: BINDING_MISSING" in common.native_context(event(), "cursor")
+
+
+def test_native_observe_emits_advisory_event_and_swallows_missing_binding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Never convert an advisory ending into completion or a hard hook failure."""
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        common, "request_for", lambda _event, operation, _host: {"operation": operation}
+    )
+    monkeypatch.setattr(common.core, "execute", lambda request: calls.append(request))
+    assert common.native_observe(event(), "cursor") is None
+    assert calls == [
+        {"operation": "event", "event_type": "observation", "event": {"code": "UNKNOWN"}}
+    ]
+    monkeypatch.setattr(
+        common, "request_for", lambda *_args: (_ for _ in ()).throw(OSError("unavailable"))
+    )
+    assert common.native_observe(event(), "cursor") is None
+    assert len(calls) == 1
+
+
+def test_run_native_delegates_bounded_hook_supervision(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Preserve the provided handler and failure renderer at the runner boundary."""
+
+    def handler(_event: object) -> dict[str, object]:
+        """Return an empty modeled native hook response."""
+        return {}
+
+    def failure(_code: str, _action: str) -> dict[str, object]:
+        """Return an empty modeled failure response."""
+        return {}
+
+    observed: list[tuple[object, object]] = []
+
+    def run(actual_handler: object, actual_failure: object) -> int:
+        """Capture the runner entry point arguments."""
+        observed.append((actual_handler, actual_failure))
+        return 2
+
+    monkeypatch.setattr(common.runner, "run", run)
+    assert common.run_native(handler, failure) == 2
+    assert observed == [(handler, failure)]
+
+
+def test_automatic_attach_uses_only_persisted_startup_assignment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Create and scope only the exact coordinator-owned startup packet."""
+    native = {"cwd": "/checkout", "session_id": "session"}
+    key = core.participant_key({"host": "codex", "session_id": "session"})
+    packet = [{"reader": key, "id": "roadmap"}]
+    setup = {"issue_id": "AGENT-30", "issue_uuid": "uuid", "coordinator": key, "packet": packet}
+    calls: list[dict[str, Any]] = []
+
+    class Bindings:
+        """Expose the one explicit startup document for the session."""
+
+        def exists(self, name: str) -> bool:
+            """Require the session-keyed startup filename."""
+            assert name == key + ".startup.json"
+            return True
+
+        def json(self, _name: str) -> dict[str, Any]:
+            """Return the recorded setup rather than prompt-derived content."""
+            return setup
+
+    class Store:
+        """Supply no existing participant binding for this fresh session."""
+
+        bindings = Bindings()
+
+        def __init__(self, _request: dict[str, Any]) -> None:
+            """Accept the diagnosed registered repository."""
+
+        def __enter__(self) -> Store:
+            """Expose the modeled store handle."""
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            """Release the modeled store handle."""
+
+        def binding(self) -> None:
+            """Keep the session unbound until creation succeeds."""
+            return None
+
+    def execute(request: dict[str, Any]) -> dict[str, Any]:
+        """Capture ordered diagnosis, creation, revision, and scope calls."""
+        calls.append(request)
+        operation = request["operation"]
+        if operation == "diagnose":
+            return {"ok": True, "code": "REGISTERED", "repo_id": "repo", "revision": 4}
+        if operation == "create":
+            return {"ok": True, "code": "CREATED", "binding_generation": 1}
+        if operation == "scope":
+            return {"ok": True, "code": "SCOPED"}
+        pytest.fail(f"unexpected operation {operation}")
+
+    monkeypatch.setattr(common.core, "Store", Store)
+    monkeypatch.setattr(common.core, "execute", execute)
+    assert common.automatic_attach(native, "AGENT-30", "codex") is None
+    assert [item["operation"] for item in calls] == ["diagnose", "create", "diagnose", "scope"]
+    assert calls[-1]["target_participant"] == key
+    assert calls[-1]["packet"] == packet
+    assert calls[-1]["expected_revision"] == 4
+
+
+def test_native_pre_stops_on_failed_readiness_without_tool_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Preserve the exact core diagnostic and do not admit external work."""
+    calls: list[str] = []
+    monkeypatch.setattr(common, "native_bootstrap", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        common, "request_for", lambda _event, operation, _host: {"operation": operation}
+    )
+
+    def execute(request: dict[str, Any]) -> dict[str, Any]:
+        """Reject readiness and record any forbidden later dispatch."""
+        calls.append(request["operation"])
+        return {"ok": False, "code": "SOURCE_STALE"}
+
+    monkeypatch.setattr(common.core, "execute", execute)
+    native = {**event(), "tool_name": "Read", "tool_input": {}}
+    with pytest.raises(core.WorkspaceError) as captured:
+        common.native_pre(native, "cursor")
+    assert captured.value.code == "SOURCE_STALE"
+    assert calls == ["ready"]
+
+
+def test_native_post_rejects_cursor_failure_without_documented_type(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep an untyped failure from settling a pending native tool."""
+    monkeypatch.setattr(common, "native_bootstrap", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(common, "request_for", lambda *_args: pytest.fail("read binding"))
+    native = {
+        **event(),
+        "tool_name": "Read",
+        "tool_input": {},
+        "error_message": "failed",
+        "failure_type": "unknown",
+    }
+    with pytest.raises(core.WorkspaceError) as captured:
+        common.native_post(native, "cursor", failed=True)
+    assert captured.value.code == "INVALID_REQUEST"
+
+
+def test_native_post_rejects_async_cursor_shell_output_without_settlement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Require a typed completed exit code and no background metadata."""
+    monkeypatch.setattr(common, "native_bootstrap", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(common, "request_for", lambda *_args: pytest.fail("read binding"))
+    native = {**event(), "tool_output": '{"exitCode":0,"task_id":"background"}'}
+    with pytest.raises(core.WorkspaceError) as captured:
+        common.native_post(native, "cursor", failed=False)
+    assert captured.value.code == "HOST_UNSUPPORTED_ASYNC"
+
+
+def test_native_post_preserves_core_settlement_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep a failed core completion visible after a valid synchronous result."""
+    monkeypatch.setattr(common, "native_bootstrap", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        common, "request_for", lambda _event, operation, _host: {"operation": operation}
+    )
+    requests: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        common.core,
+        "execute",
+        lambda request: requests.append(request) or {"ok": False, "code": "UNKNOWN_OPERATION"},
+    )
+    native = {**event(), "tool_name": "Read", "tool_input": {}, "tool_output": "bytes"}
+    with pytest.raises(core.WorkspaceError) as captured:
+        common.native_post(native, "cursor", failed=False)
+    assert captured.value.code == "UNKNOWN_OPERATION"
+    assert requests[0]["operation"] == "tool-complete"
+    assert requests[0]["tool_id"] == "tool-1"
+
+
+def test_automatic_attach_keeps_existing_assigned_packet_without_recreation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Return after verified existing participant scope, preserving its packet."""
+    native = {"cwd": "/checkout", "session_id": "session"}
+    key = core.participant_key({"host": "codex", "session_id": "session"})
+
+    class Control:
+        """Expose a held issue control and lock context."""
+
+        def __enter__(self) -> Control:
+            """Hold the modeled control handle."""
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            """Release the modeled control handle."""
+
+        def lock(self) -> Control:
+            """Hold the issue lock while reading participant scope."""
+            return self
+
+        def child(self, identifier: str) -> Control:
+            """Select only the recorded bound issue."""
+            assert identifier == "AGENT-30"
+            return self
+
+    class Bindings:
+        """Report no separate startup document for an already bound session."""
+
+        def exists(self, _name: str) -> bool:
+            """Keep startup setup absent."""
+            return False
+
+    class Store:
+        """Expose the existing exact issue binding and control handle."""
+
+        def __init__(self, _request: dict[str, Any]) -> None:
+            """Select the current bound store."""
+            self.bindings = Bindings()
+            self.issues = Control()
+
+        def __enter__(self) -> Store:
+            """Hold the modeled store."""
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            """Release the modeled store."""
+
+        def binding(self) -> dict[str, str]:
+            """Return the persisted issue assignment."""
+            return {"issue_id": "AGENT-30"}
+
+    class Issue:
+        """Expose the current participant packet from committed state."""
+
+        def __init__(self, _store: Store, _control: Control, _identifier: str) -> None:
+            """Bind to the selected existing issue."""
+
+        def recover(self) -> None:
+            """Model completed transaction recovery."""
+
+        def committed_state(self) -> dict[str, Any]:
+            """Return one scoped existing participant."""
+            return {"participants": {key: {"packet": [{"id": "roadmap"}]}}}
+
+    calls: list[str] = []
+
+    def execute(request: dict[str, Any]) -> dict[str, Any]:
+        """Permit diagnosis and reject any subsequent create or attach."""
+        calls.append(request["operation"])
+        assert request["operation"] == "diagnose"
+        return {"ok": True, "code": "REGISTERED", "repo_id": "repo"}
+
+    monkeypatch.setattr(common.core, "Store", Store)
+    monkeypatch.setattr(common.core, "Issue", Issue)
+    monkeypatch.setattr(common.core, "execute", execute)
+    assert common.automatic_attach(native, "AGENT-30", "codex") is None
+    assert calls == ["diagnose"]
+
+
+def test_automatic_attach_bound_without_packet_does_not_invent_assignment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An existing binding with no packet waits for explicit scope assignment."""
+    key = core.participant_key({"host": "codex", "session_id": "session"})
+
+    class Node:
+        """Supply only the issue read chain and absent startup marker."""
+
+        def __enter__(self) -> Node:
+            """Hold the modeled issue control."""
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            """Release the modeled issue control."""
+
+        def child(self, _name: str) -> Node:
+            """Select the existing issue."""
+            return self
+
+        def lock(self) -> Node:
+            """Hold the issue lock."""
+            return self
+
+        def exists(self, _name: str) -> bool:
+            """Report no startup setup."""
+            return False
+
+    class Store:
+        """Expose an existing bound participant and issue handle."""
+
+        def __init__(self, _request: dict[str, Any]) -> None:
+            """Select the bound store."""
+            self.bindings = Node()
+            self.issues = Node()
+
+        def __enter__(self) -> Store:
+            """Hold the store."""
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            """Release the store."""
+
+        def binding(self) -> dict[str, str]:
+            """Return the exact issue binding."""
+            return {"issue_id": "AGENT-30"}
+
+    class Issue:
+        """Expose an existing participant with no assigned packet."""
+
+        def __init__(self, _store: Store, _control: Node, _identifier: str) -> None:
+            """Select the existing issue."""
+
+        def recover(self) -> None:
+            """Model completed recovery."""
+
+        def committed_state(self) -> dict[str, Any]:
+            """Return an unscoped participant."""
+            return {"participants": {key: {"packet": None}}}
+
+    calls: list[str] = []
+    monkeypatch.setattr(common.core, "Store", Store)
+    monkeypatch.setattr(common.core, "Issue", Issue)
+    monkeypatch.setattr(
+        common.core,
+        "execute",
+        lambda request: (
+            calls.append(request["operation"]) or {"code": "REGISTERED", "repo_id": "repo"}
+        ),
+    )
+    assert (
+        common.automatic_attach({"cwd": "/checkout", "session_id": "session"}, "AGENT-30", "codex")
+        is None
+    )
+    assert calls == ["diagnose"]
+
+
+@pytest.mark.parametrize("code", ["SCOPE_MISSING", "BINDING_MISSING", "REVISION_CONFLICT"])
+def test_automatic_attach_without_setup_attempts_only_existing_core_scope(
+    monkeypatch: pytest.MonkeyPatch, code: str
+) -> None:
+    """Do not create a new issue when no startup packet was persisted."""
+    native = {"cwd": "/checkout", "session_id": "session"}
+
+    class Bindings:
+        """Report no explicit startup assignment."""
+
+        def exists(self, _name: str) -> bool:
+            """Keep startup setup absent."""
+            return False
+
+    class Store:
+        """Keep the observed session unbound."""
+
+        def __init__(self, _request: dict[str, Any]) -> None:
+            """Expose only the binding index."""
+            self.bindings = Bindings()
+
+        def __enter__(self) -> Store:
+            """Hold the modeled store."""
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            """Release the modeled store."""
+
+        def binding(self) -> None:
+            """Keep the session unbound."""
+            return None
+
+    calls: list[str] = []
+
+    def execute(request: dict[str, Any]) -> dict[str, Any]:
+        """Permit registration discovery and report absent scope on attach."""
+        calls.append(request["operation"])
+        if request["operation"] == "diagnose":
+            return {"ok": True, "code": "REGISTERED", "repo_id": "repo"}
+        assert request["operation"] == "attach"
+        return {"ok": False, "code": code}
+
+    monkeypatch.setattr(common.core, "Store", Store)
+    monkeypatch.setattr(common.core, "execute", execute)
+    if code == "REVISION_CONFLICT":
+        with pytest.raises(core.WorkspaceError) as captured:
+            common.automatic_attach(native, "AGENT-30", "codex")
+        assert captured.value.code == code
+    else:
+        assert common.automatic_attach(native, "AGENT-30", "codex") is None
+    assert calls == ["diagnose", "attach"]
+
+
+def test_native_pre_admits_exact_unready_bootstrap_without_binding_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Let the exact recovery command run before ordinary session readiness."""
+    monkeypatch.setattr(common, "native_bootstrap", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(common, "request_for", lambda *_args: pytest.fail("read binding"))
+    assert common.native_pre(event(), "cursor") is None
+
+
+def test_native_pre_does_not_record_ready_bootstrap_as_external_tool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Check readiness but keep the lifecycle command out of pending work."""
+    states: list[bool] = []
+
+    def bootstrap(_event: dict[str, Any], _host: str, ready: bool = False) -> bool:
+        """Allow only the post-readiness bootstrap check."""
+        states.append(ready)
+        return ready
+
+    monkeypatch.setattr(common, "native_bootstrap", bootstrap)
+    monkeypatch.setattr(
+        common, "request_for", lambda _event, operation, _host: {"operation": operation}
+    )
+    monkeypatch.setattr(common.core, "execute", lambda _request: {"ok": True, "code": "READY"})
+    monkeypatch.setattr(common, "native_tool", lambda *_args: pytest.fail("admitted external"))
+    assert common.native_pre(event(), "cursor") is None
+    assert states == [False, True]
+
+
+def test_native_post_ignores_exact_lifecycle_transaction_completion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep lifecycle command completion out of ordinary pending-tool state."""
+    monkeypatch.setattr(common, "native_bootstrap", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(common, "native_tool", lambda *_args: pytest.fail("admitted tool"))
+    assert common.native_post(event(), "cursor", failed=False) is None
+
+
+def test_native_post_rejects_unproven_claude_bash_completion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Do not settle a Claude Bash call that reports a background task marker."""
+    monkeypatch.setattr(common, "native_bootstrap", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(common, "native_tool", lambda *_args: "Bash")
+    monkeypatch.setattr(common, "request_for", lambda *_args: pytest.fail("settled tool"))
+    native = {
+        **event(),
+        "tool_name": "Bash",
+        "tool_input": {"command": "echo ok"},
+        "tool_response": {
+            "interrupted": False,
+            "stdout": "",
+            "stderr": "",
+            "task_id": "background",
+        },
+    }
+    with pytest.raises(core.WorkspaceError) as captured:
+        common.native_post(native, "claude-code", failed=False)
+    assert captured.value.code == "HOST_UNSUPPORTED_ASYNC"
+
+
+@pytest.mark.parametrize(
+    ("host", "tool", "response"),
+    [
+        ("claude-code", "Read", {"tool_response": "file contents"}),
+        (
+            "claude-code",
+            "Bash",
+            {"tool_response": {"interrupted": False, "stdout": "ok", "stderr": ""}},
+        ),
+        ("cursor", "Read", {"tool_output": "file contents"}),
+        ("cursor", "Shell", {"tool_output": '{"exitCode":0}'}),
+    ],
+)
+def test_native_post_settles_only_documented_synchronous_success(
+    monkeypatch: pytest.MonkeyPatch, host: str, tool: str, response: dict[str, object]
+) -> None:
+    """A typed synchronous host completion records the observed tool exactly once."""
+    monkeypatch.setattr(common, "native_bootstrap", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(common, "native_tool", lambda *_args: tool)
+    monkeypatch.setattr(
+        common, "request_for", lambda _event, operation, _host: {"operation": operation}
+    )
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        common.core, "execute", lambda request: calls.append(request) or {"ok": True, "code": "OK"}
+    )
+    native = {**event(), "tool_name": tool, "tool_input": {}, **response}
+    assert common.native_post(native, host, failed=False) is None
+    assert len(calls) == 1
+    assert calls[0]["operation"] == "tool-complete"
+    assert calls[0]["tool_id"] == "tool-1"
+    assert calls[0]["completed"] is True
+
+
+@pytest.mark.parametrize(
+    ("host", "field", "extra"),
+    [
+        ("claude-code", "error", {}),
+        ("cursor", "error_message", {"failure_type": "timeout"}),
+    ],
+)
+def test_native_post_settles_documented_file_tool_failure(
+    monkeypatch: pytest.MonkeyPatch, host: str, field: str, extra: dict[str, object]
+) -> None:
+    """A host failure event is a terminal observation for synchronous file tools."""
+    monkeypatch.setattr(common, "native_bootstrap", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(common, "native_tool", lambda *_args: "Read")
+    monkeypatch.setattr(
+        common, "request_for", lambda _event, operation, _host: {"operation": operation}
+    )
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        common.core, "execute", lambda request: calls.append(request) or {"ok": True, "code": "OK"}
+    )
+    native = {**event(), "tool_name": "Read", "tool_input": {}, field: "failed", **extra}
+    assert common.native_post(native, host, failed=True) is None
+    assert len(calls) == 1
+    assert calls[0]["completed"] is True
+
+
+def test_native_pre_records_only_eligible_tool_after_readiness(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A native tool starts only after readiness and native transport validation."""
+    monkeypatch.setattr(common, "native_bootstrap", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(common, "native_tool", lambda *_args: "Read")
+    monkeypatch.setattr(
+        common, "request_for", lambda _event, operation, _host: {"operation": operation}
+    )
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        common.core, "execute", lambda request: calls.append(request) or {"ok": True, "code": "OK"}
+    )
+    assert common.native_pre({**event(), "tool_name": "Read", "tool_input": {}}, "cursor") is None
+    assert [call["operation"] for call in calls] == ["ready", "tool-start"]
+    assert calls[-1]["request_id"] == "pre:tool-1"

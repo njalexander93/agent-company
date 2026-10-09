@@ -17,8 +17,8 @@ pytestmark = pytest.mark.integration
 class ReviewRegressions(Fixture):
     """Retain author regressions for reported findings without claiming independent review."""
 
-    def test_automatic_creation_from_explicit_startup_assignment(self) -> None:
-        """Create a preassigned workspace once when its explicit Task prompt arrives.
+    def test_explicit_preassigned_recovery_after_ticket_first_prompt(self) -> None:
+        """Keep preassigned recovery callable while Task prompt defers creation.
 
         Raises:
             AssertionError: An asserted lifecycle or boundary invariant does not hold.
@@ -35,7 +35,7 @@ class ReviewRegressions(Fixture):
                 "packet": [],
             },
         )
-        # Deliver the explicit issue prompt and inspect automatic workspace setup.
+        # Task alone cannot create an issue before the foreground ticket read.
         event = {
             "hook_event_name": "UserPromptSubmit",
             "cwd": str(self.root),
@@ -43,11 +43,14 @@ class ReviewRegressions(Fixture):
             "prompt": "Task: TEST-1",
         }
         hook.handle(event)
+        self.assertFalse((self.root / ".task/TEST-1/roadmap.md").exists())
+        hook.automatic_attach(event, "TEST-1")  # Explicit legacy recovery route.
         self.assertTrue((self.root / ".task/TEST-1/roadmap.md").is_file())
         self.assertEqual(self.state()["participants"][self.base["coordinator"]]["packet"], [])
-        # Repeat the prompt and verify no duplicate lifecycle event is written.
+        # Repeat explicit recovery and verify no duplicate lifecycle event is written.
         before = (self.root / ".task/TEST-1/events.jsonl").read_bytes()
         hook.handle(event)
+        hook.automatic_attach(event, "TEST-1")
         self.assertEqual(before, (self.root / ".task/TEST-1/events.jsonl").read_bytes())
 
     def test_bootstrap_rejects_missing_login_shell_override_and_unknown_fields(self) -> None:
@@ -198,18 +201,19 @@ class ReviewRegressions(Fixture):
                 else execute(request)
             )
 
-        # Inject BUSY for scope installation and expect the direct hook exception.
+        hook.handle(event)
+        # Inject BUSY for explicit recovery scope installation.
         with mock.patch.object(w, "execute", fail_scope):
             # Verify the hook exposes the assignment failure as WorkspaceError.
             with self.assertRaises(w.WorkspaceError):
-                hook.handle(event)
+                hook.automatic_attach(event, "TEST-1")
         # Confirm the packet is still missing, then retry without the failure seam.
         self.assertIsNone(self.state()["participants"][self.base["coordinator"]]["packet"])
-        hook.handle(event)
+        hook.automatic_attach(event, "TEST-1")
         self.assertEqual(self.state()["participants"][self.base["coordinator"]]["packet"], [])
         # Repeat the successful prompt and require no further state revision.
         before = self.state()["revision"]
-        hook.handle(event)
+        hook.automatic_attach(event, "TEST-1")
         self.assertEqual(self.state()["revision"], before)
 
     def test_narrow_recovery_commands_pass_actual_adapter_gate(self) -> None:
@@ -220,13 +224,14 @@ class ReviewRegressions(Fixture):
         """
         # Create and explicitly bind the coordinator before recovery admission.
         self.create()
-        hook.handle(
+        common.prompt(
             {
                 "hook_event_name": "UserPromptSubmit",
                 "cwd": str(self.root),
                 "session_id": "coordinator",
                 "prompt": "Task: TEST-1",
-            }
+            },
+            "codex",
         )
         # Exercise each supported recovery operation with its exact allowed fields.
         for operation, fields in [

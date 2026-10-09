@@ -19,6 +19,7 @@ mypy = "==2.3.1"
 [tool.poetry.group.test.dependencies]
 pytest = "==9.1.1"
 pytest-cov = "==7.1.0"
+coverage = "==7.16.2"
 
 [build-system]
 requires = ["poetry-core==2.4.1"]
@@ -75,6 +76,8 @@ markers = [
 
 [tool.coverage.run]
 branch = true
+core = "ctrace"
+patch = ["subprocess"]
 relative_files = true
 context = "${AGENT_COMPANY_COVERAGE_CONTEXT-local}"
 source = ["agent_company"]

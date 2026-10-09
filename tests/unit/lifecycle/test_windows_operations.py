@@ -1,0 +1,480 @@
+"""Model Windows storage operations with fake kernel handles."""
+
+from __future__ import annotations
+
+import io
+import sys
+from contextlib import contextmanager
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+
+from agent_company.lifecycle._errors import WorkspaceError
+
+pytestmark = [
+    pytest.mark.unit,
+    pytest.mark.skipif(
+        sys.platform != "win32",
+        reason="Windows native CreateFileW and NTFS handle APIs are unavailable on POSIX",
+    ),
+]
+
+
+@pytest.fixture
+def windows() -> Any:
+    """Windows."""
+    from agent_company.lifecycle import _filesystem_windows
+
+    return _filesystem_windows
+
+
+def directory(windows: Any) -> Any:
+    """Directory."""
+    item = windows.Directory.__new__(windows.Directory)
+    item.path = Path(r"C:\work")
+    item._handles = [101]
+    item.identity = [7, 13]
+    return item
+
+
+def test_volume_rejects_remote_drive_before_query(
+    windows: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Volume rejects remote drive before query."""
+    effects: list[str] = []
+    monkeypatch.setattr(windows, "GetDriveType", lambda _root: effects.append("drive") or 4)
+    monkeypatch.setattr(
+        windows, "GetVolumeInformation", lambda *_args: effects.append("volume") or True
+    )
+    with pytest.raises(WorkspaceError) as captured:
+        windows.volume(Path(r"C:\work"))
+    assert captured.value.code == "HOST_UNSUPPORTED_FILESYSTEM"
+    assert effects == ["drive"]
+
+
+def test_volume_rejects_unc_namespace_before_kernel_query(
+    windows: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A network path never reaches drive probing."""
+    effects: list[str] = []
+    monkeypatch.setattr(windows, "GetDriveType", lambda _root: effects.append("drive") or 3)
+    with pytest.raises(WorkspaceError) as captured:
+        windows.volume(Path(r"\\server\share\work"))
+    assert captured.value.code == "UNSAFE_PATH"
+    assert effects == []
+
+
+@pytest.mark.parametrize(
+    ("name", "flags", "accepted"),
+    [("NTFS", 0x88, True), ("FAT32", 0x88, False), ("NTFS", 0x80, False)],
+)
+def test_volume_requires_ntfs_acl_and_reparse(
+    windows: Any, monkeypatch: pytest.MonkeyPatch, name: str, flags: int, accepted: bool
+) -> None:
+    """Volume requires ntfs acl and reparse."""
+
+    def volume_info(
+        _root: str,
+        _label: Any,
+        _label_size: int,
+        _serial: Any,
+        _max_component: Any,
+        flags_out: Any,
+        name_out: Any,
+        _name_size: int,
+    ) -> bool:
+        windows.c.cast(flags_out, windows.c.POINTER(windows.w.DWORD))[0] = windows.w.DWORD(flags)
+        name_out.value = name
+        return True
+
+    monkeypatch.setattr(windows, "GetDriveType", lambda _root: 3)
+    monkeypatch.setattr(windows, "GetVolumeInformation", volume_info)
+    if accepted:
+        windows.volume(Path(r"C:\work"))
+    else:
+        with pytest.raises(WorkspaceError) as captured:
+            windows.volume(Path(r"C:\work"))
+        assert captured.value.code == "HOST_UNSUPPORTED_FILESYSTEM"
+
+
+def test_volume_surfaces_native_information_failure(
+    windows: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed volume query cannot be mistaken for NTFS support."""
+    monkeypatch.setattr(windows, "GetDriveType", lambda _root: 3)
+    monkeypatch.setattr(windows, "GetVolumeInformation", lambda *_args: False)
+    monkeypatch.setattr(windows.c, "get_last_error", lambda: 5)
+    with pytest.raises(OSError) as captured:  # noqa: PT011 - winerror is asserted.
+        windows.volume(Path(r"C:\work"))
+    assert captured.value.winerror == 5
+
+
+def test_absolute_pins_each_ancestor_and_releases_after_failure(
+    windows: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Absolute pins each ancestor and releases after failure."""
+    opened: list[str] = []
+    closed: list[int] = []
+    monkeypatch.setattr(windows, "volume", lambda _path: None)
+    monkeypatch.setattr(
+        windows, "open_handle", lambda path: opened.append(str(path)) or len(opened)
+    )
+    monkeypatch.setattr(
+        windows,
+        "information",
+        lambda *_args, **_kwargs: SimpleNamespace(volume=7, index_high=0, index_low=13),
+    )
+    monkeypatch.setattr(
+        windows,
+        "exact_handle_path",
+        lambda handle, _path: (
+            (_ for _ in ()).throw(WorkspaceError("UNSAFE_PATH")) if handle == 3 else None
+        ),
+    )
+    monkeypatch.setattr(windows, "CloseHandle", lambda handle: closed.append(handle) or True)
+    with pytest.raises(WorkspaceError) as captured:
+        windows.Directory.absolute(Path(r"C:\work\issue"))
+    assert captured.value.code == "UNSAFE_PATH"
+    assert opened == ["C:\\", r"C:\work", r"C:\work\issue"]
+    assert closed == [3, 2, 1]
+
+
+def test_absolute_retains_chain_and_init_records_identity(
+    windows: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A validated ancestor chain remains pinned until explicit close."""
+    opened: list[str] = []
+    closed: list[int] = []
+    monkeypatch.setattr(windows, "volume", lambda _path: None)
+    monkeypatch.setattr(
+        windows, "open_handle", lambda path: opened.append(str(path)) or len(opened)
+    )
+    monkeypatch.setattr(
+        windows,
+        "information",
+        lambda *_args, **_kwargs: SimpleNamespace(volume=7, index_high=1, index_low=13),
+    )
+    monkeypatch.setattr(windows, "exact_handle_path", lambda *_args: None)
+    monkeypatch.setattr(windows, "validate_security", lambda *_args: None)
+    monkeypatch.setattr(windows, "CloseHandle", lambda handle: closed.append(handle) or True)
+    result = windows.Directory.absolute(Path(r"C:\work"))
+    assert result.identity == [7, (1 << 32) | 13]
+    assert result._handles == [1, 2]
+    assert opened == ["C:\\", r"C:\work"]
+    result.close()
+    assert closed == [2, 1]
+
+
+def test_absolute_rejects_device_component_before_opening(
+    windows: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unsafe Windows device name cannot enter the pinned chain."""
+    opened: list[str] = []
+    monkeypatch.setattr(windows, "volume", lambda _path: None)
+    monkeypatch.setattr(windows, "open_handle", lambda _path: opened.append("open") or 91)
+    with pytest.raises(WorkspaceError) as captured:
+        windows.Directory.absolute(Path(r"C:\work\CON"))
+    assert captured.value.code == "UNSAFE_PATH"
+    assert opened == []
+
+
+def test_child_create_preserves_existing_and_checks_private_acl(
+    windows: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Child create preserves existing and checks private acl."""
+    item = directory(windows)
+    result = directory(windows)
+    checked: list[bool] = []
+    monkeypatch.setattr(item, "names", lambda: [])
+
+    @contextmanager
+    def security() -> Any:
+        yield windows.SecurityAttributes()
+
+    monkeypatch.setattr(windows, "private_security", security)
+    monkeypatch.setattr(windows, "CreateDirectory", lambda *_args: False)
+    monkeypatch.setattr(windows.c, "get_last_error", lambda: 183)
+    monkeypatch.setattr(windows.Directory, "absolute", classmethod(lambda _cls, _path: result))
+    monkeypatch.setattr(
+        windows, "validate_security", lambda _handle, private: checked.append(private)
+    )
+    assert item.child("issue", create=True) is result
+    assert checked == [True]
+
+
+def test_file_opens_exclusive_private_handle(windows: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """File opens exclusive private handle."""
+    item = directory(windows)
+    opened: list[tuple[Any, ...]] = []
+    monkeypatch.setattr(item, "names", lambda: [])
+
+    @contextmanager
+    def security() -> Any:
+        yield windows.SecurityAttributes()
+
+    monkeypatch.setattr(windows, "private_security", security)
+    monkeypatch.setattr(windows, "open_handle", lambda *args: opened.append(args) or 91)
+    monkeypatch.setattr(windows, "information", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(windows, "exact_handle_path", lambda *_args: None)
+    monkeypatch.setattr(windows, "validate_security", lambda *_args: None)
+    assert item._file("state.json", windows.WRITE, True) == 91
+    assert opened[0][0] == Path(r"C:\work\state.json")
+    assert opened[0][1] == windows.WRITE | windows.READ_CONTROL
+    assert opened[0][2] == 1
+
+
+def test_read_validated_bytes_and_rejects_stream_growth(
+    windows: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Read validated bytes and rejects stream growth."""
+    item = directory(windows)
+    monkeypatch.setattr(item, "_file", lambda _name: 91)
+    monkeypatch.setattr(
+        windows, "information", lambda *_args, **_kwargs: SimpleNamespace(size_high=0, size_low=3)
+    )
+    monkeypatch.setattr(windows.msvcrt, "open_osfhandle", lambda *_args: 55)
+    monkeypatch.setattr(windows.os, "fdopen", lambda *_args: io.BytesIO(b"abc"))
+    assert item.read("record", limit=3) == b"abc"
+    monkeypatch.setattr(windows.os, "fdopen", lambda *_args: io.BytesIO(b"abcd"))
+    with pytest.raises(WorkspaceError) as captured:
+        item.read("record", limit=3)
+    assert captured.value.code == "SIZE_LIMIT"
+
+
+def test_write_flushes_before_publish_and_cleans_temp(
+    windows: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Write flushes before publish and cleans temp."""
+    item = directory(windows)
+    events: list[str] = []
+    names: list[str] = []
+
+    class Stream(io.BytesIO):
+        def write(self, data: bytes) -> int:
+            events.append("write")
+            return super().write(data)
+
+        def flush(self) -> None:
+            events.append("flush")
+
+        def fileno(self) -> int:
+            return 55
+
+    stream = Stream()
+    monkeypatch.setattr(item, "names", lambda: [])
+    monkeypatch.setattr(item, "exists", lambda name: name.startswith(".write-"))
+    monkeypatch.setattr(item, "_file", lambda name, *_args: names.append(name) or 91)
+    monkeypatch.setattr(item, "unlink", lambda _name: events.append("cleanup"))
+    monkeypatch.setattr(windows.msvcrt, "open_osfhandle", lambda *_args: 55)
+    monkeypatch.setattr(windows.os, "fdopen", lambda *_args: stream)
+    monkeypatch.setattr(windows.os, "fsync", lambda _fd: events.append("fsync"))
+    monkeypatch.setattr(windows, "MoveFile", lambda *_args: events.append("publish") or True)
+    item.write("state.json", b"payload")
+    assert names[0].startswith(".write-")
+    assert events == ["write", "flush", "fsync", "publish", "cleanup"]
+
+
+def test_rename_rejects_cross_volume_and_moves_only_after_check(
+    windows: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Rename rejects cross volume and moves only after check."""
+    source, target = directory(windows), directory(windows)
+    effects: list[str] = []
+    monkeypatch.setattr(source, "names", lambda: [])
+    monkeypatch.setattr(target, "names", lambda: [])
+    monkeypatch.setattr(target, "exists", lambda _name: False)
+
+    @contextmanager
+    def child(_name: str, **_kwargs: Any) -> Any:
+        yield SimpleNamespace(identity=[8, 13])
+
+    monkeypatch.setattr(source, "child", child)
+    monkeypatch.setattr(windows, "MoveFile", lambda *_args: effects.append("move") or True)
+    with pytest.raises(WorkspaceError) as captured:
+        source.rename_directory("issue", target, "quarantine")
+    assert captured.value.code == "UNSAFE_PATH"
+    assert effects == []
+
+    @contextmanager
+    def same_volume(_name: str, **_kwargs: Any) -> Any:
+        yield SimpleNamespace(identity=[7, 99])
+
+    monkeypatch.setattr(source, "child", same_volume)
+    source.rename_directory("issue", target, "quarantine")
+    assert effects == ["move"]
+
+
+def test_lock_reopens_persistent_inode_and_retries_contention(
+    windows: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Lock reopens persistent inode and retries contention."""
+    item = directory(windows)
+    attempts: list[bool] = []
+    closed: list[int] = []
+
+    def file(_name: str, _access: int, create: bool = False) -> int:
+        attempts.append(create)
+        if create:
+            raise FileExistsError
+        return 91
+
+    outcomes = iter([False, True])
+    monkeypatch.setattr(item, "_file", file)
+    monkeypatch.setattr(windows, "LockFile", lambda *_args: next(outcomes))
+    monkeypatch.setattr(windows.c, "get_last_error", lambda: 33)
+    monkeypatch.setattr(windows.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(windows, "CloseHandle", lambda handle: closed.append(handle) or True)
+    with item.lock():
+        assert attempts == [True, False]
+    assert closed == [91]
+
+
+def test_lock_surfaces_noncontention_error_and_releases_handle(
+    windows: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only ERROR_LOCK_VIOLATION qualifies for retry."""
+    item = directory(windows)
+    closed: list[int] = []
+    monkeypatch.setattr(item, "_file", lambda *_args, **_kwargs: 91)
+    monkeypatch.setattr(windows, "LockFile", lambda *_args: False)
+    monkeypatch.setattr(windows.c, "get_last_error", lambda: 5)
+    monkeypatch.setattr(windows, "CloseHandle", lambda handle: closed.append(handle) or True)
+    with pytest.raises(OSError) as captured:  # noqa: PT011 - winerror is asserted.
+        with item.lock():
+            pass
+    assert captured.value.winerror == 5
+    assert closed == [91]
+
+
+def test_write_releases_temp_after_failed_publication(
+    windows: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A rename error removes the private temporary file."""
+    item = directory(windows)
+    removed: list[str] = []
+
+    class Stream(io.BytesIO):
+        def fileno(self) -> int:
+            return 55
+
+    monkeypatch.setattr(item, "names", lambda: [])
+    monkeypatch.setattr(item, "exists", lambda name: name.startswith(".write-"))
+    monkeypatch.setattr(item, "_file", lambda *_args, **_kwargs: 91)
+    monkeypatch.setattr(item, "unlink", lambda name: removed.append(name))
+    monkeypatch.setattr(windows.msvcrt, "open_osfhandle", lambda *_args: 55)
+    monkeypatch.setattr(windows.os, "fdopen", lambda *_args: Stream())
+    monkeypatch.setattr(windows.os, "fsync", lambda _fd: None)
+    monkeypatch.setattr(windows, "MoveFile", lambda *_args: False)
+    monkeypatch.setattr(windows.c, "get_last_error", lambda: 5)
+    with pytest.raises(OSError) as captured:  # noqa: PT011 - winerror is asserted.
+        item.write("state.json", b"payload")
+    assert captured.value.winerror == 5
+    assert len(removed) == 1 and removed[0].startswith(".write-")
+
+
+def test_child_create_surfaces_native_denial_without_opening(
+    windows: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A denied CreateDirectory never opens an untrusted existing entry."""
+    item = directory(windows)
+    opened: list[str] = []
+
+    @contextmanager
+    def security() -> Any:
+        yield windows.SecurityAttributes()
+
+    monkeypatch.setattr(item, "names", lambda: [])
+    monkeypatch.setattr(windows, "private_security", security)
+    monkeypatch.setattr(windows, "CreateDirectory", lambda *_args: False)
+    monkeypatch.setattr(windows.c, "get_last_error", lambda: 5)
+    monkeypatch.setattr(
+        windows.Directory, "absolute", classmethod(lambda _cls, _path: opened.append("open"))
+    )
+    with pytest.raises(OSError) as captured:  # noqa: PT011 - winerror is asserted.
+        item.child("issue", create=True)
+    assert captured.value.winerror == 5
+    assert opened == []
+
+
+def test_read_closes_handle_when_descriptor_transfer_fails(
+    windows: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed CRT adoption keeps native handle cleanup with the caller."""
+    item = directory(windows)
+    closed: list[int] = []
+    monkeypatch.setattr(item, "_file", lambda _name: 91)
+    monkeypatch.setattr(
+        windows,
+        "information",
+        lambda *_args, **_kwargs: SimpleNamespace(size_high=0, size_low=1),
+    )
+    monkeypatch.setattr(
+        windows.msvcrt,
+        "open_osfhandle",
+        lambda *_args: (_ for _ in ()).throw(OSError("transfer")),
+    )
+    monkeypatch.setattr(windows, "CloseHandle", lambda handle: closed.append(handle) or True)
+    with pytest.raises(OSError, match="transfer"):
+        item.read("record", limit=2)
+    assert closed == [91]
+
+
+def test_write_validates_existing_destination_before_temporary_creation(
+    windows: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A rejected existing file prevents any replacement candidate."""
+    item = directory(windows)
+    created: list[str] = []
+    monkeypatch.setattr(item, "names", lambda: [])
+    monkeypatch.setattr(item, "exists", lambda _name: True)
+    monkeypatch.setattr(
+        item,
+        "read",
+        lambda _name: (_ for _ in ()).throw(WorkspaceError("UNSAFE_PATH")),
+    )
+    monkeypatch.setattr(item, "_file", lambda name, *_args: created.append(name) or 91)
+    with pytest.raises(WorkspaceError) as captured:
+        item.write("state.json", b"new")
+    assert captured.value.code == "UNSAFE_PATH"
+    assert created == []
+
+
+def test_unlink_surfaces_delete_denial_after_verified_handle_close(
+    windows: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Deletion failure retains the source and reports the native code."""
+    item = directory(windows)
+    events: list[str] = []
+    monkeypatch.setattr(item, "_file", lambda _name: 91)
+    monkeypatch.setattr(item, "names", lambda: [])
+    monkeypatch.setattr(windows, "CloseHandle", lambda _handle: events.append("close") or True)
+    monkeypatch.setattr(windows, "DeleteFile", lambda _path: events.append("delete") or False)
+    monkeypatch.setattr(windows.c, "get_last_error", lambda: 5)
+    with pytest.raises(OSError) as captured:  # noqa: PT011 - winerror is asserted.
+        item.unlink("record")
+    assert captured.value.winerror == 5
+    assert events == ["close", "delete"]
+
+
+def test_rmdir_surfaces_native_denial_after_child_check(
+    windows: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A checked child is not silently considered removed on denial."""
+    item = directory(windows)
+    events: list[str] = []
+
+    @contextmanager
+    def child(_name: str, **_kwargs: Any) -> Any:
+        events.append("checked")
+        yield None
+
+    monkeypatch.setattr(item, "child", child)
+    monkeypatch.setattr(item, "names", lambda: [])
+    monkeypatch.setattr(windows, "RemoveDirectory", lambda _path: events.append("remove") or False)
+    monkeypatch.setattr(windows.c, "get_last_error", lambda: 145)
+    with pytest.raises(OSError) as captured:  # noqa: PT011 - winerror is asserted.
+        item.rmdir("not-empty")
+    assert captured.value.winerror == 145
+    assert events == ["checked", "remove"]

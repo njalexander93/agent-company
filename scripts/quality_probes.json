@@ -1,0 +1,41 @@
+[
+  {
+    "source_path": "src/agent_company/lifecycle/task_workspace.py",
+    "source_sha256": "67671f6573b6b50d9fd4a9772ed52e9870a09719ddb1a99a6558bb8384909ea3",
+    "timeout_seconds": 20,
+    "kind": "wrong_result",
+    "old": "return hashlib.sha256(data).hexdigest()",
+    "new": "return \"0\" * 64",
+    "test_nodeids": [
+      "tests/unit/lifecycle/test_scalar_contracts.py::test_sha_identifies_exact_bytes"
+    ],
+    "expected_failure": "000000000000",
+    "expected_failure_type": "AssertionError"
+  },
+  {
+    "source_path": "src/agent_company/lifecycle/task_workspace.py",
+    "source_sha256": "67671f6573b6b50d9fd4a9772ed52e9870a09719ddb1a99a6558bb8384909ea3",
+    "timeout_seconds": 20,
+    "kind": "missing_exception",
+    "old": "require(isinstance(value, str) and ISSUE.fullmatch(value), \"INVALID_ISSUE\")",
+    "new": "pass  # selected missing-exception fault",
+    "test_nodeids": [
+      "tests/unit/lifecycle/test_scalar_contracts.py::test_issue_id_rejects_invalid_identity"
+    ],
+    "expected_failure": "DID NOT RAISE WorkspaceError",
+    "expected_failure_type": "Failed"
+  },
+  {
+    "source_path": "src/agent_company/lifecycle/task_workspace.py",
+    "source_sha256": "67671f6573b6b50d9fd4a9772ed52e9870a09719ddb1a99a6558bb8384909ea3",
+    "timeout_seconds": 20,
+    "kind": "omitted_effect",
+    "old": "        FAILPOINT(point)",
+    "new": "        pass  # selected omitted-effect fault",
+    "test_nodeids": [
+      "tests/unit/lifecycle/test_scalar_contracts.py::test_fault_invokes_only_installed_local_hook"
+    ],
+    "expected_failure": "assert [] == ['after-intent']",
+    "expected_failure_type": "AssertionError"
+  }
+]

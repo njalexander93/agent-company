@@ -70,15 +70,30 @@ or manually rewrite quoting. The Windows entry decodes one bounded canonical
 URL-safe base64 JSON request and calls the same lifecycle implementation; encoding
 does not confer permission or change the recovery allowlist.
 
-The startup prompt accepts exactly one standalone `Task: <issue-id>` line, for example `Task: ISSUE-1`. It
-records only that identity. A packet/coordinator assignment is still explicit;
-no startup callback infers one from a chat title or grants coordinator ownership.
-One-time registration can include an explicit `startup` assignment with exactly
-`issue_id`, `issue_uuid`, `coordinator` and `packet`. The next matching Task prompt
-automatically creates the workspace and installs that preassigned packet. A new
-session joining an existing issue automatically attaches only when the coordinator
-already assigned it a packet. No hidden packet or coordinator role is inferred.
-Native adapters use explicit bindings and packets; installed-host callback delivery must be verified separately. No full launcher is shipped. See the [host guide](host-hooks.md) for child/spawn restrictions; no unverified child identity may inherit readiness.
+The startup prompt accepts exactly one standalone `Task: <issue-id>` line, for example
+`Task: ISSUE-1`. Codex records that identity without requiring registration first.
+Its exact direct Linear issue read is admitted before readiness only when the host
+exposes that MCP call and matching completion to the native hook. A wrapper-only
+`functions.exec` path has no verified nested callback delivery; if only the wrapper
+is observed, it is denied before readiness. Once the returned
+`id` matches and `uuid` is available, the Codex startup orchestrator derives the
+actual session and Git main worktree, registers or resumes, and creates a missing
+issue under the initiating session's coordinator key. It installs an initial packet
+from the selected checkout's governing files and the main worktree's canonical task
+bytes, reads available source bytes, acknowledges their
+exact digest, and verifies `ready`. Repeated starts keep existing roadmap, approval,
+coordinator and packet. A committed coordinator-owned roadmap update refreshes only
+its roadmap packet digest; unexpected file edits still fail integrity checks. A
+different session can join with a core-selected roadmap-only reader packet after
+the verified ticket read. Reader readiness does not transfer coordinator ownership.
+Coordinator handoff remains an explicit lifecycle transition.
+Typed `NOT_FOUND` and the exact observed Linear missing-reference envelope create no
+issue workspace. The latter reports only that Linear could not find the requested
+identifier. Other invalid requests and provider failures remain provider errors.
+One-time registration with an explicit `startup` assignment remains
+a recovery route for hosts without this verified connector path. Native callback
+delivery requires separate installed-host evidence. See the [host guide](host-hooks.md)
+for child/spawn restrictions; no unverified child identity may inherit readiness.
 
 The pre-readiness command allowlist is operation-specific. It includes the
 original `diagnose/register/bind/adopt/resume/restore` routes plus scoped `read` and

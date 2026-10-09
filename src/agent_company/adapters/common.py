@@ -174,12 +174,13 @@ def automatic_attach(event: core.JSONObject, identifier: str, host: str) -> None
             raise core.WorkspaceError(result["code"])
 
 
-def prompt(event: core.JSONObject, host: str) -> core.JSONObject:
+def prompt(event: core.JSONObject, host: str, attempt_attach: bool = True) -> core.JSONObject:
     """Record one explicit Task line and attempt only its assigned workspace setup.
 
     Args:
         event: Observed host hook input, including the actual session and tool identities.
         host: Explicit adapter identity; never taken from untrusted tool arguments.
+        attempt_attach: Whether to use the legacy preassigned setup after recording Task.
 
     Returns:
         An empty response, prompt denial or bounded setup context.
@@ -220,13 +221,19 @@ def prompt(event: core.JSONObject, host: str) -> core.JSONObject:
                     "reason": "BINDING_CONFLICT: Explicit rebind is required.",
                 }
         bindings.put(key + ".assignment.json", {"issue_id": identifier})
+        if host == "codex" and not attempt_attach:
+            bindings.put(key + ".lookup-required.json", {"issue_id": identifier})
     # Attempt setup using only the recorded startup assignment or existing packet.
-    automatic_attach(event, identifier, host)
+    if attempt_attach:
+        automatic_attach(event, identifier, host)
     return {
         "hookSpecificOutput": {
             "hookEventName": "UserPromptSubmit",
             "additionalContext": (
-                "Task identity recorded. Explicitly assigned workspace setup was "
+                "Task identity recorded. Read the requested Linear ticket first. "
+                "Then complete scoped workspace setup and verify readiness."
+                if not attempt_attach
+                else "Task identity recorded. Explicitly assigned workspace setup was "
                 "attempted. Read and acknowledge the permitted packet before task "
                 "tools; use the lifecycle diagnostic route if setup is missing."
             ),

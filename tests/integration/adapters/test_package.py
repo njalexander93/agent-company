@@ -71,16 +71,16 @@ class PackageEntryPointTests(Fixture):
             },
         )
         self.assertIs(hook.core, w)
+        event = {
+            "hook_event_name": "UserPromptSubmit",
+            "cwd": str(self.root),
+            "session_id": "coordinator",
+            "prompt": "Task: TEST-1",
+        }
+        hook.handle(event)
         # Patch the canonical module and record persistence seams reached by the adapter.
         with mock.patch.object(w, "FAILPOINT") as failpoint:
-            hook.handle(
-                {
-                    "hook_event_name": "UserPromptSubmit",
-                    "cwd": str(self.root),
-                    "session_id": "coordinator",
-                    "prompt": "Task: TEST-1",
-                }
-            )
+            hook.automatic_attach(event, "TEST-1")
         # Verify the adapter traversed the patched transaction and created the roadmap.
         failpoint.assert_any_call("transaction-complete")
         self.assertTrue((self.root / ".task/TEST-1/roadmap.md").is_file())

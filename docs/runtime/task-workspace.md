@@ -61,6 +61,7 @@ Responses contain `ok`, `code`, identifiers, current `revision`, `binding_genera
 | `bind` | Bind an explicitly named issue and scope to a host session. Existing identical binding is idempotent; conflicting issue requires `rebind`. Initial coordinator is explicitly designated at create/adopt; joining a session does not confer that role. |
 | `create` | Under the persistent issue lock, create only if absent and no tombstone/history exists; atomically publish a complete template workspace. Concurrent creators converge; differing identities/scopes conflict. |
 | `attach`, `resume` | Validate membership, scope, binding generation and payload; register a participant and preserve bytes. A missing directory with a tombstone enters recovery, never empty creation. |
+| `join` | After the exact Codex foreground ticket read, attach a new session as a roadmap-only reader. Require the matching immutable issue UUID and reject caller-supplied packets or ownership. The coordinator and existing assignments stay unchanged. This internal adapter route is excluded from unready shell bootstrap commands. |
 | `rebind` | Explicit old/new issue and expected binding generation; detach old participation, then bind the new issue. Preserve old issue state. Refuse while participant-owned external operations remain unresolved. Never rebind a parent under active child participants. |
 | `scope`, `read` | Coordinator installs a versioned packet manifest; participant reads only permitted references/notes. `read` checks each required digest and scope. Scope changes invalidate prior acknowledgment. |
 | `acknowledge`, `ready` | Acknowledge exact packet digest/required-source availability, then check binding, scope, ownership, unresolved transaction and filesystem access. This establishes delivery facts, not comprehension or execution authority. |
@@ -178,9 +179,20 @@ A hook can deny a covered action only when the host actually invokes and honors 
 
 An unready session may use only:
 
-1. Host user-input/permission UI needed to supply identity or grant the exact requested paths.
-2. The reviewed lifecycle command's exact `diagnose/register/bind/adopt/resume/restore` invocation for its assigned issue and allowlisted arguments. Allow no shell operators, redirection, command substitution, wrapper interpreters, arbitrary files or additional command. Parse a strict argument vector; reject anything the adapter cannot prove is this command.
-3. The exact Linear read/save operations bound to a pending immutable archive/recovery request, with checked issue/document ID and expected payload digest. This exception does not allow general provider edits. If nested tool calls conceal those arguments, use an observable direct call or retain the data.
+1. On a Codex path with observable direct native callbacks, the direct `linear_get_issue({id})`
+   call for the exact `Task: <issue-id>` assignment. The prompt records the requested
+   identifier and no issue workspace. The adapter records the admitted tool ID,
+   matches its completion, verifies the returned identifier and immutable UUID,
+   then runs local registration, attachment, packet reading and readiness. A typed
+   `NOT_FOUND` or the exact observed Linear missing-reference envelope stops without
+   workspace creation. That envelope reports Linear could not find the requested
+   identifier; generic `INVALID_ARGUMENT` and unverified provider errors are not
+   reclassified as missing tickets. This exception does not admit issue edits,
+   arbitrary searches, `functions.exec` wrappers or other MCP calls. Nested MCP
+   callback forwarding is unverified; an outer wrapper alone receives no exemption.
+2. Host user-input/permission UI needed to grant the exact requested paths.
+3. The reviewed lifecycle command's exact `diagnose/register/bind/adopt/resume/restore` invocation for its assigned issue and allowlisted arguments. Allow no shell operators, redirection, command substitution, wrapper interpreters, arbitrary files or additional command. Parse a strict argument vector; reject anything the adapter cannot prove is this command.
+4. The exact Linear read/save operations bound to a pending immutable archive/recovery request, with checked issue/document ID and expected payload digest. This exception does not allow general provider edits. If nested tool calls conceal those arguments, use an observable direct call or retain the data.
 
 A sealed maintenance binding permits only the exact archive export/read-back/verify/cleanup operations for its pending request, plus explicit rebind. It cannot read arbitrary task notes or resume product actions; reopen first. A new-issue session may collect an older issue only with an explicit maintenance assignment and the same checks. This avoids keeping a payload participant live merely to finish its archival.
 

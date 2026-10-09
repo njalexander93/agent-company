@@ -124,6 +124,9 @@ two shared settings/recommendation files.
 
 ## Checks
 
+Use the [testing standards](testing.md) for classification, assertion quality,
+native scenarios, per-function obligations, and coverage exceptions.
+
 | Command | Checks |
 | --- | --- |
 | `make` or `make help` | List development commands without changing files. |
@@ -134,6 +137,7 @@ two shared settings/recommendation files.
 | `make type-check` | Mypy on production code under `src/agent_company/`. |
 | `make test-unit` | Run `tests/unit` without imposing aggregate coverage on the subset. |
 | `make test-integration` | Run `tests/integration` without a subset coverage gate. |
+| `poetry run python scripts/dev.py test-tooling --evidence-dir OUT` | Collect validation-tool coverage separately from production coverage. |
 | `make test` | Pytest, branch-aware coverage and the configured 80% coverage floor. |
 | `make check-local` | Configuration, formatting, lint, types and all tests on this OS; save coverage for combination. |
 | `make check` or `make ci` | Strict single-run checks, including the whole-package 80% coverage floor. |
@@ -158,8 +162,10 @@ coverage can fall below 80% even when every applicable test passes. The strict
 other platform's code. Acceptance requires successful native Windows and Linux
 runs from the same unchanged commit, then
 `poetry run python scripts/combine_coverage.py <artifact-directory> --output-dir <output>`.
-The combination verifies the source revision, clean start/end state and successful
-test results. The combining checkout must also remain clean and unchanged while
+The combination requires separate unit and integration records from each OS. It
+verifies the source revision, clean start/end state, pinned tools, configuration,
+child instrumentation, real branch databases, successful collection/outcomes and
+artifact hashes. The combining checkout must also remain clean and unchanged while
 applying the configured 80% floor to the complete package.
 It preserves each platform's original data and coverage context.
 

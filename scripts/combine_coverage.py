@@ -1,6 +1,8 @@
 """Combine successful Windows and Linux evidence at the configured coverage floor."""
 
 import argparse
+import hashlib
+import importlib.metadata
 import json
 import os
 import sys
@@ -11,6 +13,7 @@ from coverage import Coverage
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from scripts import dev  # noqa: E402
+from scripts.coverage_evidence import valid_matrix  # noqa: E402
 
 
 def verified_inputs(directory: Path, sha: str, tracked_digest: str) -> list[str]:
@@ -98,7 +101,18 @@ def main() -> int:
     initial = dev.checkout_state()
     if initial["status"]:
         raise ValueError("Combining checkout must be clean")
-    inputs = verified_inputs(args.artifacts.resolve(), initial["sha"], initial["tracked_digest"])
+    records = valid_matrix(
+        args.artifacts.resolve(),
+        sha=initial["sha"],
+        tracked_digest=initial["tracked_digest"],
+        config_digest=hashlib.sha256((ROOT / "pyproject.toml").read_bytes()).hexdigest(),
+        tool_versions={
+            name: importlib.metadata.version(name) for name in ("coverage", "pytest", "pytest-cov")
+        },
+        systems={"Windows", "Linux"},
+        allow_full=True,
+    )
+    inputs = [str(path) for path in records.values()]
     output = args.output_dir.resolve()
     output.mkdir(parents=True, exist_ok=True)
     coverage = Coverage(
@@ -110,6 +124,8 @@ def main() -> int:
     coverage.xml_report(outfile=str(output / "coverage.xml"))
     coverage.json_report(outfile=str(output / "coverage.json"), show_contexts=True)
     floor = coverage.get_option("report:fail_under")
+    if not isinstance(floor, (int, float)) or isinstance(floor, bool):
+        raise ValueError("Coverage floor must be numeric")
     final = dev.checkout_state()
     unchanged = initial == final
     result = {

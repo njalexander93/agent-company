@@ -11,6 +11,7 @@ Public framework rules, authoring references, examples, fixtures and runtime gui
 | Create or update a pull request | [PR preparation and verification](runtime/contributor-workflow.md#pr-preparation-and-verification) | Title, exact repository template, evidence, current required checks and published read-back. |
 | Set up a contributor checkout or local commit checks | [Runtime contract](runtime/CONTEXT.md#setup) | Environment setup, editor and check commands. |
 | Diagnose pull-request checks or reproduce PR checks | [PR pre-merge checks](runtime/pr-checks.md) | Five checks, native suites, coverage, evidence and retries; branch enforcement remains a separate human-owned step. |
+| Write or review repository tests | [Testing standards](runtime/testing.md) | Test boundaries, behavioral assertions, native cases, coverage obligations, evidence and exceptions. |
 | Configure or inspect a native host hook | [Runtime contract](runtime/CONTEXT.md#host-protocol) | The selected host protocol and its limitations. |
 | Change or use task-workspace lifecycle behavior | [Runtime contract](runtime/CONTEXT.md#lifecycle) | The affected contract and usage sections. |
 | Change a shared framework rule or Role placement | [Framework contract](framework/CONTEXT.md) | The named rule, team and affected Role entry. |

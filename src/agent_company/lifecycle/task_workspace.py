@@ -1656,7 +1656,7 @@ def operate(store: Store, issue: Issue, request: JSONObject) -> JSONObject:
         }
     # Read the existing session binding; never infer it from the prompt.
     binding = store.binding()
-    if operation in {"create", "adopt", "attach", "resume", "bind"}:
+    if operation in {"create", "adopt", "attach", "resume", "bind", "join"}:
         require(not binding or binding["issue_id"] == issue.id, "BINDING_CONFLICT")
     # Require explicit adoption for existing payloads and explicit creation for absent ones.
     if not state:
@@ -1774,6 +1774,70 @@ def operate(store: Store, issue: Issue, request: JSONObject) -> JSONObject:
         return issue.commit(state, observed, request, {}, "reconciliation")
     files = issue.files()
     store.view(issue.id)
+    if operation == "join":
+        # A verified-ticket startup may attach a new Codex session as a reader.
+        # The core chooses the complete packet; callers cannot provide source
+        # locators, ownership, or a replacement coordinator through this route.
+        require(
+            set(request)
+            <= {
+                "schema_version",
+                "request_id",
+                "operation",
+                "worktree",
+                "host",
+                "session_id",
+                "repo_id",
+                "issue_id",
+                "issue_uuid",
+                "expected_revision",
+                "binding_generation",
+            },
+            "INVALID_REQUEST",
+        )
+        require(request.get("issue_uuid") == state["issue_uuid"], "ISSUE_MISMATCH")
+        require(request["host"] == "codex" and key != state["coordinator"], "NOT_OWNER")
+        expected(state, request)
+        require(
+            state["disposition"] not in TERMINAL and state["storage"] == "present",
+            "RECOVERY_REQUIRED",
+        )
+        join_packet: list[SourceRef] = [
+            {
+                "id": "roadmap",
+                "locator": "roadmap.md",
+                "sha256": state["files"]["roadmap.md"],
+                "required": True,
+                "authority": "task-workspace",
+                "reason": "issue-resume",
+                "stage": "planning",
+                "reader": key,
+            }
+        ]
+        join_existing = state["participants"].get(key)
+        if join_existing:
+            join_previous = join_existing["packet"]
+            require(
+                binding and binding["binding_generation"] == request.get("binding_generation"),
+                "BINDING_MISSING",
+            )
+            require(
+                join_previous is not None
+                and len(join_previous) == 1
+                and join_previous[0] == {**join_packet[0], "sha256": join_previous[0]["sha256"]}
+                and state.get("assignments", {}).get(key) == {"packet": join_previous}
+                and key not in state["owners"].values(),
+                "SCOPE_MISSING",
+            )
+            join_existing.update({"packet": join_packet, "ack": None})
+        else:
+            require(key not in state.get("assignments", {}), "SCOPE_MISSING")
+        state.setdefault("assignments", {})[key] = {"packet": join_packet}
+        result = attach(state, request)
+        result = issue.commit(state, files, request, result, "attach")
+        store.view(issue.id)
+        store.save_binding(issue.committed_state(), key)
+        return result
     if operation in {"create", "attach", "resume", "bind"}:
         result = attach(state, request)
         # Publish this lifecycle result through the recoverable transaction.
@@ -2331,6 +2395,9 @@ def rebind(store: Store, request: JSONObject) -> JSONObject:
             store.view(new_id)
             # Persist the committed participant generation for this worktree.
             store.save_binding(new.committed_state(), key)
+            assignment = key + ".assignment.json"
+            if store.bindings.exists(assignment):
+                store.bindings.put(assignment, {"issue_id": new_id})
             previous_result: JSONObject = previous["result"]
             return previous_result
         result = attach(new_state_value, target_request)
