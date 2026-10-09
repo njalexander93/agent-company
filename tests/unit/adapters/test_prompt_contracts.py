@@ -407,7 +407,125 @@ def test_ticket_lookup_keeps_attempt_marker_when_startup_fails(
     with pytest.raises(core.WorkspaceError) as captured:
         codex.ticket_lookup({**event, "tool_response": provider}, complete=True)
     assert captured.value.code == "SOURCE_STALE"
-    assert key + ".lookup.json" in data[BINDINGS]
+    assert data[BINDINGS][key + ".lookup.json"] == {
+        "id": "AGENT-30",
+        "tool_id": "tool-1",
+        "completed": True,
+    }
+    assert key + ".lookup-required.json" in data[BINDINGS]
+
+
+def test_ticket_lookup_retries_completed_startup_with_same_tool_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A verified read may resume startup without a second provider admission."""
+    data, key = lookup_setup(monkeypatch)
+    event = lookup_event()
+    provider = {
+        "isError": False,
+        "content": [{"type": "text", "text": '{"id":"AGENT-30","uuid":"verified-uuid"}'}],
+    }
+    assert codex.ticket_lookup(event) == {}
+    starts: list[object] = []
+
+    def start(_event: object, verified: object) -> dict[str, str]:
+        """Fail once after ticket verification, then finish the same startup."""
+        starts.append(verified)
+        if len(starts) == 1:
+            raise core.WorkspaceError("SOURCE_STALE")
+        return {"participant_id": "owner", "coordinator": "owner"}
+
+    monkeypatch.setattr(codex.startup, "start", start)
+    with pytest.raises(core.WorkspaceError, match="SOURCE_STALE"):
+        codex.ticket_lookup({**event, "tool_response": provider}, complete=True)
+    completed = {"id": "AGENT-30", "tool_id": "tool-1", "completed": True}
+    assert data[BINDINGS][key + ".lookup.json"] == completed
+    assert codex.ticket_lookup(event) == {}
+    assert data[BINDINGS][key + ".lookup.json"] == completed
+    result = codex.ticket_lookup({**event, "tool_response": provider}, complete=True)
+    assert "TASK_WORKSPACE_READY" in result["systemMessage"]
+    assert len(starts) == 2
+    assert key + ".lookup.json" not in data[BINDINGS]
+    assert key + ".lookup-required.json" not in data[BINDINGS]
+    assert data[BINDINGS][key + ".assignment.json"] == {"issue_id": "AGENT-30"}
+
+
+def test_ticket_lookup_replaces_completed_failure_with_fresh_exact_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A fresh tool ID supersedes only a completed attempt for the same issue."""
+    data, key = lookup_setup(monkeypatch)
+    event = lookup_event()
+    fresh = lookup_event(tool_use_id="tool-2")
+    provider = {
+        "isError": False,
+        "content": [{"type": "text", "text": '{"id":"AGENT-30","uuid":"verified-uuid"}'}],
+    }
+    assert codex.ticket_lookup(event) == {}
+    monkeypatch.setattr(
+        codex.startup,
+        "start",
+        lambda *_args: (_ for _ in ()).throw(core.WorkspaceError("SOURCE_STALE")),
+    )
+    with pytest.raises(core.WorkspaceError, match="SOURCE_STALE"):
+        codex.ticket_lookup({**event, "tool_response": provider}, complete=True)
+    assert codex.ticket_lookup(fresh) == {}
+    assert data[BINDINGS][key + ".lookup.json"] == {"id": "AGENT-30", "tool_id": "tool-2"}
+    with pytest.raises(core.WorkspaceError, match="BINDING_CONFLICT"):
+        codex.ticket_lookup({**event, "tool_response": provider}, complete=True)
+    assert data[BINDINGS][key + ".lookup.json"] == {"id": "AGENT-30", "tool_id": "tool-2"}
+    with pytest.raises(core.WorkspaceError, match="BINDING_CONFLICT"):
+        codex.ticket_lookup(event)
+    monkeypatch.setattr(
+        codex.startup,
+        "start",
+        lambda *_args: {"participant_id": "owner", "coordinator": "owner"},
+    )
+    result = codex.ticket_lookup({**fresh, "tool_response": provider}, complete=True)
+    assert "TASK_WORKSPACE_READY" in result["systemMessage"]
+    assert key + ".lookup.json" not in data[BINDINGS]
+    assert key + ".lookup-required.json" not in data[BINDINGS]
+
+
+def test_ticket_lookup_rejects_corrupt_completed_marker_without_replacement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only the exact completed issue and string tool ID authorize replacement."""
+    data, key = lookup_setup(monkeypatch)
+    name = key + ".lookup.json"
+    for corrupt in (
+        {"id": "AGENT-31", "tool_id": "tool-1", "completed": True},
+        {"id": "AGENT-30", "tool_id": 7, "completed": True},
+        {"id": "AGENT-30", "tool_id": "tool-1", "completed": "yes"},
+    ):
+        data[BINDINGS][name] = corrupt
+        with pytest.raises(core.WorkspaceError, match="BINDING_CONFLICT"):
+            codex.ticket_lookup(lookup_event(tool_use_id="tool-2"))
+        assert data[BINDINGS][name] == corrupt
+
+
+def test_ticket_lookup_failed_startup_preserves_a_newer_lookup_marker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An old completion cannot mark a replacement lookup as completed."""
+    data, key = lookup_setup(monkeypatch)
+    event = lookup_event()
+    provider = {
+        "isError": False,
+        "content": [{"type": "text", "text": '{"id":"AGENT-30","uuid":"verified-uuid"}'}],
+    }
+    assert codex.ticket_lookup(event) == {}
+    replacement = {"id": "AGENT-30", "tool_id": "tool-2"}
+
+    def interrupted_start(*_args: object) -> None:
+        """Model a replacement written after the old completion released its lock."""
+        data[BINDINGS][key + ".lookup.json"] = replacement
+        raise core.WorkspaceError("SOURCE_STALE")
+
+    monkeypatch.setattr(codex.startup, "start", interrupted_start)
+    with pytest.raises(core.WorkspaceError, match="SOURCE_STALE"):
+        codex.ticket_lookup({**event, "tool_response": provider}, complete=True)
+    assert data[BINDINGS][key + ".lookup.json"] == replacement
     assert key + ".lookup-required.json" in data[BINDINGS]
 
 

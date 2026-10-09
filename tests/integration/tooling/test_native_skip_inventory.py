@@ -14,6 +14,8 @@ from tests.support import ROOT
 pytestmark = pytest.mark.integration
 
 SELECTORS = (
+    "tests/unit/lifecycle/test_posix_contracts.py",
+    "tests/unit/lifecycle/test_posix_failures.py",
     "tests/integration/adapters/test_platform_processes.py::"
     "test_windows_bootstrap_survives_literal_paths_and_json",
     "tests/integration/lifecycle/test_filesystem.py::test_windows_noncanonical_roots_are_rejected",
@@ -49,6 +51,6 @@ def test_parameterized_native_skip_ledger_matches_collection(tmp_path: Path) -> 
     actual = {item["nodeid"] for item in collected}
     approved = {nodeid for nodeid in APPROVED_NATIVE_SKIPS if nodeid.startswith(SELECTORS)}
     assert actual == approved
-    assert len(actual) == 8
+    assert len(actual) == 35
     for item in collected:
         assert item["skip_reasons"] == [APPROVED_NATIVE_SKIPS[item["nodeid"]][1]]

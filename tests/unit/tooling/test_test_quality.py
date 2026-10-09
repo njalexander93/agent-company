@@ -481,8 +481,8 @@ def test_native_inspection_collects_all_defects_before_repair(
     with pytest.raises(ValueError, match="invalid receipt") as error:
         quality.inspect_native(native, identity)
     assert len(visited) == 6
-    assert "Darwin/unit" in str(error.value)
-    assert "Windows/integration" in str(error.value)
+    assert str(Path("Darwin") / "unit") in str(error.value)
+    assert str(Path("Windows") / "integration") in str(error.value)
     defects.clear()
     records = quality.inspect_native(native, identity)
     assert len(records) == 6

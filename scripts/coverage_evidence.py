@@ -110,8 +110,39 @@ WINDOWS_UNIT_NODES = (
     "tests/unit/lifecycle/test_windows_security.py::test_sid_text_rejects_conversion_failure_without_free",
     "tests/unit/lifecycle/test_windows_security.py::test_token_sid_rejects_token_open_failure_without_close",
 )
+POSIX_UNIT_NODES = (
+    "tests/unit/lifecycle/test_posix_contracts.py::test_absolute_walks_components_without_following_and_closes_previous",
+    "tests/unit/lifecycle/test_posix_contracts.py::test_absolute_closes_active_descriptor_after_component_failure",
+    "tests/unit/lifecycle/test_posix_contracts.py::test_child_creation_flushes_parent_and_uses_nofollow_open",
+    "tests/unit/lifecycle/test_posix_contracts.py::test_read_rejects_oversized_file_before_byte_read_and_closes",
+    "tests/unit/lifecycle/test_posix_contracts.py::test_unlink_flushes_parent_after_deletion",
+    "tests/unit/lifecycle/test_posix_contracts.py::test_rename_refuses_occupied_quarantine_before_open_or_move",
+    "tests/unit/lifecycle/test_posix_contracts.py::test_issue_view_creates_exact_link_and_flushes_before_validation",
+    "tests/unit/lifecycle/test_posix_contracts.py::test_write_cleans_unpublished_temp_after_replace_failure",
+    "tests/unit/lifecycle/test_posix_contracts.py::test_lock_rejects_unsafe_existing_lock_and_releases_descriptor",
+    "tests/unit/lifecycle/test_posix_contracts.py::test_directory_context_and_names_use_owned_descriptor",
+    "tests/unit/lifecycle/test_posix_contracts.py::test_read_returns_exact_bounded_owned_regular_file",
+    "tests/unit/lifecycle/test_posix_contracts.py::test_rmdir_validates_direct_child_then_flushes_parent",
+    "tests/unit/lifecycle/test_posix_contracts.py::test_lock_creates_private_persistent_file_and_releases_after_body",
+    "tests/unit/lifecycle/test_posix_contracts.py::test_rename_directory_validates_source_then_flushes_both_parents",
+    "tests/unit/lifecycle/test_posix_contracts.py::test_exists_reports_present_direct_entry_without_following_symlink",
+    "tests/unit/lifecycle/test_posix_contracts.py::test_child_reuses_existing_private_directory_after_create_race",
+    "tests/unit/lifecycle/test_posix_contracts.py::test_write_publishes_staged_bytes_then_flushes_directory",
+    "tests/unit/lifecycle/test_posix_contracts.py::test_lock_retries_blocked_flock_then_enters_with_same_descriptor",
+    "tests/unit/lifecycle/test_posix_contracts.py::test_issue_view_validates_racing_existing_exact_link",
+    "tests/unit/lifecycle/test_posix_contracts.py::test_child_without_create_never_attempts_mkdir_or_parent_flush",
+    "tests/unit/lifecycle/test_posix_contracts.py::test_lock_reports_busy_when_existing_file_disappears_until_deadline",
+    "tests/unit/lifecycle/test_posix_failures.py::test_directory_constructor_closes_unsafe_fd",
+    "tests/unit/lifecycle/test_posix_failures.py::test_absolute_rejects_relative_or_parent_path_before_open",
+    "tests/unit/lifecycle/test_posix_failures.py::test_exists_reports_absent_entry_without_following_link",
+    "tests/unit/lifecycle/test_posix_failures.py::test_read_rejects_unsafe_file_and_closes_handle",
+    "tests/unit/lifecycle/test_posix_failures.py::test_write_refuses_unsafe_existing_target_before_temp_creation",
+    "tests/unit/lifecycle/test_posix_failures.py::test_issue_view_rejects_existing_link_to_different_target",
+)
+POSIX_UNIT_REASON = "POSIX fcntl and descriptor APIs are unavailable on Windows"
 WINDOWS_UNIT_REASON = "Windows native CreateFileW and NTFS handle APIs are unavailable on POSIX"
 APPROVED_NATIVE_SKIPS: dict[str, tuple[set[str], str]] = {
+    **{node: ({"Windows"}, POSIX_UNIT_REASON) for node in POSIX_UNIT_NODES},
     **{node: ({"Linux", "Darwin"}, WINDOWS_UNIT_REASON) for node in WINDOWS_UNIT_NODES},
     **{
         "tests/integration/adapters/test_platform_processes.py::"

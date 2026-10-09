@@ -77,8 +77,8 @@ def test_quality_retains_multiple_failures_and_independent_results(
         ("analysis_budget", "passed"),
     ]
     native = next(row for row in report["results"] if row["name"] == "native_evidence")
-    assert "Linux/unit" in native["detail"]
-    assert "Windows/integration" in native["detail"]
+    assert str(Path("Linux") / "unit") in native["detail"]
+    assert str(Path("Windows") / "integration") in native["detail"]
 
 
 @pytest.mark.parametrize("defect", ["survivor", "syntax", "stale"])

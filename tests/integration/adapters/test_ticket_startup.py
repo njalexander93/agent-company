@@ -374,6 +374,53 @@ def test_completion_retry_after_partial_setup_preserves_correlation(
     assert "TASK_WORKSPACE_READY" in codex.handle(completed)["systemMessage"]
 
 
+def test_new_lookup_after_partial_setup_failure_preserves_ticket_gate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A completed ticket read can be retried with a new tool ID after setup fails."""
+    root = repository(tmp_path)
+    codex.handle(event(root, "UserPromptSubmit", prompt="Task: TEST-1"))
+    original = startup._call
+    failed_once = False
+
+    def fail_once(request: dict[str, object]) -> dict[str, object]:
+        nonlocal failed_once
+        if request["operation"] == "scope" and not failed_once:
+            failed_once = True
+            raise core.WorkspaceError("BUSY")
+        return original(request)
+
+    monkeypatch.setattr(startup, "_call", fail_once)
+    first = {
+        "tool_name": "mcp__codex_apps__linear_get_issue",
+        "tool_input": {"id": "TEST-1"},
+        "tool_use_id": "lookup-1",
+    }
+    assert codex.handle(event(root, "PreToolUse", **first)) == {}
+    competing = {**first, "tool_use_id": "lookup-2"}
+    assert "BINDING_CONFLICT" in str(codex.handle(event(root, "PreToolUse", **competing)))
+    assert (
+        "BUSY"
+        in codex.handle(event(root, "PostToolUse", tool_response=ticket_response(), **first))[
+            "systemMessage"
+        ]
+    )
+    wrong_issue = {**first, "tool_input": {"id": "OTHER-2"}, "tool_use_id": "other-issue"}
+    assert "BINDING_CONFLICT" in str(codex.handle(event(root, "PreToolUse", **wrong_issue)))
+    with pytest.raises(core.WorkspaceError, match="BINDING_MISSING"):
+        codex.handle(event(root, "PreToolUse", session_id="other", **first))
+
+    blocked = codex.handle(
+        event(root, "PreToolUse", tool_name="Read", tool_input={}, tool_use_id="ordinary")
+    )
+    assert "TICKET_READ_REQUIRED" in str(blocked)
+    second = {**first, "tool_use_id": "lookup-2"}
+    assert codex.handle(event(root, "PreToolUse", **second)) == {}
+    completed = codex.handle(event(root, "PostToolUse", tool_response=ticket_response(), **second))
+    assert "TASK_WORKSPACE_READY" in completed["systemMessage"]
+
+
 def test_linked_checkout_supplies_governing_sources(tmp_path: Path) -> None:
     """Task bytes come from main; governing files come from the selected checkout."""
     main = repository(tmp_path)
@@ -381,7 +428,10 @@ def test_linked_checkout_supplies_governing_sources(tmp_path: Path) -> None:
     subprocess.run(
         ["git", "-C", str(main), "worktree", "add", "-q", "-b", "other", str(other)], check=True
     )
-    (other / "AGENTS.md").write_text("# Selected checkout rules\n")
+    # Governing bytes must satisfy the same owned, no-follow file policy as startup.
+    with core.Directory.absolute(other) as selected:
+        selected.write("AGENTS.md", b"# Selected checkout rules\n")
+        assert selected.read("AGENTS.md") == b"# Selected checkout rules\n"
     codex.handle(event(other, "UserPromptSubmit", prompt="Task: TEST-1"))
     assert "TASK_WORKSPACE_READY" in lookup(other, "master", ticket_response())["systemMessage"]
     request = common.request_for(event(other, "SessionStart"), "read", "codex")

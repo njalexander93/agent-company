@@ -161,9 +161,9 @@ def test_run_command_reports_start_failure_and_keeps_diagnostic(
     log = tmp_path / "start.log" if with_log else None
     assert dev.run_command([str(tmp_path / "does-not-exist")], {}, log) == 127
     error = capsys.readouterr().err
-    assert "does-not-exist" in error
+    assert ("[WinError 2]" if os.name == "nt" else "[Errno 2]") in error
     if log:
-        assert "does-not-exist" in log.read_text()
+        assert log.read_text() == error
 
 
 def test_main_help_clean_and_argument_rejection_have_no_child_command(

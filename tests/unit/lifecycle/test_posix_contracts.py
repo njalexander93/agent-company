@@ -10,10 +10,20 @@ from types import SimpleNamespace
 
 import pytest
 
-from agent_company.lifecycle import _filesystem_posix as posix
 from agent_company.lifecycle._errors import WorkspaceError
 
-pytestmark = pytest.mark.unit
+if os.name == "posix":
+    from agent_company.lifecycle import _filesystem_posix as posix
+else:
+    posix = None
+
+pytestmark = [
+    pytest.mark.unit,
+    pytest.mark.skipif(
+        os.name != "posix",
+        reason="POSIX fcntl and descriptor APIs are unavailable on Windows",
+    ),
+]
 
 
 def directory(fd: int = 10) -> posix.Directory:

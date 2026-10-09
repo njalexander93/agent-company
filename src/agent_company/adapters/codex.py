@@ -243,18 +243,31 @@ def ticket_lookup(event: core.JSONObject, complete: bool = False) -> core.JSONOb
             raise core.WorkspaceError("BINDING_CONFLICT")
         tool_id = core.token(event["tool_use_id"])
         name = key + ".lookup.json"
+        correlation = {"id": identifier, "tool_id": tool_id}
         if not complete:
             if bindings.exists(name):
+                previous = bindings.json(name)
                 core.require(
-                    bindings.json(name) == {"id": identifier, "tool_id": tool_id},
+                    previous == correlation
+                    or previous == {**correlation, "completed": True}
+                    or (
+                        isinstance(previous, dict)
+                        and set(previous) == {"id", "tool_id", "completed"}
+                        and previous["id"] == identifier
+                        and previous["completed"] is True
+                        and isinstance(previous["tool_id"], str)
+                    ),
                     "BINDING_CONFLICT",
                 )
+                if previous.get("completed") is True and previous.get("tool_id") != tool_id:
+                    bindings.put(name, correlation)
             else:
-                bindings.put(name, {"id": identifier, "tool_id": tool_id})
+                bindings.put(name, correlation)
             return {}
         core.require(bindings.exists(name), "BINDING_MISSING")
         core.require(
-            bindings.json(name) == {"id": identifier, "tool_id": tool_id}, "BINDING_CONFLICT"
+            bindings.json(name) in (correlation, {**correlation, "completed": True}),
+            "BINDING_CONFLICT",
         )
     try:
         response = event.get("tool_response")
@@ -273,7 +286,20 @@ def ticket_lookup(event: core.JSONObject, complete: bool = False) -> core.JSONOb
         ):
             bindings.unlink(name)
         raise
-    ready = startup.start(event, verified)
+    try:
+        ready = startup.start(event, verified)
+    except Exception:
+        # The provider call has completed. Preserve same-ID completion retry while
+        # allowing a fresh, exact lookup if partial workspace setup failed.
+        with (
+            core.Directory.absolute(root) as directory,
+            directory.child(".task") as task,
+            task.child(".bindings") as bindings,
+            bindings.lock("assignment.lock"),
+        ):
+            if bindings.json(name) == correlation:
+                bindings.put(name, {**correlation, "completed": True})
+        raise
     with (
         core.Directory.absolute(root) as directory,
         directory.child(".task") as task,
