@@ -1196,6 +1196,59 @@ def validate_packet(packet: list[SourceRef]) -> list[SourceRef]:
     return packet
 
 
+def refresh_roadmap_reference(state: WorkspaceState, key: str, digest: str) -> None:
+    """Move the coordinator's own roadmap reference to newly staged roadmap bytes.
+
+    Only references whose locator is ``roadmap.md`` in the coordinator's participant
+    packet and stored assignment change. Other references, other participants and
+    reader packets stay untouched. A changed packet clears acknowledgment so readiness
+    needs a new ``read``, exact-digest ``acknowledge`` and ``ready``.
+
+    Args:
+        state: Staged issue control state for the committing ``update``.
+        key: Coordinator participant key that owns ``roadmap.md``.
+        digest: SHA-256 digest of the staged roadmap bytes.
+    """
+    # Locate the coordinator's packet; an unscoped coordinator has nothing to refresh.
+    participant = state["participants"].get(key)
+    if participant is None or participant["packet"] is None:
+        return
+    # Point the packet's roadmap references at the new bytes.
+    packet = roadmap_refreshed(participant["packet"], digest)
+    # Leave readiness intact when no recorded roadmap digest changed.
+    if packet == participant["packet"]:
+        return
+    # Keep the stored assignment's roadmap reference on the same committed digest.
+    assignment = state.get("assignments", {}).get(key)
+    if assignment is not None:
+        assignment["packet"] = roadmap_refreshed(assignment["packet"], digest)
+    # Invalidate acknowledgment without reviving a detached participant generation.
+    participant.update({"packet": packet, "ack": None})
+    if participant["status"] != "detached":
+        participant["status"] = "attached"
+
+
+def roadmap_refreshed(packet: list[SourceRef], digest: str) -> list[SourceRef]:
+    """Copy a packet with every ``roadmap.md`` reference set to one digest.
+
+    Args:
+        packet: Assigned source references to copy.
+        digest: SHA-256 digest of the committed roadmap bytes.
+
+    Returns:
+        A new packet list; non-roadmap references are copied unchanged.
+    """
+    # Copy each reference so the caller's committed packet is never mutated in place.
+    refreshed: list[SourceRef] = []
+    for ref in packet:
+        copy_ref = ref.copy()
+        # Replace the digest only for the managed roadmap locator.
+        if copy_ref["locator"] == "roadmap.md":
+            copy_ref["sha256"] = digest
+        refreshed.append(copy_ref)
+    return refreshed
+
+
 def packet_reads(
     state: WorkspaceState, participant: Participant, files: PayloadFiles
 ) -> list[SourceAvailability]:
@@ -2107,6 +2160,10 @@ def operate(store: Store, issue: Issue, request: JSONObject) -> JSONObject:
         token(provenance["status"])
         state["provenance"][path] = {**provenance, "author": key, "supersedes": state["revision"]}
         files[path] = data
+        # Keep the coordinator's own roadmap reference on the committed bytes and
+        # require a fresh read, acknowledgment and readiness at the new revision.
+        if path == "roadmap.md" and key == state["coordinator"]:
+            refresh_roadmap_reference(state, key, sha(data))
     # Retain the bounded handoff record and evidence before marking a submitted PR in review.
     elif operation == "checkpoint":
         checkpoint = request["checkpoint"]

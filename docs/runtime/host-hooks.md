@@ -65,7 +65,12 @@ local lifecycle integration, not proposal approval.
    through the runtime's supported provider integration. The adapter admits this
    narrow read before readiness and verifies its native completion. See
    [ticket-read protocols](#ticket-read-protocols). A new Task line fences ordinary
-   tools even when the session was previously ready.
+   tools even when the session was previously ready. While that read is pending,
+   Claude Code also admits a read-only preparation phase: `ToolSearch` loading
+   only configured `get_issue` schemas, and `Read` or a plain `cat` of exactly
+   `<checkout>/docs/runtime/contributor-workflow.md` or `<checkout>/AGENTS.md`.
+   These calls get no lifecycle decision and write nothing, so the selected
+   ticket read remains the first issue-provider operation.
 4. Recover with `agent_company.adapters.common.bootstrap_command(request, host)`
    from the intended worktree's Poetry environment. On POSIX and Claude's Bash
    tool it emits the exact `shlex.join` lifecycle invocation. Native Windows
@@ -74,13 +79,20 @@ local lifecycle integration, not proposal approval.
    between Windows PowerShell 5.1 and PowerShell 7. The decoded request uses the
    same lifecycle implementation and checks. Include the adapter's host value and
    actual session identity. Claude uses `session_id`; Cursor uses
-   `conversation_id` as lifecycle `session_id`.
+   `conversation_id` as lifecycle `session_id`. An unready session may run
+   `diagnose` in its pre-registration shape, or in its issue-level shape with
+   `repo_id`, `issue_id` and optional `binding_generation` for the issue in its
+   recorded assignment. Both shapes are read-only and accept no other fields.
 5. A successful matching issue-read completion invokes the shared startup orchestrator. It derives the
    main worktree from Git, registers or resumes, creates a new issue with the observed
    master as coordinator, installs an initial reader packet, reads its source bytes,
    acknowledges the exact digest and verifies `ready`. Existing roadmap bytes,
-   coordinator and packet survive repeated starts. A coordinator's committed roadmap
-   update refreshes only that owned packet reference; out-of-band edits remain conflicts.
+   coordinator and packet survive repeated starts. The core `update` that commits a
+   coordinator's `roadmap.md` moves only that coordinator's own `roadmap.md` packet
+   reference to the committed digest and clears its acknowledgment. The coordinator
+   then runs the admitted `read` and `acknowledge` bootstrap commands; the next
+   covered tool verifies readiness. Reader packets are unchanged. Out-of-band edits
+   remain conflicts.
    Governing files come from the selected checkout; task bytes come from the main
    worktree's canonical issue directory. A new session without an assignment
    joins as a roadmap-only reader; it cannot replace another coordinator or edit
@@ -143,8 +155,16 @@ was observed reporting `sdk` for its Linear connector; the other two are
 documented remote configuration sources in [Anthropic's provenance contract](https://code.claude.com/docs/en/agent-sdk/typescript#mcpserverprovenance).
 Missing or other provenance remains unsupported. The exact-ticket argument,
 native call correlation, provider response validation and startup readiness
-checks still apply. Other tools, including `ToolSearch`, gain no blanket
-exception. This does not add support for cloud/Cowork workspaces.
+checks still apply. Before that read, `ToolSearch` has only a narrow
+preparation exception: a `select:` query naming nothing but configured
+`get_issue` tools (`mcp__linear__get_issue`, `mcp__linear-server__get_issue` or
+the mapped connector's), or a keyword query of at most 128 letters, digits,
+spaces, `_`, `+` or `-` that contains `get_issue`. A `Read` or `Bash` call
+qualifies only when it names exactly `<checkout>/docs/runtime/contributor-workflow.md`
+or `<checkout>/AGENTS.md`; the comparison is lexical, no path entry may be a
+symbolic link or junction, and `Bash` must split to exactly `cat` plus that
+literal path. Everything else stays denied until the ticket read. This does not
+add support for cloud/Cowork workspaces.
 
 For a successful Claude `PostToolUse`, Desktop can supply `tool_response` as a
 content-block list. The adapter restores its success envelope before invoking
@@ -248,13 +268,14 @@ These rules are implemented in `adapters/common.py`, `adapters/claude.py`, and `
 | Boundary | Claude Code | Cursor Agent |
 | --- | --- | --- |
 | Identity | Exact native session ID; reject child markers | Exact conversation ID; require any session ID to match; one workspace root |
-| Ordinary tools | Read, Write, Edit, Glob, Grep, NotebookEdit; foreground Bash under the setting above | Read, Write, Edit, Grep, Delete; Shell with supported foreground arguments |
+| Ordinary tools | Read, Write, Edit, Glob, Grep, NotebookEdit; foreground Bash under the setting above. `ToolSearch` and `Skill` are readiness-checked no-effect operations with no pending entry; a tool they surface is evaluated on its own call | Read, Write, Edit, Grep, Delete; Shell with supported foreground arguments |
+| Linear provider after readiness | Configured connector only (same server name and `mcp_server.source` checks as the ticket read): `get_issue` (any ID), `get_user`, `list_users`, `list_issue_statuses`, `list_comments`, `save_issue`, `save_comment`. Each call is pending work under its native `tool_use_id`, settled by `PostToolUse` (any non-null `tool_response`, including Desktop's content-block list) or `PostToolUseFailure` | No native provider admission; `MCP:` tools are denied |
 | Ticket-first startup | Exact configured Linear issue read before readiness; matching native completion runs shared startup | Exact Linear issue read with generic call-ID and MCP server checks before shared startup |
 | Admission | Deny on failed readiness outside the ticket-read/recovery exceptions; otherwise preserve native permission decisions | Allow only the particular validated ticket-read, recovery or ordinary tool call |
 | File-tool completion | Supported success/failure event and required payload settle the observed call | Same; native failure type is checked |
 | Shell completion | Successful Bash result with string stdout/stderr, `interrupted: false`, and no async markers | Successful Shell result with integer `exitCode` and no async markers |
 | Ambiguous shell result/failure | Retain pending operation and report recovery | Same; booleans are not exit codes |
-| Child/provider/background tools | Deny unsupported tool names and observed child/background identities | Same; `subagentStart` also denies; remote sessions denied |
+| Child/provider/background tools | Deny unsupported tool names, unconfigured servers, other provider operations (including document/archive operations) and observed child/background identities | Same; `subagentStart` also denies; remote sessions denied |
 | Session start | Advisory recovery/readiness context; no readiness grant | Advisory context only |
 | Compaction | PreCompact/PostCompact observations only; no context or decision output | Advisory context only |
 | Stop/session end | Optional observation only | Optional observation only; no automatic follow-up |
@@ -271,6 +292,12 @@ The tool IDs used for pending work are supplied by the host. Generated request U
 transaction identities, never substitutes for missing session or tool IDs. Exact completion retries
 are idempotent. Missing or malformed identity fails admission. No native adapter substitutes
 `codex` for another host, invokes provider writes, settles ambiguous work, or runs cleanup on stop.
+
+The Claude provider allowlist checks the server, provenance and operation name only.
+Field-level rules, such as an assignee equal to the initiating human or the target state
+name, remain in the contributor procedure's read-back rule; provider success is not
+lifecycle authority. Denials name the admitted next operation for their code; see
+[explicit setup](task-workspace-usage.md#explicit-setup-and-bootstrap).
 
 Unsupported MCP/provider routes must use a separately verified provider workflow. No native
 archive-provider coverage is claimed here. Interrupted or ambiguous shell work remains pending:
@@ -314,3 +341,15 @@ The PR's validation evidence identifies the native platforms and exact revision 
 Claude's host-level fail-open cases remain a boundary:
 the wrapper converts process failures to exit 2 and the Python deadline precedes the configured
 host timeout, but an externally killed or timed-out hook is not guaranteed enforcement.
+
+**Unverified fail-open hypothesis.** In the AGENT-32 Desktop session, `save_issue`,
+`list_users` and `list_comments` appeared to complete even though the adapter then denied
+every MCP tool after readiness. The code offers no admitting path for them. The only
+candidate found is host-side: the project hooks use `timeout: 10`, while the runner's
+own deadline is 2 seconds measured inside Python. If launcher start-up, Git and
+interpreter start-up plus lock waits exceed the host timeout, Claude Code discards the
+hook output and lets the `PreToolUse` call proceed unless the hook sets
+`"onFailure": "block"`. This is not established; retain the Desktop hook log or the
+transcript's tool-use IDs before relying on it. The recommended repair is explicit
+`onFailure` handling in the hook definitions, verified on an installed host. This change
+leaves both timeouts unchanged.

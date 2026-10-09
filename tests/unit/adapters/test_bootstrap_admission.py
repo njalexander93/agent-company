@@ -144,6 +144,91 @@ def test_canonical_bootstrap_requires_issue_to_match_persisted_assignment(
     assert opened == [".task", ".bindings", ".task", ".bindings"]
 
 
+class AssignmentDirectory:
+    """Expose one persisted session assignment through a fake directory chain."""
+
+    def __enter__(self) -> AssignmentDirectory:
+        """Hold the modeled opened directory.
+
+        Returns:
+            This directory node.
+        """
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        """Release the modeled directory.
+
+        Args:
+            _args: Context manager exception fields, unused by this fake.
+        """
+
+    def child(self, _name: str) -> AssignmentDirectory:
+        """Return the same node for task and binding traversal.
+
+        Args:
+            _name: Child directory requested by the bootstrap parser.
+
+        Returns:
+            This directory node.
+        """
+        return self
+
+    def json(self, _name: str) -> dict[str, str]:
+        """Return the persisted assignment for the observed session.
+
+        Args:
+            _name: Assignment filename for the actual session.
+
+        Returns:
+            The bound shorthand issue ID.
+        """
+        return {"issue_id": "AGENT-30"}
+
+
+@pytest.mark.parametrize("ready", [False, True])
+def test_canonical_bootstrap_admits_exact_issue_level_diagnose(
+    monkeypatch: pytest.MonkeyPatch, ready: bool
+) -> None:
+    """Admit the read-only issue diagnostic only for the assigned issue and exact shape.
+
+    Args:
+        monkeypatch: Replaces repository and binding access boundaries.
+        ready: Whether ordinary readiness was already established.
+    """
+    # Bind the observed session to AGENT-30 through a persisted assignment.
+    monkeypatch.setattr(common.core, "repository", lambda _path: (CHECKOUT, None, [CHECKOUT]))
+    monkeypatch.setattr(common.core.Directory, "absolute", lambda _path: AssignmentDirectory())
+    event = {"cwd": str(CHECKOUT), "session_id": "session"}
+    issue = {"repo_id": "repo", "issue_id": "AGENT-30"}
+
+    def admitted(request: dict[str, Any]) -> bool:
+        """Evaluate one diagnose request through the canonical command parser.
+
+        Args:
+            request: Lifecycle request encoded into the shell command.
+
+        Returns:
+            Whether the hook would admit the command.
+        """
+        command = common.bootstrap_command(request, "codex")
+        return common.canonical_bootstrap(event, command, "codex", ready=ready)
+
+    # The issue shape with or without the session generation is admitted.
+    assert admitted(base("diagnose", **issue)) is True
+    assert admitted(base("diagnose", **issue, binding_generation=3)) is True
+    # A foreign issue, a partial issue shape, or any extra field stays denied.
+    assert admitted(base("diagnose", repo_id="repo", issue_id="AGENT-31")) is False
+    assert admitted(base("diagnose", issue_id="AGENT-30")) is False
+    for extra in [
+        {"issue_uuid": "uuid"},
+        {"expected_revision": 1},
+        {"main_worktree": str(CHECKOUT)},
+        {"startup": True},
+    ]:
+        # Each field outside the documented diagnostic shape must be rejected.
+        assert admitted(base("diagnose", **issue, **extra)) is False, extra
+
+
 def test_canonical_bootstrap_rejects_foreign_worktree_before_binding_lookup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

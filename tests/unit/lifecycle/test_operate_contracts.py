@@ -2214,3 +2214,62 @@ def test_repeated_unknown_process_observation_does_not_append_event() -> None:
     assert next(iter(issue.state["participants"].values()))["pending"] == {
         "process": {"status": "unknown", "handle": "pid-7"}
     }
+
+
+def source_ref(locator: str, digest: str) -> dict[str, Any]:
+    """Build one required coordinator source reference.
+
+    Args:
+        locator: Managed or absolute source locator.
+        digest: Recorded SHA-256 digest of the source bytes.
+
+    Returns:
+        A packet reference shaped like an assigned source.
+    """
+    return {
+        "id": locator,
+        "locator": locator,
+        "sha256": digest,
+        "required": True,
+        "authority": "fixture",
+        "reason": "own",
+        "stage": "planning",
+        "reader": "coordinator",
+    }
+
+
+@pytest.mark.parametrize("status", ["ready", "detached"])
+def test_roadmap_refresh_clears_ack_without_reviving_detached(status: str) -> None:
+    """Refresh only the roadmap digest and never revive a detached coordinator.
+
+    Args:
+        status: Coordinator participant status before the refresh.
+    """
+    # Model a coordinator packet holding a roadmap and an external reference.
+    packet = [source_ref("roadmap.md", "a" * 64), source_ref("/external.md", "b" * 64)]
+    state: dict[str, Any] = {
+        "participants": {
+            "coordinator": {"packet": copy.deepcopy(packet), "ack": "c" * 64, "status": status}
+        },
+        "assignments": {"coordinator": {"packet": copy.deepcopy(packet)}},
+    }
+    # Refresh the roadmap reference to new committed bytes.
+    core.refresh_roadmap_reference(state, "coordinator", "d" * 64)  # type: ignore[arg-type]
+    participant = state["participants"]["coordinator"]
+    assert [ref["sha256"] for ref in participant["packet"]] == ["d" * 64, "b" * 64]
+    assert state["assignments"]["coordinator"]["packet"] == participant["packet"]
+    assert participant["ack"] is None
+    assert participant["status"] == ("attached" if status == "ready" else "detached")
+
+
+def test_roadmap_refresh_keeps_readiness_without_changed_roadmap_reference() -> None:
+    """Leave a packet without a changed roadmap reference acknowledged and ready."""
+    # Model one packet without a roadmap reference and one already at the new digest.
+    for packet in [[source_ref("/external.md", "b" * 64)], [source_ref("roadmap.md", "d" * 64)]]:
+        state: dict[str, Any] = {
+            "participants": {"coordinator": {"packet": packet, "ack": "c" * 64, "status": "ready"}}
+        }
+        before = copy.deepcopy(state)
+        # Refreshing must not change readiness when no recorded digest differs.
+        core.refresh_roadmap_reference(state, "coordinator", "d" * 64)  # type: ignore[arg-type]
+        assert state == before

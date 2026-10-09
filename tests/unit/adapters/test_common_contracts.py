@@ -369,6 +369,58 @@ def test_recovery_message_preserves_exact_diagnostic_without_task_content() -> N
     assert "Pending work is retained" in message
 
 
+@pytest.mark.parametrize(
+    ("code", "host", "fragments"),
+    [
+        (
+            "TICKET_READ_REQUIRED",
+            "claude-code",
+            ["get_issue call with exactly", "ToolSearch", "AGENTS.md", "contributor-workflow.md"],
+        ),
+        ("TICKET_READ_REQUIRED", "cursor", ["get_issue call with exactly"]),
+        ("BINDING_MISSING", "claude-code", ["`Task: <issue-id>`", "get_issue"]),
+        (
+            "SOURCE_STALE",
+            "claude-code",
+            ["Coordinator:", "run read, then acknowledge", "Reader:", "scope"],
+        ),
+        (
+            "HOST_UNSUPPORTED_PROVIDER",
+            "claude-code",
+            ["exact selected-ticket get_issue", "save_issue and save_comment"],
+        ),
+        ("HOST_UNSUPPORTED_PROVIDER", "cursor", ["exact selected-ticket get_issue"]),
+        ("HOST_UNSUPPORTED_TOOL", "claude-code", ["ToolSearch or Skill"]),
+        ("HOST_UNSUPPORTED_TOOL", "cursor", ["Delete or foreground Shell"]),
+        ("HOST_UNSUPPORTED_CHILD_IDENTITY", "claude-code", ["cannot reuse the parent binding"]),
+        ("BUSY", "claude-code", ["Retry the same operation once", "diagnose"]),
+        ("NOT_ACKNOWLEDGED", "cursor", ["diagnose, register, resume, read and acknowledge"]),
+    ],
+)
+def test_recovery_names_the_admitted_next_operation_per_code(
+    code: str, host: str, fragments: list[str]
+) -> None:
+    """Name each diagnostic's admitted next operation while keeping the code visible.
+
+    Args:
+        code: Diagnostic whose recovery text is checked.
+        host: Native adapter identity selecting host-specific tool names.
+        fragments: Phrases naming that code's admitted next operation.
+    """
+    message = common.recovery(code, host)
+    # Every message keeps the exact code, host and retained-state statement.
+    assert message.startswith(f"TASK_WORKSPACE_NOT_READY: {code}. ")
+    assert f"host={host}" in message
+    assert "Pending work is retained" in message
+    # The route names the specific operation that can change this outcome.
+    for fragment in fragments:
+        assert fragment in message
+    # Host-specific Claude routes are not advertised to Cursor.
+    if host == "cursor":
+        assert "ToolSearch" not in message
+        assert "save_comment" not in message
+
+
 def test_native_post_does_not_settle_cursor_without_output(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

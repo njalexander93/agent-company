@@ -285,6 +285,24 @@ def lookup_required(event: core.JSONObject, host: str) -> bool:
                 return bindings.exists(key + ".lookup-required.json")
 
 
+def _claude_linear_providers() -> dict[str, set[str]]:
+    """Map each configured Claude Linear server name to its accepted provenance sources.
+
+    Returns:
+        Named local servers plus the operator-mapped Desktop connector UUID, when valid.
+    """
+    # Named local servers come from user, project, plugin or SDK definitions.
+    providers = {
+        "linear": {"user", "project", "plugin", "sdk"},
+        "linear-server": {"user", "project", "plugin", "sdk"},
+    }
+    # Bind opaque Desktop names only through explicit, operator-verified configuration.
+    connector = os.environ.get("AGENT_COMPANY_CLAUDE_LINEAR_CONNECTOR_ID", "")
+    if re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", connector):
+        providers[connector] = {"claudeai", "dynamic", "sdk"}
+    return providers
+
+
 def _linear_tool(event: core.JSONObject, host: str) -> tuple[str, core.JSONObject] | None:
     """Validate one host's documented Linear MCP name and argument shape.
 
@@ -302,14 +320,7 @@ def _linear_tool(event: core.JSONObject, host: str) -> tuple[str, core.JSONObjec
     if host == "claude-code":
         server = event.get("mcp_server")
         name = event.get("tool_name")
-        # Bind opaque Desktop names only through explicit, operator-verified configuration.
-        providers = {
-            "linear": {"user", "project", "plugin", "sdk"},
-            "linear-server": {"user", "project", "plugin", "sdk"},
-        }
-        connector = os.environ.get("AGENT_COMPANY_CLAUDE_LINEAR_CONNECTOR_ID", "")
-        if re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", connector):
-            providers[connector] = {"claudeai", "dynamic", "sdk"}
+        providers = _claude_linear_providers()
         # Ignore other operations and unconfigured connectors; no UUID-wide exception.
         if name not in {f"mcp__{provider}__get_issue" for provider in providers}:
             return None
@@ -346,6 +357,161 @@ def _linear_tool(event: core.JSONObject, host: str) -> tuple[str, core.JSONObjec
     if not isinstance(arguments, dict):
         raise core.WorkspaceError("INVALID_REQUEST")
     return token, arguments
+
+
+LINEAR_PROVIDER_OPERATIONS = frozenset(
+    {
+        "get_issue",
+        "get_user",
+        "list_users",
+        "list_issue_statuses",
+        "list_comments",
+        "save_issue",
+        "save_comment",
+    }
+)
+PREPARATION_FILES = ("docs/runtime/contributor-workflow.md", "AGENTS.md")
+
+
+def _linear_provider_tool(event: core.JSONObject, host: str) -> str | None:
+    """Identify one post-readiness Linear operation on a configured Claude connector.
+
+    Field-level checks, such as the assignee or state named by ``save_issue``,
+    stay in the contributor procedure's read-back rule; this check covers only
+    the server, its provenance and the operation name.
+
+    Args:
+        event: Native tool event carrying the MCP-qualified name and server provenance.
+        host: Native adapter identity; only Claude Code has this route.
+
+    Returns:
+        The admitted operation name, or None for any other host, server or operation.
+    """
+    # Cursor and other hosts keep their provider calls outside this route.
+    if host != "claude-code":
+        return None
+    # Read the observed server and name alongside the configured provider map.
+    server = event.get("mcp_server")
+    name = event.get("tool_name")
+    providers = _claude_linear_providers()
+    # Require the same configured server name and provenance as the ticket read.
+    if not (
+        isinstance(server, dict)
+        and isinstance(server.get("name"), str)
+        and server["name"] in providers
+        and server.get("source") in providers[server["name"]]
+        and isinstance(name, str)
+    ):
+        return None
+    # Admit only the explicit operation allowlist on that exact server.
+    prefix = "mcp__" + server["name"] + "__"
+    operation = name[len(prefix) :] if name.startswith(prefix) else None
+    return operation if operation in LINEAR_PROVIDER_OPERATIONS else None
+
+
+def _preparation_path(event: core.JSONObject, value: object, exact: bool = False) -> bool:
+    """Check that a path names one governing preparation file in the selected checkout.
+
+    Args:
+        event: Identity-validated native event whose ``cwd`` selects the checkout.
+        value: Observed absolute path argument, never resolved through links.
+        exact: Require the literal path spelling, as for a shell argument.
+
+    Returns:
+        Whether the path is exactly one preparation file and no traversed entry is a link.
+    """
+    # Require an absolute textual path before consulting the checkout.
+    if not isinstance(value, str) or not Path(value).is_absolute():
+        return False
+    # Resolve the selected checkout root from the observed working directory.
+    root, _, _ = core.repository(event["cwd"])
+    # Compare lexically so neither ".." nor a symbolic link can redirect the read.
+    for relative in PREPARATION_FILES:
+        expected = root / relative
+        # Accept only the exact path whose checkout-relative entries are not links.
+        if (value == str(expected)) if exact else (Path(value) == expected):
+            parts = Path(relative).parts
+            entries = [root.joinpath(*parts[: index + 1]) for index in range(len(parts))]
+            return not any(entry.is_symlink() or entry.is_junction() for entry in entries)
+    return False
+
+
+def preparation_tool(event: core.JSONObject, host: str) -> bool:
+    """Recognize one read-only preparation call allowed before the selected ticket read.
+
+    The call receives no lifecycle decision and writes nothing: the lookup marker
+    stays in place, so the exact ``get_issue`` remains the first issue-provider
+    operation. Claude's normal permission flow still applies to the call.
+
+    Args:
+        event: Identity-validated native tool event.
+        host: Native adapter identity; only Claude Code has a preparation phase.
+
+    Returns:
+        True for a schema load of configured ``get_issue`` tools, or a read of
+        ``docs/runtime/contributor-workflow.md`` or ``AGENTS.md`` in this checkout.
+    """
+    # Cursor's ticket-first route is unchanged.
+    if host != "claude-code":
+        return False
+    # Read the native tool name and input without trusting either.
+    tool = event.get("tool_name")
+    args = event.get("tool_input")
+    # Every preparation tool takes a structured native input.
+    if not isinstance(args, dict):
+        return False
+    # Contain malformed values and checkout errors as an ordinary denial.
+    try:
+        # A schema load may select only configured get_issue tools.
+        if tool == "ToolSearch":
+            query = args.get("query")
+            limit = args.get("max_results", 1)
+            # Reject undocumented fields, oversized queries and invalid limits.
+            if (
+                not set(args) <= {"query", "max_results"}
+                or not isinstance(query, str)
+                or len(query) > 256
+                or type(limit) is not int
+                or not 1 <= limit <= 20
+            ):
+                return False
+            # An exact selection must name only configured issue-read tools.
+            if query.startswith("select:"):
+                names = [name.strip() for name in query[len("select:") :].split(",")]
+                allowed = {f"mcp__{provider}__get_issue" for provider in _claude_linear_providers()}
+                return bool(names) and all(name in allowed for name in names)
+            # A bounded keyword search must name the issue-read operation.
+            return (
+                "get_issue" in query and re.fullmatch(r"[A-Za-z0-9_+\- ]{1,128}", query) is not None
+            )
+        # A file read must target one governing file exactly.
+        if tool == "Read":
+            return set(args) <= {"file_path", "offset", "limit"} and _preparation_path(
+                event, args.get("file_path")
+            )
+        # A shell read must be exactly cat with one governing file argument.
+        if tool == "Bash":
+            command = args.get("command")
+            # Reject undocumented fields, background execution and control characters.
+            if (
+                not set(args) <= {"command", "description", "timeout", "run_in_background"}
+                or args.get("run_in_background", False) is not False
+                or not isinstance(command, str)
+                or any(character in command for character in "\r\n\0")
+            ):
+                return False
+            # Parse without evaluating; only cat plus one literal governing path qualifies.
+            argv = shlex.split(command)
+            return (
+                len(argv) == 2
+                and argv[0] == "cat"
+                and _preparation_path(event, argv[1], exact=True)
+            )
+    # Unparseable commands and unreadable checkouts are not preparation reads.
+    except (core.WorkspaceError, OSError, ValueError, KeyError, TypeError):
+        return False
+    # Every other tool waits for the ticket read.
+    return False
 
 
 def native_ticket_lookup(
@@ -706,18 +872,19 @@ def canonical_bootstrap(
         # Require the bootstrap worktree to match the observed hook worktree.
         if core.repository(request["worktree"])[0] != core.repository(event["cwd"])[0]:
             return False
-        # Keep registration and diagnostics free of arbitrary issue/tool fields.
-        if request["operation"] in {"register", "diagnose"}:
-            return set(request) <= {
-                "schema_version",
-                "operation",
-                "request_id",
-                "worktree",
-                "host",
-                "session_id",
-                "main_worktree",
-                "startup",
-            }
+        # Keep registration and pre-registration diagnostics free of arbitrary issue/tool fields.
+        identity = {"schema_version", "operation", "request_id", "worktree", "host", "session_id"}
+        if request["operation"] == "register" or (
+            request["operation"] == "diagnose" and "repo_id" not in request
+        ):
+            return set(request) <= identity | {"main_worktree", "startup"}
+        # Accept only the exact read-only issue-level diagnostic shape; the assignment
+        # check below then binds its issue to this session.
+        if request["operation"] == "diagnose" and not (
+            {"repo_id", "issue_id"} <= set(request)
+            and set(request) <= identity | {"repo_id", "issue_id", "binding_generation"}
+        ):
+            return False
         # Require the bootstrap issue to match the session assignment stored in this worktree.
         with (
             core.Directory.absolute(core.repository(event["cwd"])[0]) as root,
@@ -838,6 +1005,9 @@ def native_bootstrap(event: core.JSONObject, host: str, ready: bool = False) -> 
 
 
 CLAUDE_SYNC_TOOLS = frozenset({"Read", "Write", "Edit", "Glob", "Grep", "NotebookEdit"})
+# Schema loading and skill loading change no files; a tool they surface is still
+# evaluated on its own call, so these record no pending work.
+CLAUDE_NO_EFFECT_TOOLS = frozenset({"ToolSearch", "Skill"})
 CURSOR_SYNC_TOOLS = frozenset({"Read", "Write", "Edit", "Grep", "Delete"})
 
 
@@ -861,9 +1031,11 @@ def native_tool(event: core.JSONObject, host: str) -> str:
     # Require a structured native tool input for supported synchronous work.
     if not isinstance(args, dict):
         raise core.WorkspaceError("INVALID_REQUEST")
-    # Provider calls use the separate ticket-read admission path.
+    # Only the configured Claude Linear connector's allowlisted operations become
+    # ordinary pending work; every other provider route stays unsupported.
     if tool.startswith(("mcp__", "MCP:")) or event.get("mcp_server") is not None:
-        raise core.WorkspaceError("HOST_UNSUPPORTED_PROVIDER")
+        core.require(_linear_provider_tool(event, host) is not None, "HOST_UNSUPPORTED_PROVIDER")
+        return tool
     # Child and delegation tools require their own verified identity.
     if tool in {"Agent", "Task", "TaskOutput", "TaskStop", "SpawnAgent"}:
         raise core.WorkspaceError("HOST_UNSUPPORTED_CHILD_IDENTITY")
@@ -892,7 +1064,9 @@ def native_tool(event: core.JSONObject, host: str) -> str:
                 "REPOSITORY_MISMATCH",
             )
         return tool
-    supported = CLAUDE_SYNC_TOOLS if host == "claude-code" else CURSOR_SYNC_TOOLS
+    supported = (
+        CLAUDE_SYNC_TOOLS | CLAUDE_NO_EFFECT_TOOLS if host == "claude-code" else CURSOR_SYNC_TOOLS
+    )
     core.require(tool in supported, "HOST_UNSUPPORTED_TOOL")
     core.require(
         not any(
@@ -925,7 +1099,10 @@ def native_pre(event: core.JSONObject, host: str) -> None:
     if native_bootstrap(event, host, ready=True):
         return
     # Native permission approval remains separate from recording pending work.
-    native_tool(event, host)
+    tool = native_tool(event, host)
+    # A ready session's no-effect schema or skill load needs no settlement.
+    if host == "claude-code" and tool in CLAUDE_NO_EFFECT_TOOLS:
+        return
     result = core.execute(
         {
             **request,
@@ -952,6 +1129,9 @@ def native_post(event: core.JSONObject, host: str, failed: bool) -> None:
     if native_bootstrap(event, host, ready=True):
         return
     tool = native_tool(event, host)
+    # No-effect schema and skill loads were never recorded as pending work.
+    if host == "claude-code" and tool in CLAUDE_NO_EFFECT_TOOLS:
+        return
     # Require the documented success/failure payload before treating an event as completion.
     if failed:
         field = "error" if host == "claude-code" else "error_message"
@@ -1049,22 +1229,106 @@ def native_context(event: core.JSONObject, host: str) -> str:
     return "Task binding checked. Read the assigned packet through the lifecycle read operation."
 
 
+def _recovery_route(code: str, host: str) -> str:
+    """Name the admitted next operation for one diagnostic.
+
+    Args:
+        code: Bounded diagnostic selected by the adapter or core.
+        host: Explicit adapter identity, which selects host-specific tool names.
+
+    Returns:
+        One or two sentences naming the operation that can change the outcome.
+    """
+    # Name the canonical command formatter once for every lifecycle route.
+    command = "the exact lifecycle command from adapters.common.bootstrap_command"
+    # The ticket-first gate admits the exact read plus Claude's preparation reads.
+    if code == "TICKET_READ_REQUIRED":
+        preparation = (
+            " Before it, only ToolSearch selecting that get_issue tool and Read or a plain "
+            "`cat` of <checkout>/docs/runtime/contributor-workflow.md or <checkout>/AGENTS.md "
+            "are admitted."
+            if host == "claude-code"
+            else ""
+        )
+        return (
+            "Next admitted operation: the configured Linear get_issue call with exactly "
+            '{"id": "<selected issue>"}.' + preparation
+        )
+    # An unbound session starts or resumes only through the ticket-first route.
+    if code == "BINDING_MISSING":
+        return (
+            "This session has no issue binding. Submit exactly one `Task: <issue-id>` line, "
+            "then read that ticket with the configured Linear get_issue call; startup "
+            f"registers or resumes the workspace. A pre-registration diagnose uses {command}."
+        )
+    # Coordinators and readers refresh a stale packet through different owners.
+    if code == "SOURCE_STALE":
+        return (
+            "A required packet source changed after acknowledgment. Coordinator: after your "
+            "own committed roadmap update, run read, then acknowledge the returned digest "
+            f"and ready, using {command}; for another changed source, submit "
+            "`Task: <issue-id>` again and repeat the exact get_issue read so startup "
+            "re-scopes your packet. Reader: ask the coordinator to refresh your packet with "
+            "scope, or resubmit the Task line and exact get_issue read to refresh a "
+            "roadmap-only packet; then read, acknowledge and ready."
+        )
+    # Provider admission is fixed by host, readiness and the configured connector.
+    if code == "HOST_UNSUPPORTED_PROVIDER":
+        admitted = (
+            " After readiness, only the configured Linear connector's get_issue, get_user, "
+            "list_users, list_issue_statuses, list_comments, save_issue and save_comment are "
+            "admitted."
+            if host == "claude-code"
+            else ""
+        )
+        return (
+            "No lifecycle operation admits this provider call. Before readiness only the "
+            "exact selected-ticket get_issue is admitted." + admitted + " Another server or "
+            "operation needs a separately verified provider workflow."
+        )
+    # Unsupported tools need a different tool, not lifecycle recovery.
+    if code == "HOST_UNSUPPORTED_TOOL":
+        tools = (
+            "Read, Write, Edit, Glob, Grep, NotebookEdit, foreground Bash, ToolSearch or Skill"
+            if host == "claude-code"
+            else "Read, Write, Edit, Grep, Delete or foreground Shell"
+        )
+        return f"No lifecycle operation admits this tool. Use one of the correlated tools: {tools}."
+    # Child work requires its own verified identity, never the parent binding.
+    if code == "HOST_UNSUPPORTED_CHILD_IDENTITY":
+        return (
+            "Child or delegation work has no verified child identity on this host and cannot "
+            "reuse the parent binding. Perform the step in this session or dispatch it through "
+            "a supported child route; no lifecycle operation grants a child binding here."
+        )
+    # Lock contention and the hook deadline are transient.
+    if code == "BUSY":
+        return (
+            "Another lifecycle operation held the workspace lock or the hook deadline expired. "
+            f"Retry the same operation once; if BUSY repeats, run diagnose with {command}."
+        )
+    # Other diagnostics keep the general bootstrap route.
+    return (
+        f"Use {command} to diagnose, register, resume, read and acknowledge the assigned "
+        "packet. Unsupported child/provider/background work must use a separately verified "
+        "route."
+    )
+
+
 def recovery(code: str, host: str) -> str:
-    """Describe the supported recovery route without copying task content.
+    """Describe the admitted next operation for a diagnostic without copying task content.
 
     Args:
         code: Bounded diagnostic selected by the adapter or core.
         host: Explicit adapter identity required in lifecycle commands.
 
     Returns:
-        A bounded explanation of the retained state and allowed recovery route.
+        A bounded explanation naming the code, its admitted next operation and the
+        retained state.
     """
     return (
-        f"TASK_WORKSPACE_NOT_READY: {code}. Use adapters.common.bootstrap_command "
-        f"to format the exact project lifecycle command with host={host} and the observed "
-        "session ID to diagnose, "
-        "register, resume, read and acknowledge the assigned packet. "
-        "Unsupported child/provider/background work must use a separately verified route. "
+        f"TASK_WORKSPACE_NOT_READY: {code}. {_recovery_route(code, host)} "
+        f"Lifecycle commands use host={host} and the observed session ID. "
         "Pending work is retained; no completion or readiness was inferred."
     )
 

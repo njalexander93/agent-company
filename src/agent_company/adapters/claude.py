@@ -59,10 +59,13 @@ def handle(event: core.JSONObject) -> core.JSONObject:
     try:
         # Never reuse a coordinator binding for a child or fabricate a missing identity.
         observed = common.native_identity(event, HOST)
-        # The first tool call after Task selection must read the selected ticket.
+        # The first issue-provider call after Task selection must read the selected ticket.
         if name == "PreToolUse":
             # An explicit Task permits its exact native Linear issue read first.
             if common.lookup_required(observed, HOST):
+                # Preparation reads keep the marker and leave Claude's permission flow.
+                if common.preparation_tool(observed, HOST):
+                    return {}
                 core.require(
                     common.native_ticket_lookup(observed, HOST) is not None, "TICKET_READ_REQUIRED"
                 )
@@ -73,6 +76,9 @@ def handle(event: core.JSONObject) -> core.JSONObject:
         if name in {"PostToolUse", "PostToolUseFailure"}:
             # A pending ticket read settles only through its native tool result.
             if common.lookup_required(observed, HOST):
+                # Completed preparation reads were never recorded and settle nothing.
+                if common.preparation_tool(observed, HOST):
+                    return {}
                 # Failed provider calls release correlation for a later read.
                 if name == "PostToolUseFailure":
                     common.native_ticket_failed(observed, HOST)

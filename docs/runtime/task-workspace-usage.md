@@ -39,8 +39,11 @@ dependency. Use the platform filesystem requirements in the
 4. Use `read`, then `acknowledge` with its exact `packet_digest`. This establishes
    delivery facts only. Call `ready` to verify current readiness; the next covered
    tool also checks it. After required source edits, request a coordinator refresh,
-   then read and acknowledge the replacement digest before dependent work. Scope replacement
-   invalidates acknowledgment even if the packet text happens to be unchanged.
+   then read and acknowledge the replacement digest before dependent work. A
+   coordinator's own committed `roadmap.md` update is refreshed by the core, as
+   described below; `read`, `acknowledge` and `ready` then restore readiness.
+   Scope replacement invalidates acknowledgment even if the packet text happens
+   to be unchanged.
 5. Updates require the returned `binding_generation`, current `expected_revision`,
    `path`, `old_digest`, UTF-8 `content`, and `provenance` containing `sources`,
    `applicability`, and `status`. Evidence lists use `id`, `locator`, `sha256`.
@@ -58,6 +61,17 @@ for Unix hosts and Claude's Bash tool. Pass the result through the native host's
 binds the exact worktree, host, session and issue. Wrappers, redirection,
 substitutions and unrelated commands are not bootstrap exceptions.
 
+An adapter denial starts with `TASK_WORKSPACE_NOT_READY: <code>` and names the
+admitted next operation for that code. `TICKET_READ_REQUIRED` names the exact
+ticket read and, on Claude Code, the preparation reads. `BINDING_MISSING` names
+the `Task:` line and ticket read. `SOURCE_STALE` gives the coordinator route
+(`read`, `acknowledge`, `ready`, or a repeated Task line and ticket read) and the
+reader route (coordinator `scope` or a repeated Task line and ticket read).
+`HOST_UNSUPPORTED_PROVIDER`, `HOST_UNSUPPORTED_TOOL` and
+`HOST_UNSUPPORTED_CHILD_IDENTITY` state that no lifecycle operation changes the
+outcome and name the admitted alternative. `BUSY` asks for one retry, then
+`diagnose`. Other codes keep the general bootstrap route.
+
 ```python
 from agent_company.adapters.common import bootstrap_command
 
@@ -74,6 +88,8 @@ The startup prompt accepts exactly one standalone `Task: <issue-id>` line, for e
 `Task: ISSUE-1`. Each supported runtime adapter records that identifier before
 requiring local registration. Its exact Linear issue read is admitted before
 readiness through the [host-specific ticket-read protocol](host-hooks.md#ticket-read-protocols).
+On Claude Code, only the bounded preparation reads in
+[setup step 3](host-hooks.md#setup-and-bootstrap) may precede it.
 The adapter verifies the response's identifier and immutable issue UUID, then
 invokes the shared startup orchestrator with the actual runtime/session identity.
 
@@ -81,9 +97,15 @@ Startup derives the Git main worktree, registers or resumes, and creates a missi
 issue under the initiating session's coordinator key. It installs an initial packet
 from the selected checkout's governing files and the main worktree's canonical task
 bytes, reads the source bytes, acknowledges their exact digest and verifies `ready`.
-Repeated starts preserve roadmap, approval, coordinator and packet. A committed
-coordinator-owned roadmap update refreshes only its roadmap packet digest;
-unexpected file edits still fail integrity checks. A different session can join
+Repeated starts preserve roadmap, approval, coordinator and packet. When the
+coordinator's `update` commits `roadmap.md`, the core moves only that coordinator's
+own `roadmap.md` packet reference, and its stored assignment, to the committed
+digest. The same commit clears its acknowledgment and returns it to `attached`, so
+`ready` reports `NOT_READY` until the coordinator calls `read` and then
+`acknowledge` with the new `packet_digest`. Both are pre-readiness exceptions; the
+next covered tool, or an explicit `ready`, verifies readiness at the new revision.
+Reader packets keep their recorded digest until their own `join` refresh.
+Unexpected file edits still fail integrity checks. A different session can join
 with a core-selected roadmap-only reader packet after the verified ticket read.
 Reader readiness does not transfer ownership; coordinator handoff remains explicit.
 
@@ -98,7 +120,11 @@ child/spawn restrictions; unverified child identities do not inherit readiness.
 The pre-readiness command allowlist is operation-specific. It includes the
 original `diagnose/register/bind/adopt/resume/restore` routes plus scoped `read` and
 exact-digest `acknowledge`, needed to establish readiness without a general tool
-exemption. A maintenance binding permits the specified archive/index/read-back and
+exemption. `diagnose` has two admitted shapes. The pre-registration shape carries
+only the session identity fields. The issue-level shape adds `repo_id` and
+`issue_id`, plus an optional `binding_generation`, and is admitted only for the
+issue in the session's recorded assignment. Both are read-only: they commit no
+state and append no event. A maintenance binding permits the specified archive/index/read-back and
 cleanup operations. Narrow schemas also permit terminal `archive-prepare`,
 coordinator `reconcile-files`, and explicit `rebind`: requiring ordinary readiness
 for those repair operations would deadlock recovery. Core ownership, generation,
@@ -108,9 +134,13 @@ explicit startup assignment supplies them automatically. Ready sessions can call
 the reviewed lifecycle CLI without registering that same local transaction as a
 pending external tool. Unknown bootstrap fields are rejected.
 
-`rebind` takes the old issue/generation, `new_issue_id`, optional
+A session binding names one issue. While it does, `create`, `attach`, `resume`
+and `join` for any other issue return `BINDING_CONFLICT`; a bound session cannot
+start a second issue directly. `rebind` takes the old issue/generation, `new_issue_id`, optional
 `new_binding_generation`, and evidence. The target must already exist with an
-explicit assignment. It locks both issues in lexical order, fences old work and
+explicit assignment for the caller, installed by the target's coordinator through
+`scope`; otherwise `rebind` returns `SCOPE_MISSING` and the old binding stays
+attached. It locks both issues in lexical order, fences old work and
 preserves the old payload. Pending operations block it. It does not create a
 new assignment or transfer coordinator ownership implicitly.
 
