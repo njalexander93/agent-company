@@ -157,7 +157,7 @@ class Issue:
             event_type: Event type selected by the case.
 
         Returns:
-            Committed revision returned by the fake persistence boundary.
+            Committed operation result returned by the real transaction boundary.
         """
         return core.Issue.commit(self, state, files, request, result, event_type)  # type: ignore[arg-type]
 

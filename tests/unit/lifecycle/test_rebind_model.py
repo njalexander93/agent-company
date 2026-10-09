@@ -185,7 +185,7 @@ class Issue:
             event_type: Event type selected by the case.
 
         Returns:
-            Committed revision returned by the fake persistence boundary.
+            Success response mapping containing the supplied rebind result.
         """
         self.store.order.append("commit:" + self.id)
         assert event_type == "rebind"

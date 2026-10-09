@@ -216,10 +216,10 @@ class MemoryIssue:
             event_type: Event type selected by the case.
 
         Returns:
-            Committed revision returned by the fake persistence boundary.
+            Success response mapping containing the supplied operation result.
         """
         self.commits.append((event_type, copy.deepcopy(state), files.copy()))
-        # Shape the issue state for the requested transition.
+        # Retain the committed state before exposing the fake operation response.
         self.state = copy.deepcopy(state)
         self.payload = files.copy()
         return {"ok": True, "code": "OK", **result}
@@ -256,7 +256,7 @@ def test_diagnose_reports_absent_and_present_issue_without_binding_read() -> Non
         "revision": 7,
         "storage": "present",
     }
-    # Shape the issue state for the requested transition.
+    # Model an absent issue record even though the store wrapper exists.
     issue.state = {}
     # Dispatch the diagnose request against the modeled issue.
     result = core.operate(store, issue, base_request("diagnose"))  # type: ignore[arg-type]
@@ -445,7 +445,7 @@ def test_scope_updates_detached_reader_packet_without_reviving_generation() -> N
     store, issue = MemoryStore(), MemoryIssue()
     # Resolve the exact participant key for this request.
     reader = core.participant_key({"host": "codex", "session_id": "reader"})
-    # Shape the issue state for the requested transition.
+    # Seed a detached reader whose packet can change without reattachment.
     issue.state["participants"][reader] = {
         "generation": 4,
         "status": "detached",
@@ -893,7 +893,7 @@ def test_cleanup_plan_issues_challenge_only_for_retained_terminal_archive() -> N
     observed = readbacks(store, issue)
     # Dispatch the archive-verify request against the modeled issue.
     core.operate(store, issue, base_request("archive-verify", observations=observed))  # type: ignore[arg-type]
-    # Shape the issue state for the requested transition.
+    # Enter maintenance while the retained archive still blocks cleanup.
     key = issue.state["coordinator"]
     issue.state["participants"][key]["status"] = "maintenance"
     # Dispatch the cleanup-plan request and capture its rejection.
@@ -901,7 +901,7 @@ def test_cleanup_plan_issues_challenge_only_for_retained_terminal_archive() -> N
         core.operate(store, issue, base_request("cleanup-plan"))  # type: ignore[arg-type]
     # Confirm the rejected operation reports RETAINED.
     assert captured.value.code == "RETAINED"
-    # Shape the issue state for the requested transition.
+    # Complete the issue to test the remaining export-readback gate.
     issue.state["disposition"] = "completed"
     issue.state["outcome"] = {"disposition": "completed"}
     # Dispatch the cleanup-plan request against the modeled issue.
@@ -914,7 +914,7 @@ def test_cleanup_plan_issues_challenge_only_for_retained_terminal_archive() -> N
 
 def test_reopen_terminal_issue_invalidates_acknowledgment() -> None:
     """Require a new packet acknowledgment after reopening terminal work."""
-    # Shape the issue state for the requested transition.
+    # Begin with cancelled work and a coordinator in maintenance.
     store, issue = MemoryStore(), MemoryIssue()
     key = issue.state["coordinator"]
     issue.state["disposition"] = "cancelled"
@@ -1038,7 +1038,7 @@ def test_repeated_request_id_requires_identical_body_and_replays_saved_result() 
     request = base_request("tool-start", tool_id="tool-1")
     # Dispatch the tool-start request against the modeled issue.
     initial = core.operate(store, issue, request)  # type: ignore[arg-type]
-    # Shape the issue state for the requested transition.
+    # Cache the original request digest and result for idempotent replay.
     issue.state["requests"][core.sha(request["request_id"].encode())] = {
         "digest": core.sha(core.canonical(request)),
         "result": initial,
@@ -1072,7 +1072,7 @@ def test_existing_create_reuses_explicit_coordinator_binding() -> None:
 
 def test_create_initializes_packaged_roadmap_only_for_absent_issue() -> None:
     """Publish an initial roadmap and empty history under an explicit coordinator."""
-    # Shape the issue state for the requested transition.
+    # Remove registered state and payload to model initial creation.
     store, issue = MemoryStore(), MemoryIssue()
     issue.state = None  # type: ignore[assignment]
     issue.payload = {}
@@ -1112,7 +1112,7 @@ def test_create_initializes_packaged_roadmap_only_for_absent_issue() -> None:
 
 def test_absent_issue_requires_create_or_explicit_adopt_before_any_commit() -> None:
     """Do not manufacture a task workspace for an absent read or mismatched adopt."""
-    # Shape the issue state for the requested transition.
+    # Leave the issue unregistered while an unadopted payload exists.
     store, issue = MemoryStore(), MemoryIssue()
     issue.state = None  # type: ignore[assignment]
 
@@ -1155,7 +1155,7 @@ def test_restore_reconstructs_only_tombstone_matching_provider_bytes(
     Args:
         monkeypatch: Pytest fixture used to replace the dependency under test.
     """
-    # Shape the issue state for the requested transition.
+    # Model completed, cleaned work with a snapshot tombstone for restoration.
     store, issue = MemoryStore(), MemoryIssue()
     key = issue.state["coordinator"]
     issue.state["storage"] = "cleaned"
@@ -1240,7 +1240,7 @@ def test_reconcile_imports_only_inspected_markdown_with_unchanged_event_history(
     Args:
         monkeypatch: Pytest fixture used to replace the dependency under test.
     """
-    # Shape the issue state for the requested transition.
+    # Bind the existing directory identity and edited Markdown bytes.
     store, issue = MemoryStore(), MemoryIssue()
     issue.state["directory_identity"] = [4, 5]
     observed = {**issue.payload, "context/note.md": b"edited markdown"}
@@ -1312,7 +1312,7 @@ def test_reconcile_rejects_changed_event_bytes_before_commit(
     Args:
         monkeypatch: Pytest fixture used to replace the dependency under test.
     """
-    # Shape the issue state for the requested transition.
+    # Bind the existing directory identity and uncommitted event bytes.
     store, issue = MemoryStore(), MemoryIssue()
     issue.state["directory_identity"] = [4, 5]
     observed = {**issue.payload, "events.jsonl": b"uncommitted event\n"}
@@ -1652,7 +1652,7 @@ def test_event_rollover_preserves_checkpointed_history_as_immutable_segment() ->
     issue.payload["events.jsonl"] = old_events
     # Hash the exact issue payload before the transition.
     issue.state["files"] = core.manifest(issue.payload)
-    # Shape the issue state for the requested transition.
+    # Seed an active event head and verified archive for rollover.
     issue.state["seq"] = 1
     issue.state["head"] = "head-1"
     issue.state["archive"] = {"snapshot": "snap-1"}
@@ -1704,7 +1704,7 @@ def test_adopt_requires_exact_existing_payload_inventory_and_owners(
         monkeypatch: Pytest fixture used to replace the dependency under test.
         tmp_path: Disposable directory owned by this test.
     """
-    # Shape the issue state for the requested transition.
+    # Retain prior payload bytes while removing the registered issue state.
     store, issue = MemoryStore(), MemoryIssue()
     files = issue.payload.copy()
     issue.state = None  # type: ignore[assignment]
@@ -1794,7 +1794,7 @@ def test_adopt_rejects_changed_existing_payload_before_commit(
         monkeypatch: Pytest fixture used to replace the dependency under test.
         tmp_path: Disposable directory owned by this test.
     """
-    # Shape the issue state for the requested transition.
+    # Retain prior payload bytes for adoption with a stale inspection digest.
     store, issue = MemoryStore(), MemoryIssue()
     files = issue.payload.copy()
     issue.state = None  # type: ignore[assignment]
@@ -1880,7 +1880,7 @@ def test_join_existing_reader_refreshes_only_roadmap_digest() -> None:
     request = base_request("join", session_id="reader", issue_uuid="uuid", expected_revision=7)
     # Resolve the exact participant key for this request.
     reader = core.participant_key(request)
-    # Shape the issue state for the requested transition.
+    # Give the existing reader a packet with an outdated roadmap digest.
     previous = {
         "id": "roadmap",
         "locator": "roadmap.md",
@@ -1918,7 +1918,7 @@ def test_transfer_coordinator_moves_roadmap_ownership_with_evidence() -> None:
     store, issue = MemoryStore(), MemoryIssue()
     # Resolve the exact participant key for this request.
     reader = core.participant_key({"host": "codex", "session_id": "reader"})
-    # Shape the issue state for the requested transition.
+    # Attach the target reader before transferring coordinator ownership.
     issue.state["participants"][reader] = {
         "generation": 1,
         "status": "attached",
@@ -1950,7 +1950,7 @@ def test_reconcile_participant_detaches_selected_generation_after_pending_clear(
     store, issue = MemoryStore(), MemoryIssue()
     # Resolve the exact participant key for this request.
     reader = core.participant_key({"host": "codex", "session_id": "reader"})
-    # Shape the issue state for the requested transition.
+    # Seed a ready reader generation for explicit reconciliation.
     issue.state["participants"][reader] = {
         "generation": 3,
         "status": "ready",
@@ -1990,7 +1990,7 @@ def test_archive_prepare_seal_requires_terminal_issue_and_detached_readers() -> 
     assert issue.commits == []
     # Resolve the exact participant key for this request.
     reader = core.participant_key({"host": "codex", "session_id": "reader"})
-    # Shape the issue state for the requested transition.
+    # Detach the final reader and complete work before sealing the archive.
     issue.state["participants"][reader] = {
         "generation": 1,
         "status": "detached",
@@ -2017,7 +2017,7 @@ def test_replayed_create_restores_saved_result_and_binding_without_new_commit() 
     request = base_request("create", issue_uuid="uuid", coordinator=key)
     # Persist the control document before resuming cleanup.
     issue.control.put("result.json", {"binding_generation": 2, "participant_id": key})
-    # Shape the issue state for the requested transition.
+    # Seed a durable create receipt that references the stored response.
     issue.state["requests"][core.sha(request["request_id"].encode())] = {
         "digest": core.sha(core.canonical(request)),
         "result": {"ok": True, "code": "OK", "result_ref": "result.json"},
@@ -2044,7 +2044,7 @@ def test_restore_commit_failure_keeps_prior_cleaned_state(
     Args:
         monkeypatch: Pytest fixture used to replace the dependency under test.
     """
-    # Shape the issue state for the requested transition.
+    # Seed a cleaned snapshot tombstone before failed reconstruction.
     store, issue = MemoryStore(), MemoryIssue()
     issue.state["storage"] = "cleaned"
     issue.state["tombstone"] = {"snapshot": "snap-1"}
@@ -2098,7 +2098,7 @@ def test_restore_commit_failure_keeps_prior_cleaned_state(
 
 def test_archive_prepare_reuses_identical_durable_preparation_receipt() -> None:
     """Retry export publication without appending a second preparation event."""
-    # Shape the issue state for the requested transition.
+    # Seed the prior archive-preparation receipt for retry without a new event.
     store, issue = MemoryStore(), MemoryIssue()
     request = base_request("archive-prepare", expected_revision=7)
     prepared_request = {**request, "request_id": request["request_id"] + ":prepare"}
