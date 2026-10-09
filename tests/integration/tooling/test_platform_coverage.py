@@ -21,7 +21,9 @@ def test_combination_normalizes_windows_paths_and_preserves_contexts(tmp_path: P
     Raises:
         AssertionError: Windows filenames remain separate or context labels are lost.
     """
+    # Build synthetic Windows paths and contexts in separate databases.
     files = []
+    # Create one native artifact directory for each requested operating system.
     for system, name in (
         ("synthetic-posix", "src/agent_company/lifecycle/task_workspace.py"),
         ("synthetic-windows", "src\\agent_company\\lifecycle\\task_workspace.py"),
@@ -38,6 +40,7 @@ def test_combination_normalizes_windows_paths_and_preserves_contexts(tmp_path: P
     )
     coverage.combine(files, strict=True, keep=True)
     data = coverage.get_data()
+    # Check normalized combined paths without discarding contexts.
     assert data.measured_files() == {str(Path("src/agent_company/lifecycle/task_workspace.py"))}
     assert data.measured_contexts() == {"synthetic-posix", "synthetic-windows"}
     assert all(Path(path).exists() for path in files)
@@ -62,6 +65,7 @@ def test_collector_to_combiner_fences_checkout_bytes(
     Raises:
         AssertionError: Collection requires a sidecar or changed bytes receive acceptance.
     """
+    # Create disposable candidate and native artifact directories.
     import os
     import subprocess
     import sys
@@ -77,6 +81,7 @@ def test_collector_to_combiner_fences_checkout_bytes(
     (root / ".gitattributes").write_text("* text=auto eol=lf\n", encoding="utf-8")
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    # Commit the disposable coverage project before generating candidate evidence.
     for command in (
         ["init", "-q"],
         ["add", "."],
@@ -109,6 +114,7 @@ def test_collector_to_combiner_fences_checkout_bytes(
                 "system": system,
             },
         )
+        # Generate either split unit/integration receipts or one full-suite receipt.
         for task in ("test-unit", "test-integration") if split else ("test",):
             evidence = artifacts / system / task
             monkeypatch.setattr(
@@ -124,6 +130,7 @@ def test_collector_to_combiner_fences_checkout_bytes(
             assert not (evidence / "host.json").exists()
     initial = dev.checkout_state()
     input_files = verified_inputs(artifacts, initial["sha"], initial["tracked_digest"])
+    # Confirm the collector produced the expected split or full input count.
     assert len(input_files) == (4 if split else 2)
     # This fixture tests combination and checkout fencing. The dedicated native
     # evidence tests exercise strict receipt/database validation separately.
@@ -143,31 +150,48 @@ def test_collector_to_combiner_fences_checkout_bytes(
             str(output),
         ],
     )
+    # Change the coverage policy after measurement to invalidate the candidate fingerprint.
     if mutation == "dirty-policy":
         policy.write_text("[tool.coverage.report]\nfail_under = 0\n", encoding="utf-8")
+    # Change tracked source after measurement to invalidate the retained evidence.
     elif mutation == "dirty-source":
         source.write_text("value = 2\n", encoding="utf-8")
+    # Mutate source during reporting to prove the end-of-run fingerprint check.
     elif mutation == "during-report":
         original = Coverage.report
 
         def changing_report(self: Coverage, *args: object, **kwargs: object) -> float:
-            """Mutate tracked policy after the real report reads its configuration."""
+            """Mutate tracked policy after the real report reads its configuration.
+
+            Args:
+                self: Coverage reporter being patched for this mutation case.
+                args: Positional coverage report options forwarded to the original method.
+                kwargs: Extra library options accepted by the test fake.
+
+            Returns:
+                The original coverage report result after this case mutates its artifact.
+            """
             result = original(self, *args, **kwargs)
             policy.write_text("[tool.coverage.report]\nfail_under = 0\n", encoding="utf-8")
             return result
 
         monkeypatch.setattr(Coverage, "report", changing_report)
+    # Select the below-floor or repaired report without changing the configured threshold.
     elif mutation in {"below-floor", "floor-repaired"}:
         reported = 79.999 if mutation == "below-floor" else 80.0
         monkeypatch.setattr(Coverage, "report", lambda self: reported)
+    # Require a dirty-input candidate to fail before combination begins.
     if mutation.startswith("dirty"):
+        # Verify the combiner refuses the dirty checkout rather than issuing a percentage.
         with pytest.raises(ValueError, match="must be clean"):
             combine_coverage.main()
         assert not (output / "combined.json").exists()
     else:
+        # Check the combined result for clean, mutated-during-report and floor-boundary cases.
         assert combine_coverage.main() == (1 if mutation in {"during-report", "below-floor"} else 0)
         result = json.loads((output / "combined.json").read_text())
         assert result["required_percent"] == 80
+        # Inspect the unrounded value when exercising the percentage boundary.
         if mutation in {"below-floor", "floor-repaired"}:
             assert result["coverage_percent"] == reported
         assert result["passed"] is (mutation in {"none", "floor-repaired"})

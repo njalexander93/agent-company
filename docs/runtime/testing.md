@@ -1,9 +1,13 @@
 # Testing standards
 
-These are the repository's concrete test rules for AGENT-30. The contributor
+These testing standards apply to the whole project and all future test development.
+AGENT-30 records their initial research and implementation. The contributor
 procedure owns issue planning and review. [AGENT-15](https://linear.app/ne3ko93/issue/AGENT-15/create-the-independent-testing-procedure)
 owns the separate test-author procedure and templates; this guide does not claim
 that work is complete.
+
+Python tests also follow the project-wide [source documentation and logic comment
+rules](development.md#source-documentation-and-logic-comments).
 
 ## Classify the verified boundary
 
@@ -64,8 +68,10 @@ production omission. Report unit and integration lines and arcs separately on
 each native OS. Enforce each function against its own applicable OS report;
 execution on one OS cannot erase another OS's gap. An exact reviewed exception
 may cover only its explicitly named platforms. Collect tooling separately so the historical production-only
-Linux+Windows aggregate remains comparable at **80% unrounded**. macOS evidence
-is required separately; it does not rescue that aggregate.
+Linux+Windows aggregate remains comparable at **80% unrounded**. Linux, Windows
+and macOS are equal supported development environments. Every candidate requires
+separate native evidence from all three; the historical aggregate is an additional
+coverage calculation, not a definition of platform support.
 
 An exception is a reviewed record, never an implicit missing row. Store it in
 the gate's exception ledger with these exact fields:
@@ -140,7 +146,7 @@ a separate acceptance requirement:
 | Control | Status | Limit |
 | --- | --- | --- |
 | Six native suite records, child smoke, exact identities, collection and outcomes | Enforced by the quality job | Artifacts attest a tested run; they do not authenticate an untrusted runner. |
-| Production Linux+Windows >=80% and per-function reachable obligation with reviewed exceptions | Enforced by the quality job | Coverage does not judge assertion meaning. |
+| Per-function obligations on each applicable native OS, plus the historical Linux+Windows >=80% production aggregate | Enforced by the quality job | Coverage does not judge assertion meaning. |
 | Focused Ruff `F631,PT010,PT011,PT012,PT026,PT030` and three curated wrong-result/missing-exception/omitted-effect faults | Enforced by the quality job | Static rules and selected faults sample only known hazards. |
 | Module/suite trend, changed-code gaps, replay/order check | Advisory | Denominators, renames and scheduling can distort simple comparisons. |
 | Broad mutation engine and global mutation score | Deferred | Tool/version/platform cost and equivalent mutations need study. |

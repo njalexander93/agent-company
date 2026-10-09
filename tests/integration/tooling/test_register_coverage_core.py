@@ -23,7 +23,11 @@ SOURCE = Path("src/agent_company/lifecycle/task_workspace.py")
 
 
 def _binding_arcs() -> set[tuple[int, int]]:
-    """Locate the startup binding's entry and exit without fixed line numbers."""
+    """Locate the startup binding's entry and exit without fixed line numbers.
+
+    Returns:
+        Entry and exit arcs around the registration binding context.
+    """
     tree = ast.parse((ROOT / SOURCE).read_text(encoding="utf-8"))
     register = next(
         node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "register"
@@ -49,13 +53,22 @@ def _binding_arcs() -> set[tuple[int, int]]:
 
 
 def _run_register_case(tmp_path: Path, tracer: str | None) -> set[tuple[int, int]]:
-    """Run the existing registration contract with an isolated coverage database."""
+    """Run the existing registration contract with an isolated coverage database.
+
+    Args:
+        tmp_path: Disposable directory supplied by pytest for this case.
+        tracer: Coverage tracer choice exercised by the case.
+
+    Returns:
+        Registration arcs measured by the selected coverage tracer.
+    """
     output = tmp_path / (tracer or "configured")
     output.mkdir()
     environment = os.environ.copy()
     environment.pop("COVERAGE_CORE", None)
     environment.pop("COVERAGE_PROCESS_CONFIG", None)
     environment["COVERAGE_FILE"] = str(output / ".coverage")
+    # Confirm the active tracer identity when coverage exposes it.
     if tracer is not None:
         environment["COVERAGE_CORE"] = tracer
     junit = output / "tests.xml"
@@ -93,8 +106,14 @@ def _run_register_case(tmp_path: Path, tracer: str | None) -> set[tuple[int, int
 
 
 def test_configured_tracer_observes_registration_binding_arcs(tmp_path: Path) -> None:
-    """A passing registration assertion cannot conceal missing tracer arcs."""
+    """A passing registration assertion cannot conceal missing tracer arcs.
+
+    Args:
+        tmp_path: Disposable directory supplied by pytest for this case.
+    """
+    # Locate binding entry and exit arcs in the registration source.
     policy = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    # Compare real configured-tracer arcs with the required boundary.
     assert policy["tool"]["coverage"]["run"]["core"] == "ctrace"
     expected = _binding_arcs()
     assert len(expected) == 2

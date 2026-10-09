@@ -17,7 +17,13 @@ pytestmark = pytest.mark.integration
 def test_translated_report_passes_and_fabricated_line_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A multiline source line is valid; a rehashed invented line is not."""
+    """A multiline source line is valid; a rehashed invented line is not.
+
+    Args:
+        tmp_path: Disposable directory supplied by pytest for this case.
+        monkeypatch: Pytest fixture that restores patched dependencies after this case.
+    """
+    # Generate a real native branch database and translated JSON report.
     directory = record(tmp_path, "Darwin", "unit")
     source = tmp_path / "src/agent_company/sample.py"
     source.write_text(
@@ -29,6 +35,7 @@ def test_translated_report_passes_and_fabricated_line_fails(
         "    return 0\n"
         "choose(True)\n"
     )
+    # Mutate one reported line and require source-based regeneration to reject it.
     with monkeypatch.context() as scoped:
         scoped.chdir(tmp_path)
         coverage = Coverage(
@@ -44,6 +51,7 @@ def test_translated_report_passes_and_fabricated_line_fails(
         coverage.get_data().close()
     manifest_path = directory / "manifest.json"
     manifest = json.loads(manifest_path.read_text())
+    # Rehash the changed coverage artifacts so source/database disagreement remains observable.
     for name in (".coverage", "coverage.json", "coverage.xml"):
         manifest["artifacts_sha256"][name] = hashlib.sha256(
             (directory / name).read_bytes()
@@ -70,6 +78,7 @@ def test_translated_report_passes_and_fabricated_line_fails(
         report_path.read_bytes()
     ).hexdigest()
     manifest_path.write_text(json.dumps(manifest))
+    # Reject a rehashed report whose rows disagree with source and measured data.
     with pytest.raises(ValueError, match="coverage JSON disagrees with source and database"):
         valid_suite(
             directory,

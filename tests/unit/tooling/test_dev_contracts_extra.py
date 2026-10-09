@@ -17,7 +17,13 @@ pytestmark = pytest.mark.unit
 def test_clean_removes_named_outputs_and_nested_caches_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Generated output is removed without traversing protected or linked trees."""
+    """Generated output is removed without traversing protected or linked trees.
+
+    Args:
+        tmp_path: Disposable directory supplied by pytest for this case.
+        monkeypatch: Pytest fixture that restores patched dependencies after this case.
+    """
+    # Create generated outputs beside directories cleanup must preserve.
     root = tmp_path / "checkout"
     root.mkdir()
     outside = tmp_path / "outside"
@@ -27,9 +33,11 @@ def test_clean_removes_named_outputs_and_nested_caches_only(
     (root / ".task" / "keep").write_text("task")
     (root / ".venv").mkdir()
     (root / ".venv" / "keep").write_text("environment")
+    # Create the generated directories that cleanup is permitted to remove.
     for name in ("build", "dist", "htmlcov", ".pytest_cache"):
         (root / name).mkdir()
         (root / name / "old").write_text("remove")
+    # Create generated coverage files while retaining protected worktree state.
     for name in ("coverage.xml", "coverage.json", ".coverage", ".coverage.worker"):
         (root / name).write_text("remove")
     cache = root / "scripts" / "nested" / "__pycache__"
@@ -44,6 +52,7 @@ def test_clean_removes_named_outputs_and_nested_caches_only(
     dev.clean()
     dev.clean()
 
+    # Run cleanup and inspect both deleted and retained paths.
     assert not cache.exists()
     assert not any((root / name).exists() for name in ("build", "dist", "htmlcov", ".pytest_cache"))
     assert not any(
@@ -62,7 +71,13 @@ def test_clean_removes_named_outputs_and_nested_caches_only(
 def test_checkout_state_distinguishes_link_target_and_missing_tracked_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Only the tracked link target, not its referent bytes, affects the digest."""
+    """Only the tracked link target, not its referent bytes, affects the digest.
+
+    Args:
+        tmp_path: Disposable directory supplied by pytest for this case.
+        monkeypatch: Pytest fixture that restores patched dependencies after this case.
+    """
+    # Create tracked regular files, links, and a missing path.
     root = tmp_path / "checkout"
     root.mkdir()
     target = root / "actual"
@@ -72,22 +87,37 @@ def test_checkout_state_distinguishes_link_target_and_missing_tracked_path(
     monkeypatch.setattr(dev, "ROOT", root)
 
     def git_output(command: list[str], **kwargs: object) -> bytes | str:
+        """Supply tracked-file bytes and Git identity to the checkout fake.
+
+        Args:
+            command: Exact command arguments supplied to the child or fake runner.
+            kwargs: Extra library options accepted by the test fake.
+
+        Returns:
+            Tracked paths, commit ID, or dirty status for the requested Git command.
+        """
+        # Return the tracked path inventory for the simulated Git query.
         if command[1] == "ls-files":
             return b"tracked\0"
+        # Return the pinned commit identity for the simulated Git query.
         if command[1] == "rev-parse":
             return "abc123\n"
         return " M tracked\n"
 
     monkeypatch.setattr(dev.subprocess, "check_output", git_output)
     original = dev.checkout_state()
+    # Check the digest and Git status reflect each distinct tracked state.
     assert original["sha"] == "abc123"
     assert original["status"] == " M tracked\n"
+    # Change only referent bytes; a tracked symlink records its target text.
     target.write_bytes(b"changed target bytes")
     assert dev.checkout_state()["tracked_digest"] == original["tracked_digest"]
+    # Replace the symlink target and require a different tracked-byte fingerprint.
     link.unlink()
     link.symlink_to("another-target")
     changed_link = dev.checkout_state()["tracked_digest"]
     assert changed_link != original["tracked_digest"]
+    # Remove the tracked link and require missing-path evidence to remain distinct.
     link.unlink()
     assert dev.checkout_state()["tracked_digest"] != changed_link
 
@@ -96,7 +126,14 @@ def test_checkout_state_distinguishes_link_target_and_missing_tracked_path(
 def test_identity_records_actual_runtime_and_tool_versions(
     system: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The receipt identifies the launcher, checkout and tool interpreter."""
+    """The receipt identifies the launcher, checkout and tool interpreter.
+
+    Args:
+        system: Native operating-system name represented by this case.
+        tmp_path: Disposable directory supplied by pytest for this case.
+        monkeypatch: Pytest fixture that restores patched dependencies after this case.
+    """
+    # Stub native runtime calls with known versions and platform data.
     monkeypatch.setattr(dev, "ROOT", tmp_path)
     (tmp_path / "pyproject.toml").write_bytes(b"[tool.poetry]\n")
     monkeypatch.setattr(
@@ -115,12 +152,22 @@ def test_identity_records_actual_runtime_and_tool_versions(
     seen: list[list[str]] = []
 
     def output(command: list[str], **kwargs: object) -> str:
+        """Return the pinned tool version while checking the command location.
+
+        Args:
+            command: Exact command arguments supplied to the child or fake runner.
+            kwargs: Extra library options accepted by the test fake.
+
+        Returns:
+            Controlled subprocess output for this test.
+        """
         seen.append(command)
         assert kwargs["cwd"] == tmp_path
         return json.dumps(tool)
 
     monkeypatch.setattr(dev.subprocess, "check_output", output)
     result = dev.identity()
+    # Inspect the exact identity fields written for this host.
     assert result["sha"] == "head"
     assert result["config_sha256"] == hashlib.sha256(b"[tool.poetry]\n").hexdigest()
     assert result["system"] == system
@@ -134,7 +181,14 @@ def test_identity_records_actual_runtime_and_tool_versions(
 def test_run_command_returns_child_status_and_keeps_raw_log(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The child status and raw bytes survive console newline decoding."""
+    """The child status and raw bytes survive console newline decoding.
+
+    Args:
+        tmp_path: Disposable directory supplied by pytest for this case.
+        monkeypatch: Pytest fixture that restores patched dependencies after this case.
+        capsys: Pytest fixture for inspecting captured console output.
+    """
+    # Start a child with separate console and persistent log output.
     monkeypatch.setattr(dev, "ROOT", tmp_path)
     child = [
         sys.executable,
@@ -143,6 +197,7 @@ def test_run_command_returns_child_status_and_keeps_raw_log(
         "sys.exit(4 if os.getenv('PYTHONUNBUFFERED') == '1' else 8)",
     ]
     log = tmp_path / "run.log"
+    # Check the child exit code and exact raw log bytes.
     assert dev.run_command(child, os.environ.copy(), log) == 4
     assert log.read_bytes() == b"one\r\ntwo\xff"
     assert capsys.readouterr().out == "one\ntwo\ufffd"
@@ -156,12 +211,22 @@ def test_run_command_reports_start_failure_and_keeps_diagnostic(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """A missing executable returns 127 and retains a useful error."""
+    """A missing executable returns 127 and retains a useful error.
+
+    Args:
+        with_log: Whether the fake runner writes a persistent log.
+        tmp_path: Disposable directory supplied by pytest for this case.
+        monkeypatch: Pytest fixture that restores patched dependencies after this case.
+        capsys: Pytest fixture for inspecting captured console output.
+    """
+    # Attempt to launch a missing executable with a persistent log.
     monkeypatch.setattr(dev, "ROOT", tmp_path)
     log = tmp_path / "start.log" if with_log else None
+    # Require the startup status and diagnostic to survive.
     assert dev.run_command([str(tmp_path / "does-not-exist")], {}, log) == 127
     error = capsys.readouterr().err
     assert ("[WinError 2]" if os.name == "nt" else "[Errno 2]") in error
+    # Write the command log only when the caller supplied a log destination.
     if log:
         assert log.read_text() == error
 
@@ -169,10 +234,18 @@ def test_run_command_reports_start_failure_and_keeps_diagnostic(
 def test_main_help_clean_and_argument_rejection_have_no_child_command(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Help, cleanup and rejected flags do not start contributor checks."""
+    """Help, cleanup and rejected flags do not start contributor checks.
+
+    Args:
+        tmp_path: Disposable directory supplied by pytest for this case.
+        monkeypatch: Pytest fixture that restores patched dependencies after this case.
+        capsys: Pytest fixture for inspecting captured console output.
+    """
+    # Select help, clean, and invalid argument paths in turn.
     monkeypatch.setattr(dev, "ROOT", tmp_path)
     monkeypatch.setattr(dev, "run_command", lambda *_args, **_kwargs: pytest.fail("child started"))
     monkeypatch.setattr(sys, "argv", ["dev.py"])
+    # Require each early path to avoid child execution.
     assert dev.main() == 0
     assert "Tasks:" in capsys.readouterr().out
     generated = tmp_path / "coverage.xml"
@@ -185,6 +258,7 @@ def test_main_help_clean_and_argument_rejection_have_no_child_command(
         "argv",
         ["dev.py", "lint", "--platform-coverage", "--evidence-dir", str(tmp_path / "evidence")],
     )
+    # Verify an unknown contributor task exits through the command-line parser.
     with pytest.raises(SystemExit) as error:
         dev.main()
     assert error.value.code == 2
@@ -194,12 +268,28 @@ def test_main_help_clean_and_argument_rejection_have_no_child_command(
 def test_main_build_runs_validation_before_build_and_stops_on_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A failed configuration check prevents package construction."""
+    """A failed configuration check prevents package construction.
+
+    Args:
+        tmp_path: Disposable directory supplied by pytest for this case.
+        monkeypatch: Pytest fixture that restores patched dependencies after this case.
+    """
+    # Make validation fail before the controlled build command.
     monkeypatch.setattr(dev, "ROOT", tmp_path)
     monkeypatch.setattr(dev, "COMMANDS", {"validate-config": [["check"]], "build": [["package"]]})
     seen: list[list[str]] = []
 
     def run(command: list[str], environment: dict[str, str], log: Path | None) -> int:
+        """Fail validation so the later build command cannot run.
+
+        Args:
+            command: Exact command arguments supplied to the child or fake runner.
+            environment: Environment passed to the child process.
+            log: Optional path for persistent command output.
+
+        Returns:
+            Controlled process exit status for this test.
+        """
         seen.append(command)
         assert log is None
         assert "COVERAGE_FILE" not in environment
@@ -208,6 +298,7 @@ def test_main_build_runs_validation_before_build_and_stops_on_failure(
     monkeypatch.delenv("COVERAGE_FILE", raising=False)
     monkeypatch.setattr(dev, "run_command", run)
     monkeypatch.setattr(sys, "argv", ["dev.py", "build"])
+    # Require command ordering and no build side effect.
     assert dev.main() == 9
     assert seen == [["check"]]
 
@@ -215,9 +306,16 @@ def test_main_build_runs_validation_before_build_and_stops_on_failure(
 def test_main_evidence_replaces_stale_files_and_hashes_completed_artifacts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Evidence reflects this run and preserves unrelated output."""
+    """Evidence reflects this run and preserves unrelated output.
+
+    Args:
+        tmp_path: Disposable directory supplied by pytest for this case.
+        monkeypatch: Pytest fixture that restores patched dependencies after this case.
+    """
+    # Seed stale evidence and run a successful controlled task.
     evidence = tmp_path / "evidence"
     evidence.mkdir()
+    # Seed every stale evidence artifact before checking output-directory replacement.
     for name in (
         "manifest.json",
         ".coverage",
@@ -240,6 +338,16 @@ def test_main_evidence_replaces_stale_files_and_hashes_completed_artifacts(
     )
 
     def run(command: list[str], environment: dict[str, str], log: Path | None) -> int:
+        """Write a completed command log for exact artifact hashing.
+
+        Args:
+            command: Exact command arguments supplied to the child or fake runner.
+            environment: Environment passed to the child process.
+            log: Optional path for persistent command output.
+
+        Returns:
+            Controlled process exit status for this test.
+        """
         assert environment["COVERAGE_FILE"] == str(evidence / ".coverage")
         assert environment["AGENT_COMPANY_PYTEST_EVIDENCE"] == str(
             evidence / "pytest-evidence.json"
@@ -254,6 +362,7 @@ def test_main_evidence_replaces_stale_files_and_hashes_completed_artifacts(
 
     monkeypatch.setattr(dev, "run_command", run)
     monkeypatch.setattr(sys, "argv", ["dev.py", "test-tooling", "--evidence-dir", str(evidence)])
+    # Require only completed new artifacts in the manifest hashes.
     assert dev.main() == 0
     manifest = json.loads((evidence / "manifest.json").read_text())
     assert manifest["candidate_unchanged"] is True
@@ -270,7 +379,13 @@ def test_main_evidence_replaces_stale_files_and_hashes_completed_artifacts(
 def test_main_preserves_directory_shard_and_runs_check_local_gate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Local collection uses its default directory and preserves directories."""
+    """Local collection uses its default directory and preserves directories.
+
+    Args:
+        tmp_path: Disposable directory supplied by pytest for this case.
+        monkeypatch: Pytest fixture that restores patched dependencies after this case.
+    """
+    # Prepare checkout and coverage shard fixtures for the local gate.
     root = tmp_path / "checkout"
     root.mkdir()
     evidence = root / ".coverage.local"
@@ -296,6 +411,16 @@ def test_main_preserves_directory_shard_and_runs_check_local_gate(
     seen: list[list[str]] = []
 
     def run(command: list[str], environment: dict[str, str], log: Path | None) -> int:
+        """Record the local gate commands while preserving its coverage shard.
+
+        Args:
+            command: Exact command arguments supplied to the child or fake runner.
+            environment: Environment passed to the child process.
+            log: Optional path for persistent command output.
+
+        Returns:
+            Controlled process exit status for this test.
+        """
         seen.append(command)
         assert environment["COVERAGE_FILE"] == str(evidence / ".coverage")
         assert log is not None
@@ -304,6 +429,7 @@ def test_main_preserves_directory_shard_and_runs_check_local_gate(
 
     monkeypatch.setattr(dev, "run_command", run)
     monkeypatch.setattr(sys, "argv", ["dev.py", "check-local"])
+    # Check the gate sequence and the retained shard directory.
     assert dev.main() == 0
     assert seen[0][0] == "/tool/python"
     assert "--cov-report=term-missing" not in seen[1]
@@ -316,7 +442,13 @@ def test_main_preserves_directory_shard_and_runs_check_local_gate(
 def test_main_unit_evidence_without_platform_gate_has_outcomes_but_no_coverage_reports(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A plain unit run records outcomes without claiming platform coverage."""
+    """A plain unit run records outcomes without claiming platform coverage.
+
+    Args:
+        tmp_path: Disposable directory supplied by pytest for this case.
+        monkeypatch: Pytest fixture that restores patched dependencies after this case.
+    """
+    # Run unit evidence without enabling the platform coverage flag.
     evidence = tmp_path / "unit"
     monkeypatch.delenv("AGENT_COMPANY_COVERAGE_CONTEXT", raising=False)
     monkeypatch.setattr(dev, "ROOT", tmp_path)
@@ -326,6 +458,16 @@ def test_main_unit_evidence_without_platform_gate_has_outcomes_but_no_coverage_r
     monkeypatch.setattr(dev, "COMMANDS", {"test-unit": [["pytest", "tests/unit"]]})
 
     def run(command: list[str], environment: dict[str, str], log: Path | None) -> int:
+        """Write the unit outcome log without a platform coverage report.
+
+        Args:
+            command: Exact command arguments supplied to the child or fake runner.
+            environment: Environment passed to the child process.
+            log: Optional path for persistent command output.
+
+        Returns:
+            Controlled process exit status for this test.
+        """
         assert "-p" in command and "scripts.pytest_evidence" in command
         assert not any(arg.startswith("--cov-report=") for arg in command)
         assert "AGENT_COMPANY_COVERAGE_CONTEXT" not in environment
@@ -335,6 +477,7 @@ def test_main_unit_evidence_without_platform_gate_has_outcomes_but_no_coverage_r
 
     monkeypatch.setattr(dev, "run_command", run)
     monkeypatch.setattr(sys, "argv", ["dev.py", "test-unit", "--evidence-dir", str(evidence)])
+    # Require outcome artifacts while excluding native coverage reports.
     assert dev.main() == 0
     assert json.loads((evidence / "manifest.json").read_text())["commands"][0]["exit_code"] == 0
 
@@ -342,8 +485,15 @@ def test_main_unit_evidence_without_platform_gate_has_outcomes_but_no_coverage_r
 def test_script_entry_exits_after_help_without_running_checks(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The executable entry propagates the help command exit code."""
+    """The executable entry propagates the help command exit code.
+
+    Args:
+        monkeypatch: Pytest fixture that restores patched dependencies after this case.
+        capsys: Pytest fixture for inspecting captured console output.
+    """
+    # Invoke the script entry point with only the help task.
     monkeypatch.setattr(sys, "argv", ["dev.py", "help"])
+    # Require a clean exit without contributor checks.
     with pytest.raises(SystemExit) as result:
         runpy.run_path(str(Path(dev.__file__)), run_name="__main__")
     assert result.value.code == 0
@@ -353,7 +503,13 @@ def test_script_entry_exits_after_help_without_running_checks(
 def test_main_platform_smoke_falls_back_to_launcher_and_keeps_suite_result(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A failed child smoke leaves the later suite result visible."""
+    """A failed child smoke leaves the later suite result visible.
+
+    Args:
+        tmp_path: Disposable directory supplied by pytest for this case.
+        monkeypatch: Pytest fixture that restores patched dependencies after this case.
+    """
+    # Make the preferred smoke launcher fail before running a successful suite.
     evidence = tmp_path / "unit"
     monkeypatch.setattr(dev, "ROOT", tmp_path)
     monkeypatch.setattr(
@@ -373,6 +529,16 @@ def test_main_platform_smoke_falls_back_to_launcher_and_keeps_suite_result(
     calls: list[list[str]] = []
 
     def run(command: list[str], environment: dict[str, str], log: Path | None) -> int:
+        """Fail the first smoke launch and then complete the suite command.
+
+        Args:
+            command: Exact command arguments supplied to the child or fake runner.
+            environment: Environment passed to the child process.
+            log: Optional path for persistent command output.
+
+        Returns:
+            Controlled process exit status for this test.
+        """
         calls.append(command)
         assert log is not None
         assert "AGENT_COMPANY_COVERAGE_CONTEXT" in environment
@@ -383,6 +549,7 @@ def test_main_platform_smoke_falls_back_to_launcher_and_keeps_suite_result(
     monkeypatch.setattr(
         sys, "argv", ["dev.py", "test-unit", "--platform-coverage", "--evidence-dir", str(evidence)]
     )
+    # Require fallback diagnostics and the suite result in the receipt.
     assert dev.main() == 5
     assert calls[0][0] == sys.executable
     assert "coverage_smoke.py" in calls[0][1]
@@ -398,7 +565,13 @@ def test_main_records_changed_candidate_and_fails_even_when_command_passes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Changed tracked input invalidates a passing check receipt."""
+    """Changed tracked input invalidates a passing check receipt.
+
+    Args:
+        tmp_path: Disposable directory supplied by pytest for this case.
+        monkeypatch: Pytest fixture that restores patched dependencies after this case.
+    """
+    # Change checkout bytes after a successful child command.
     evidence = tmp_path / "evidence"
     state = {"sha": "head", "status": "", "tracked_digest": "before"}
     monkeypatch.setattr(dev, "ROOT", tmp_path)
@@ -407,12 +580,23 @@ def test_main_records_changed_candidate_and_fails_even_when_command_passes(
     monkeypatch.setattr(dev, "COMMANDS", {"test": [["pytest"]]})
 
     def run(command: list[str], environment: dict[str, str], log: Path | None) -> int:
+        """Complete the child while the checkout identity changes.
+
+        Args:
+            command: Exact command arguments supplied to the child or fake runner.
+            environment: Environment passed to the child process.
+            log: Optional path for persistent command output.
+
+        Returns:
+            Controlled process exit status for this test.
+        """
         assert log is not None
         log.write_text("passed")
         return 0
 
     monkeypatch.setattr(dev, "run_command", run)
     monkeypatch.setattr(sys, "argv", ["dev.py", "test", "--evidence-dir", str(evidence)])
+    # Require the final receipt to fail its unchanged-candidate gate.
     assert dev.main() == 1
     manifest = json.loads((evidence / "manifest.json").read_text())
     assert manifest["commands"][0]["exit_code"] == 0

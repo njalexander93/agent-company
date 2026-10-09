@@ -17,18 +17,37 @@ class Context:
     """Provide only the context manager shape used by the startup final read."""
 
     def __enter__(self) -> Context:
-        """Return the modeled open handle."""
+        """Return the modeled open handle.
+
+        Returns:
+            The active disposable context manager fixture.
+        """
         return self
 
     def __exit__(self, *_args: object) -> None:
-        """Finish a modeled read-only handle lifetime."""
+        """Finish a modeled read-only handle lifetime.
+
+        Args:
+            _args: Ignored positional arguments accepted by this test callback.
+        """
 
     def child(self, _name: str) -> Context:
-        """Expose the modeled issue control directory."""
+        """Expose the modeled issue control directory.
+
+        Args:
+            _name: Ignored event name accepted by this test callback.
+
+        Returns:
+            The requested child directory fixture.
+        """
         return self
 
     def lock(self) -> Context:
-        """Expose a modeled held issue lock."""
+        """Expose a modeled held issue lock.
+
+        Returns:
+            The fixture lock context manager.
+        """
         return self
 
 
@@ -36,7 +55,12 @@ class Store(Context):
     """Supply a read-only issue state after startup completes."""
 
     def __init__(self, _request: dict[str, object], coordinator: str) -> None:
-        """Retain the independently expected coordinator identity."""
+        """Retain the independently expected coordinator identity.
+
+        Args:
+            _request: Ignored lifecycle request accepted by this test callback.
+            coordinator: Participant key expected to retain coordinator authority.
+        """
         self.issues = self
         self.coordinator = coordinator
 
@@ -45,21 +69,36 @@ class Issue:
     """Expose only the final coordinator identity required by startup."""
 
     def __init__(self, store: Store, _control: Context, _identifier: str) -> None:
-        """Read the modeled store state."""
+        """Read the modeled store state.
+
+        Args:
+            store: Disposable lifecycle store used by this case.
+            _control: Ignored lifecycle control supplied by this test seam.
+            _identifier: Ignored issue identifier accepted by this test callback.
+        """
         self.store = store
 
     def recover(self) -> None:
         """Model successful read-only recovery."""
 
     def committed_state(self) -> dict[str, str]:
-        """Return the persisted coordinator identity."""
+        """Return the persisted coordinator identity.
+
+        Returns:
+            The committed issue state fixture.
+        """
         return {"coordinator": self.store.coordinator}
 
 
 def test_read_file_opens_only_parent_and_reads_exact_name(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Use the lifecycle no-follow parent handle for one assigned source file."""
+    """Use the lifecycle no-follow parent handle for one assigned source file.
+
+    Args:
+        monkeypatch: Pytest fixture that isolates external state for this case.
+        tmp_path: Disposable directory for repository or file fixtures.
+    """
     opened: list[Path] = []
     reads: list[str] = []
 
@@ -67,7 +106,14 @@ def test_read_file_opens_only_parent_and_reads_exact_name(
         """Expose a bounded read from the selected parent directory."""
 
         def read(self, name: str) -> bytes:
-            """Capture the exact leaf name without path traversal."""
+            """Capture the exact leaf name without path traversal.
+
+            Args:
+                name: Exact source leaf name requested by startup.
+
+            Returns:
+                Deterministic source bytes for digest verification.
+            """
             reads.append(name)
             return b"approved source"
 
@@ -83,13 +129,18 @@ def test_read_file_opens_only_parent_and_reads_exact_name(
 
 
 def test_startup_call_preserves_core_failure_without_retry(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A rejected lifecycle transition retains its exact diagnostic code."""
+    """A rejected lifecycle transition retains its exact diagnostic code.
+
+    Args:
+        monkeypatch: Pytest fixture that isolates external state for this case.
+    """
     calls: list[dict[str, Any]] = []
     monkeypatch.setattr(
         startup.core,
         "execute",
         lambda request: calls.append(request) or {"ok": False, "code": "SOURCE_STALE"},
     )
+    # A malformed provider result must fail before any lifecycle call.
     with pytest.raises(core.WorkspaceError) as captured:
         startup._call({"operation": "read"})
     assert captured.value.code == "SOURCE_STALE"
@@ -101,7 +152,12 @@ def test_startup_call_preserves_core_failure_without_retry(monkeypatch: pytest.M
 def test_initial_packet_skips_absent_optional_checkout_rules(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """The roadmap remains required even when checkout rule files are absent."""
+    """The roadmap remains required even when checkout rule files are absent.
+
+    Args:
+        monkeypatch: Pytest fixture that isolates external state for this case.
+        tmp_path: Disposable directory for repository or file fixtures.
+    """
     checkout, main = tmp_path / "checkout", tmp_path / "main"
     checkout.mkdir()
     main.mkdir()
@@ -120,7 +176,12 @@ def test_initial_packet_skips_absent_optional_checkout_rules(
 def test_initial_packet_records_exact_canonical_source_digests(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Bind the startup packet to the actual roadmap and checkout rule bytes."""
+    """Bind the startup packet to the actual roadmap and checkout rule bytes.
+
+    Args:
+        monkeypatch: Pytest fixture that isolates external state for this case.
+        tmp_path: Disposable directory for repository or file fixtures.
+    """
     checkout, main = tmp_path / "checkout", tmp_path / "main"
     (checkout / "docs/runtime").mkdir(parents=True)
     (main / ".task/AGENT-30").mkdir(parents=True)
@@ -146,7 +207,12 @@ def test_initial_packet_records_exact_canonical_source_digests(
 def test_start_creates_scope_then_reads_bytes_before_acknowledging(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Require source-byte verification before the packet acknowledgment call."""
+    """Require source-byte verification before the packet acknowledgment call.
+
+    Args:
+        monkeypatch: Pytest fixture that isolates external state for this case.
+        tmp_path: Disposable directory for repository or file fixtures.
+    """
     key = core.participant_key({"host": "codex", "session_id": "actual-session"})
     checkout = tmp_path / "checkout"
     checkout.mkdir()
@@ -161,27 +227,41 @@ def test_start_creates_scope_then_reads_bytes_before_acknowledging(
     ]
 
     def call(request: dict[str, Any]) -> dict[str, Any]:
-        """Return the bounded lifecycle state transitions for one new issue."""
+        """Return the bounded lifecycle state transitions for one new issue.
+
+        Args:
+            request: Pytest fixture selecting the parameterized case.
+
+        Returns:
+            The lifecycle operation result fixture.
+        """
         operation = request["operation"]
         calls.append(operation)
+        # The fixture returns a stable registration identity.
         if operation == "register":
             assert request["main_worktree"] == str(checkout)
             return {"ok": True, "repo_id": "repo"}
+        # The diagnostic fixture reports an absent issue.
         if operation == "diagnose":
             return {"ok": True, "code": "ABSENT", "revision": 1}
+        # Creation supplies the binding generation for later steps.
         if operation == "create":
             assert request["coordinator"] == key
             return {"ok": True, "binding_generation": 1}
+        # Scope installation confirms the initial packet.
         if operation == "scope":
             assert request["target_participant"] == key
             assert request["packet"][0]["sha256"] == core.sha(b"approved roadmap")
             return {"ok": True}
+        # Packet read returns the assigned references and digest.
         if operation == "read":
             return {"ok": True, "references": references, "revision": 2, "packet_digest": "digest"}
+        # Acknowledgment accepts only the read packet digest.
         if operation == "acknowledge":
             assert calls[-2] == "source-bytes-read"
             assert request["packet_digest"] == "digest"
             return {"ok": True}
+        # Ready is the final lifecycle gate.
         if operation == "ready":
             return {"ok": True, "code": "OK"}
         pytest.fail(f"unexpected operation {operation}")
@@ -193,7 +273,14 @@ def test_start_creates_scope_then_reads_bytes_before_acknowledging(
     )
 
     def read_file(path: Path) -> bytes:
-        """Return source bytes while recording their read order."""
+        """Return source bytes while recording their read order.
+
+        Args:
+            path: Disposable file path used by this case.
+
+        Returns:
+            The assigned source bytes.
+        """
         assert path == read_path
         calls.append("source-bytes-read")
         return b"approved roadmap"
@@ -222,23 +309,40 @@ def test_start_creates_scope_then_reads_bytes_before_acknowledging(
 def test_start_refuses_stale_source_without_acknowledgment(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Stop when delivered bytes differ from the assigned digest."""
+    """Stop when delivered bytes differ from the assigned digest.
+
+    Args:
+        monkeypatch: Pytest fixture that isolates external state for this case.
+        tmp_path: Disposable directory for repository or file fixtures.
+    """
     checkout = tmp_path / "checkout"
     checkout.mkdir()
     calls: list[str] = []
 
     def call(request: dict[str, Any]) -> dict[str, Any]:
-        """Expose a new issue up to the source read."""
+        """Expose a new issue up to the source read.
+
+        Args:
+            request: Pytest fixture selecting the parameterized case.
+
+        Returns:
+            The lifecycle operation result fixture.
+        """
         operation = request["operation"]
         calls.append(operation)
+        # The failing fixture still registers the checkout.
         if operation == "register":
             return {"ok": True, "repo_id": "repo"}
+        # The fixture reports an absent issue before setup.
         if operation == "diagnose":
             return {"ok": True, "code": "ABSENT", "revision": 1}
+        # Creation succeeds so the later failure is isolated.
         if operation == "create":
             return {"ok": True, "binding_generation": 1}
+        # Scope succeeds before the stale-read error.
         if operation == "scope":
             return {"ok": True}
+        # Packet read supplies the stale source reference.
         if operation == "read":
             return {
                 "ok": True,
@@ -254,6 +358,7 @@ def test_start_refuses_stale_source_without_acknowledgment(
     monkeypatch.setattr(startup, "_call", call)
     monkeypatch.setattr(startup, "_initial_packet", lambda *_args: [])
     monkeypatch.setattr(startup, "_read_file", lambda _path: b"different")
+    # A stale source must fail before acknowledgment.
     with pytest.raises(core.WorkspaceError) as captured:
         startup.start(
             {"cwd": str(checkout), "session_id": "actual-session"},
@@ -266,7 +371,12 @@ def test_start_refuses_stale_source_without_acknowledgment(
 def test_start_existing_reader_joins_without_replacing_coordinator_packet(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Join an unassigned reader through the core-selected roadmap packet only."""
+    """Join an unassigned reader through the core-selected roadmap packet only.
+
+    Args:
+        monkeypatch: Pytest fixture that isolates external state for this case.
+        tmp_path: Disposable directory for repository or file fixtures.
+    """
     checkout = tmp_path / "checkout"
     checkout.mkdir()
     reader = core.participant_key({"host": "codex", "session_id": "reader"})
@@ -285,35 +395,63 @@ def test_start_existing_reader_joins_without_replacing_coordinator_packet(
         """Expose one committed existing issue to the startup reader."""
 
         def __init__(self, _request: dict[str, object]) -> None:
-            """Select the shared issue control handle."""
+            """Select the shared issue control handle.
+
+            Args:
+                _request: Ignored lifecycle request accepted by this test callback.
+            """
             self.issues = self
 
     class ExistingIssue:
         """Return the configured committed state and verify-file marker."""
 
         def __init__(self, _store: ExistingStore, _control: Context, _identifier: str) -> None:
-            """Keep the configured shared state."""
+            """Keep the configured shared state.
+
+            Args:
+                _store: Ignored store argument accepted by this test callback.
+                _control: Ignored lifecycle control supplied by this test seam.
+                _identifier: Ignored issue identifier accepted by this test callback.
+            """
 
         def recover(self) -> None:
             """Model completed transaction recovery."""
 
         def committed_state(self) -> dict[str, Any]:
-            """Expose the current committed participant map."""
+            """Expose the current committed participant map.
+
+            Returns:
+                The committed issue state fixture.
+            """
             return state
 
         def files(self) -> dict[str, bytes]:
-            """Confirm the manifest before source acknowledgment."""
+            """Confirm the manifest before source acknowledgment.
+
+            Returns:
+                The committed manifest fixture.
+            """
             operations.append("verify-files")
             return {"roadmap.md": b"roadmap"}
 
     def call(request: dict[str, Any]) -> dict[str, Any]:
-        """Model registration, join, read, and acknowledgment in order."""
+        """Model registration, join, read, and acknowledgment in order.
+
+        Args:
+            request: Pytest fixture selecting the parameterized case.
+
+        Returns:
+            The lifecycle operation result fixture.
+        """
         operation = request["operation"]
         operations.append(operation)
+        # Register the reader checkout in the existing task fixture.
         if operation == "register":
             return {"ok": True, "repo_id": "repo"}
+        # Diagnose the committed issue before the reader joins.
         if operation == "diagnose":
             return {"ok": True, "code": "PRESENT", "revision": 4}
+        # The join fixture records the new reader without replacing the coordinator.
         if operation == "join":
             assert request["expected_revision"] == 4
             state["participants"][reader] = {
@@ -327,8 +465,10 @@ def test_start_existing_reader_joins_without_replacing_coordinator_packet(
                 ],
             }
             return {"ok": True, "binding_generation": 2}
+        # Read returns the packet scoped to the reader.
         if operation == "read":
             return {"ok": True, "references": [], "revision": 5, "packet_digest": "digest"}
+        # Acknowledge and ready confirm the reader packet.
         if operation in {"acknowledge", "ready"}:
             return {"ok": True}
         pytest.fail(f"unexpected lifecycle operation {operation}")
@@ -339,7 +479,11 @@ def test_start_existing_reader_joins_without_replacing_coordinator_packet(
     reads = 0
 
     def committed_state(self: ExistingIssue) -> dict[str, Any]:
-        """Expose absent reader only before the join operation."""
+        """Expose absent reader only before the join operation.
+
+        Returns:
+            The committed issue state fixture.
+        """
         nonlocal reads
         reads += 1
         return initial_state if reads == 1 else state
@@ -433,7 +577,15 @@ def test_start_existing_assignment_respects_coordinator_packet_authority(
     expected_operations: list[str],
     expected_error: str | None,
 ) -> None:
-    """Refresh only coordinator-owned scope and reject missing reader scope or wrong UUID."""
+    """Refresh only coordinator-owned scope and reject missing reader scope or wrong UUID.
+
+    Args:
+        monkeypatch: Pytest fixture that isolates external state for this case.
+        tmp_path: Disposable directory for repository or file fixtures.
+        mode: Behavioral mode selected for this case.
+        expected_operations: Expected operations for this case.
+        expected_error: Expected error for this case.
+    """
     checkout = tmp_path / "checkout"
     checkout.mkdir()
     key = core.participant_key({"host": "codex", "session_id": "actual"})
@@ -456,8 +608,10 @@ def test_start_existing_assignment_respects_coordinator_packet_authority(
             },
         ]
     )
+    # The coordinator case omits an optional checkout source.
     if mode == "coordinator-optional":
         packet[0]["sha256"] = core.sha(b"new")
+    # The reader case mutates a source after assignment.
     if mode == "reader-stale":
         packet = [
             {
@@ -481,45 +635,76 @@ def test_start_existing_assignment_respects_coordinator_packet_authority(
         """Expose one existing issue control handle."""
 
         def __init__(self, _request: dict[str, object]) -> None:
-            """Select the issue handle."""
+            """Select the issue handle.
+
+            Args:
+                _request: Ignored lifecycle request accepted by this test callback.
+            """
             self.issues = self
 
     class ExistingIssue:
         """Expose the exact committed state after modeled recovery."""
 
         def __init__(self, _store: ExistingStore, _control: Context, _identifier: str) -> None:
-            """Retain the existing issue binding."""
+            """Retain the existing issue binding.
+
+            Args:
+                _store: Ignored store argument accepted by this test callback.
+                _control: Ignored lifecycle control supplied by this test seam.
+                _identifier: Ignored issue identifier accepted by this test callback.
+            """
 
         def recover(self) -> None:
             """Model completed control recovery."""
 
         def committed_state(self) -> dict[str, Any]:
-            """Return the configured existing state."""
+            """Return the configured existing state.
+
+            Returns:
+                The committed issue state fixture.
+            """
             return state
 
         def files(self) -> dict[str, bytes]:
-            """Verify the committed manifest before packet decisions."""
+            """Verify the committed manifest before packet decisions.
+
+            Returns:
+                The committed manifest fixture.
+            """
             operations.append("verify-files")
             return {"roadmap.md": b"new"}
 
     def call(request: dict[str, Any]) -> dict[str, Any]:
-        """Capture only the startup lifecycle requests and their ordered effects."""
+        """Capture only the startup lifecycle requests and their ordered effects.
+
+        Args:
+            request: Pytest fixture selecting the parameterized case.
+
+        Returns:
+            The lifecycle operation result fixture.
+        """
         operation = request["operation"]
         operations.append(operation)
+        # Register the selected host before resume or join.
         if operation == "register":
             return {"ok": True, "repo_id": "repo"}
+        # Diagnose the existing task state for this host.
         if operation == "diagnose":
             return {"ok": True, "code": "PRESENT", "revision": 4}
+        # Resume an already known participant without replacing ownership.
         if operation == "resume":
             return {"ok": True, "binding_generation": 2}
+        # Join a newly observed participant under the existing coordinator.
         if operation == "join":
             assert request["expected_revision"] == 4
             state["participants"][key]["packet"][0]["sha256"] = core.sha(b"new")
             return {"ok": True, "binding_generation": 2}
+        # Scope refresh is allowed only in the coordinator case.
         if operation == "scope":
             assert request["target_participant"] == key
             state["participants"][key]["packet"] = request["packet"]
             return {"ok": True}
+        # Packet read returns the current assigned references.
         if operation == "read":
             references = (
                 [{"locator": str(checkout / "optional.md"), "available": False}]
@@ -527,6 +712,7 @@ def test_start_existing_assignment_respects_coordinator_packet_authority(
                 else []
             )
             return {"ok": True, "references": references, "revision": 5, "packet_digest": "digest"}
+        # Acknowledge and readiness follow successful source delivery.
         if operation in {"acknowledge", "ready"}:
             return {"ok": True}
         pytest.fail(f"unexpected lifecycle operation {operation}")
@@ -540,7 +726,9 @@ def test_start_existing_assignment_respects_coordinator_packet_authority(
         "_initial_packet",
         lambda *_args: [{"id": "roadmap", "locator": "roadmap.md", "sha256": core.sha(b"new")}],
     )
+    # Failure cases must stop before reporting ready.
     if expected_error:
+        # Verify the precise error selected by this state variant.
         with pytest.raises(core.WorkspaceError) as captured:
             startup.start(
                 {"cwd": str(checkout), "session_id": "actual"},
@@ -548,6 +736,7 @@ def test_start_existing_assignment_respects_coordinator_packet_authority(
             )
         assert captured.value.code == expected_error
     else:
+        # Successful variants must complete startup and return ready state.
         result = startup.start(
             {"cwd": str(checkout), "session_id": "actual"},
             {"id": "AGENT-30", "uuid": "verified-uuid"},

@@ -30,14 +30,18 @@ def verified_inputs(directory: Path, sha: str, tracked_digest: str) -> list[str]
     Raises:
         ValueError: A platform, SHA, clean checkout, or successful test result is missing.
     """
+    # Collect only the manifest and coverage paths needed for the combined run.
     files: list[str] = []
     systems: dict[str, set[str]] = {}
+    # Inspect each downloaded native record before giving its database to Coverage.
     for path in sorted(directory.rglob("manifest.json")):
         # The collector manifest is canonical; workflow host.json is supplemental diagnostics.
         manifest = json.loads(path.read_text(encoding="utf-8"))
+        # Reject an artifact whose manifest cannot carry a trustworthy receipt.
         if not isinstance(manifest, dict):
             raise ValueError(f"Malformed platform evidence: {path}")
         commands = manifest.get("commands", [])
+        # Check that the manifest belongs to this exact candidate and successful run.
         if (
             not isinstance(commands, list)
             or not commands
@@ -50,6 +54,7 @@ def verified_inputs(directory: Path, sha: str, tracked_digest: str) -> list[str]
             )
         ):
             raise ValueError(f"Missing, malformed or failed commands: {path}")
+        # Require a complete, successful command receipt for the native suite.
         if (
             manifest.get("sha") != sha
             or manifest.get("status") != ""
@@ -63,6 +68,7 @@ def verified_inputs(directory: Path, sha: str, tracked_digest: str) -> list[str]
             raise ValueError(f"Incomplete or mismatched platform evidence: {path}")
         system = manifest["system"]
         suite_tasks = [command["task"] for command in commands if command["task"] in dev.TEST_TASKS]
+        # Keep only the Linux and Windows unit and integration suite inputs.
         if (
             not isinstance(system, str)
             or system not in {"Windows", "Linux"}
@@ -70,13 +76,16 @@ def verified_inputs(directory: Path, sha: str, tracked_digest: str) -> list[str]
         ):
             raise ValueError(f"Unexpected platform or test suite: {path}")
         suites = set(suite_tasks)
+        # Reject a repeated suite before it could inflate combined coverage.
         if systems.setdefault(system, set()) & suites:
             raise ValueError(f"Duplicate native test suite: {path}")
         coverage_file = path.parent / ".coverage"
+        # Require the database promised by the validated receipt.
         if not coverage_file.is_file():
             raise ValueError(f"Missing coverage database: {coverage_file}")
         systems[system].update(suites)
         files.append(str(coverage_file))
+    # Require both native systems and both split suites from each system.
     if set(systems) != {"Windows", "Linux"} or any(
         suites not in ({"test"}, {"test-unit", "test-integration"}) for suites in systems.values()
     ):
@@ -93,14 +102,18 @@ def main() -> int:
     Raises:
         ValueError: The combining checkout is dirty or native provenance does not match.
     """
+    # Parse the artifact location and destination for the standalone command.
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("artifacts", type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
     args = parser.parse_args()
+    # Bind combination to the current clean checkout before loading evidence.
     os.chdir(ROOT)
     initial = dev.checkout_state()
+    # Reject local edits because the native candidate must match source bytes.
     if initial["status"]:
         raise ValueError("Combining checkout must be clean")
+    # Validate every native suite and its exact revision before combination.
     records = valid_matrix(
         args.artifacts.resolve(),
         sha=initial["sha"],
@@ -113,6 +126,7 @@ def main() -> int:
         allow_full=True,
         source_root=ROOT,
     )
+    # Combine the validated databases and retain machine-readable reports.
     inputs = [str(path) for path in records.values()]
     output = args.output_dir.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -125,8 +139,10 @@ def main() -> int:
     coverage.xml_report(outfile=str(output / "coverage.xml"))
     coverage.json_report(outfile=str(output / "coverage.json"), show_contexts=True)
     floor = coverage.get_option("report:fail_under")
+    # Reject an invalid configured floor instead of silently weakening it.
     if not isinstance(floor, (int, float)) or isinstance(floor, bool):
         raise ValueError("Coverage floor must be numeric")
+    # Recheck checkout identity and record whether the candidate stayed unchanged.
     final = dev.checkout_state()
     unchanged = initial == final
     result = {
@@ -139,6 +155,7 @@ def main() -> int:
         "required_percent": floor,
         "passed": unchanged and total >= floor,
     }
+    # Persist the decision and return a failing status when the floor is missed.
     (output / "combined.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     return 0 if result["passed"] else 1
 

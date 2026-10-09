@@ -14,7 +14,13 @@ pytestmark = pytest.mark.integration
 def test_standalone_combiner_accepts_only_complete_full_native_records(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Preserve the older full-suite input after strict receipt validation."""
+    """Preserve the older full-suite input after strict receipt validation.
+
+    Args:
+        tmp_path: Disposable directory supplied by pytest for this case.
+        monkeypatch: Pytest fixture that restores patched dependencies after this case.
+    """
+    # Build complete legacy full-suite records for both aggregate systems.
     for system in ("Linux", "Windows"):
         directory = record(tmp_path, system, "test")
         outcome = directory / "pytest-evidence.json"
@@ -40,6 +46,7 @@ def test_standalone_combiner_accepts_only_complete_full_native_records(
         manifest["commands"][0]["log"] = "test-0.log"
         manifest["artifacts_sha256"].pop("test-test-0.log")
         manifest["artifacts_sha256"]["test-0.log"] = digest(directory / "test-0.log")
+        # Rehash the altered outcome artifacts so semantic validation must detect the defect.
         for name in ("pytest-evidence.json", "tests.xml"):
             manifest["artifacts_sha256"][name] = digest(directory / name)
         manifest_path.write_text(json.dumps(manifest))
@@ -52,6 +59,7 @@ def test_standalone_combiner_accepts_only_complete_full_native_records(
         "allow_full": True,
         "source_root": tmp_path,
     }
+    # Verify the complete native shape before exercising the standalone combiner.
     assert set(valid_matrix(tmp_path, **kwargs)) == {("Linux", "test"), ("Windows", "test")}
     windows = tmp_path / "Windows/test"
     check_local = tmp_path / "Windows/.coverage.local"
@@ -61,6 +69,7 @@ def test_standalone_combiner_accepts_only_complete_full_native_records(
     tasks = ["validate-config", "validate-config", "format-check", "lint", "type-check", "test"]
     counts: dict[str, int] = {}
     commands = []
+    # Generate each requested native suite through the real contributor runner.
     for task in tasks:
         log = f"{task}-{counts.get(task, 0)}.log"
         counts[task] = counts.get(task, 0) + 1
@@ -72,6 +81,7 @@ def test_standalone_combiner_accepts_only_complete_full_native_records(
     assert set(valid_matrix(tmp_path, **kwargs)) == {("Linux", "test"), ("Windows", "test")}
     original = missing.read_bytes()
     missing.unlink()
+    # Reject the complete-suite pair when the stricter three-OS matrix is required.
     with pytest.raises(ValueError, match="Incomplete native matrix"):
         valid_matrix(tmp_path, **kwargs)
     missing.write_bytes(original)
@@ -97,6 +107,7 @@ def test_standalone_combiner_accepts_only_complete_full_native_records(
     (checkout / ".gitattributes").write_text("* text=auto eol=lf\n")
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    # Initialize a clean disposable checkout before measuring a full suite.
     for command in (
         ["init", "-q"],
         ["add", "."],
@@ -116,6 +127,7 @@ def test_standalone_combiner_accepts_only_complete_full_native_records(
     monkeypatch.setattr(combine_coverage, "ROOT", checkout)
     state = dev.checkout_state()
     config = hashlib.sha256(policy.read_bytes()).hexdigest()
+    # Verify each retained complete-suite receipt is independently accepted.
     for directory in (tmp_path / "Linux/test", check_local):
         manifest_path = directory / "manifest.json"
         manifest = json.loads(manifest_path.read_text())

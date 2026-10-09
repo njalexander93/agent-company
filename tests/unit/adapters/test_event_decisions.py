@@ -15,6 +15,7 @@ def test_codex_async_handle_preserves_absence_and_rejects_boolean() -> None:
     assert codex.async_handle(None) is None
     assert codex.async_handle(7) == "7"
     assert codex.async_handle("worker-1") == "worker-1"
+    # Exercise malformed asynchronous handles against their specific diagnostics.
     for value, code in (
         (False, "ASYNC_HANDLE_CONFLICT"),
         (True, "ASYNC_HANDLE_CONFLICT"),
@@ -22,6 +23,7 @@ def test_codex_async_handle_preserves_absence_and_rejects_boolean() -> None:
         ("", "INVALID_REQUEST"),
         ("with space", "INVALID_REQUEST"),
     ):
+        # Each rejected handle must raise before creating a pending call.
         with pytest.raises(core.WorkspaceError) as captured:
             codex.async_handle(value)
         assert captured.value.code == code
@@ -30,7 +32,11 @@ def test_codex_async_handle_preserves_absence_and_rejects_boolean() -> None:
 def test_codex_pretool_denies_child_before_request_or_core_call(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Codex pretool denies child before request or core call."""
+    """Codex pretool denies child before request or core call.
+
+    Args:
+        monkeypatch: Pytest fixture that isolates external state for this case.
+    """
     monkeypatch.setattr(codex, "startup_lookup_state", lambda _event, _suffix: False)
     monkeypatch.setattr(codex, "bootstrap", lambda _event, ready=False: False)
     monkeypatch.setattr(codex, "provider_gate", lambda _event: False)
@@ -47,7 +53,11 @@ def test_codex_pretool_denies_child_before_request_or_core_call(
 def test_codex_pretool_records_exact_poll_handle_only_after_ready(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Codex pretool records exact poll handle only after ready."""
+    """Codex pretool records exact poll handle only after ready.
+
+    Args:
+        monkeypatch: Pytest fixture that isolates external state for this case.
+    """
     operations: list[dict[str, object]] = []
     monkeypatch.setattr(codex, "startup_lookup_state", lambda _event, _suffix: False)
     monkeypatch.setattr(codex, "bootstrap", lambda _event, ready=False: False)
@@ -59,7 +69,14 @@ def test_codex_pretool_records_exact_poll_handle_only_after_ready(
     )
 
     def execute(request: dict[str, object]) -> dict[str, object]:
-        """Execute."""
+        """Execute.
+
+        Args:
+            request: Pytest fixture selecting the parameterized case.
+
+        Returns:
+            The simulated lifecycle result for this request.
+        """
         operations.append(request)
         return {"ok": True, "code": "OK"}
 
@@ -79,7 +96,11 @@ def test_codex_pretool_records_exact_poll_handle_only_after_ready(
 def test_codex_pretool_invalid_poll_handle_has_no_tool_start(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Codex pretool invalid poll handle has no tool start."""
+    """Codex pretool invalid poll handle has no tool start.
+
+    Args:
+        monkeypatch: Pytest fixture that isolates external state for this case.
+    """
     operations: list[str] = []
     monkeypatch.setattr(codex, "startup_lookup_state", lambda _event, _suffix: False)
     monkeypatch.setattr(codex, "bootstrap", lambda _event, ready=False: False)
@@ -87,7 +108,14 @@ def test_codex_pretool_invalid_poll_handle_has_no_tool_start(
     monkeypatch.setattr(codex, "request_for", lambda _event, operation: {"operation": operation})
 
     def execute(request: dict[str, object]) -> dict[str, object]:
-        """Execute."""
+        """Execute.
+
+        Args:
+            request: Pytest fixture selecting the parameterized case.
+
+        Returns:
+            The simulated lifecycle result for this request.
+        """
         operations.append(str(request["operation"]))
         return {"ok": True, "code": "OK"}
 
@@ -107,7 +135,11 @@ def test_codex_pretool_invalid_poll_handle_has_no_tool_start(
 def test_codex_posttool_keeps_unproven_completion_pending(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Codex posttool keeps unproven completion pending."""
+    """Codex posttool keeps unproven completion pending.
+
+    Args:
+        monkeypatch: Pytest fixture that isolates external state for this case.
+    """
     monkeypatch.setattr(codex, "startup_lookup_state", lambda _event, _suffix: False)
     monkeypatch.setattr(codex, "request_for", lambda _event, operation: {"operation": operation})
     monkeypatch.setattr(codex.core, "execute", lambda _request: pytest.fail("unproven completion"))
@@ -123,13 +155,24 @@ def test_codex_posttool_keeps_unproven_completion_pending(
 def test_codex_posttool_records_typed_completion_and_handle(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Codex posttool records typed completion and handle."""
+    """Codex posttool records typed completion and handle.
+
+    Args:
+        monkeypatch: Pytest fixture that isolates external state for this case.
+    """
     calls: list[dict[str, object]] = []
     monkeypatch.setattr(codex, "startup_lookup_state", lambda _event, _suffix: False)
     monkeypatch.setattr(codex, "request_for", lambda _event, operation: {"operation": operation})
 
     def execute(request: dict[str, object]) -> dict[str, object]:
-        """Execute."""
+        """Execute.
+
+        Args:
+            request: Pytest fixture selecting the parameterized case.
+
+        Returns:
+            The simulated lifecycle result for this request.
+        """
         calls.append(request)
         return {"ok": True, "code": "OK"}
 
@@ -150,7 +193,11 @@ def test_codex_posttool_records_typed_completion_and_handle(
 def test_codex_posttool_rejects_conflicting_poll_handle_without_settlement(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Codex posttool rejects conflicting poll handle without settlement."""
+    """Codex posttool rejects conflicting poll handle without settlement.
+
+    Args:
+        monkeypatch: Pytest fixture that isolates external state for this case.
+    """
     monkeypatch.setattr(codex, "startup_lookup_state", lambda _event, _suffix: False)
     monkeypatch.setattr(codex, "request_for", lambda _event, operation: {"operation": operation})
     monkeypatch.setattr(codex.core, "execute", lambda _request: pytest.fail("conflicting handle"))
@@ -185,7 +232,13 @@ def test_cursor_failure_denies_tool_and_blocks_prompt() -> None:
 def test_native_adapter_pretool_preserves_host_specific_permission(
     adapter: object, event_name: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Native adapter pretool preserves host specific permission."""
+    """Native adapter pretool preserves host specific permission.
+
+    Args:
+        adapter: Adapter module selected by the parameterized case.
+        event_name: Native hook event name selected for this test.
+        monkeypatch: Pytest fixture that isolates external state for this case.
+    """
     monkeypatch.delenv("CURSOR_VERSION", raising=False)
     monkeypatch.delenv("CURSOR_CODE_REMOTE", raising=False)
     monkeypatch.setattr(adapter.common, "native_identity", lambda event, _host: event)
@@ -198,7 +251,11 @@ def test_native_adapter_pretool_preserves_host_specific_permission(
 
 
 def test_cursor_remote_rejected_before_native_identity(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Cursor remote rejected before native identity."""
+    """Cursor remote rejected before native identity.
+
+    Args:
+        monkeypatch: Pytest fixture that isolates external state for this case.
+    """
     monkeypatch.setenv("CURSOR_CODE_REMOTE", "true")
     monkeypatch.setattr(
         cursor.common, "native_identity", lambda *_args: pytest.fail("identity read")
@@ -209,7 +266,11 @@ def test_cursor_remote_rejected_before_native_identity(monkeypatch: pytest.Monke
 
 
 def test_claude_cursor_import_has_no_duplicate_effect(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Claude cursor import has no duplicate effect."""
+    """Claude cursor import has no duplicate effect.
+
+    Args:
+        monkeypatch: Pytest fixture that isolates external state for this case.
+    """
     monkeypatch.setenv("CURSOR_VERSION", "1")
     monkeypatch.setattr(
         claude.common, "native_identity", lambda *_args: pytest.fail("duplicate hook")
@@ -232,7 +293,13 @@ def test_claude_cursor_import_has_no_duplicate_effect(monkeypatch: pytest.Monkey
 def test_claude_routes_completion_and_advisory_events_without_permission_decision(
     monkeypatch: pytest.MonkeyPatch, name: str, expected_effect: str
 ) -> None:
-    """Record only the documented completion or observation effect."""
+    """Record only the documented completion or observation effect.
+
+    Args:
+        monkeypatch: Pytest fixture that isolates external state for this case.
+        name: Event or case name selected for this test.
+        expected_effect: Expected effect for this case.
+    """
     monkeypatch.delenv("CURSOR_VERSION", raising=False)
     monkeypatch.setattr(claude.common, "native_identity", lambda event, _host: event)
     effects: list[str] = []
@@ -251,7 +318,11 @@ def test_claude_routes_completion_and_advisory_events_without_permission_decisio
 def test_claude_prompt_and_session_context_keep_host_permission_separate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Return task selection and recovery text without any allow decision."""
+    """Return task selection and recovery text without any allow decision.
+
+    Args:
+        monkeypatch: Pytest fixture that isolates external state for this case.
+    """
     monkeypatch.delenv("CURSOR_VERSION", raising=False)
     monkeypatch.setattr(claude.common, "native_identity", lambda event, _host: event)
     monkeypatch.setattr(claude.common, "prompt", lambda _event, _host: {"decision": "block"})
@@ -265,7 +336,11 @@ def test_claude_prompt_and_session_context_keep_host_permission_separate(
 def test_cursor_routes_prompt_completion_context_and_stop(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Use Cursor's native continue/context fields and advisory ending."""
+    """Use Cursor's native continue/context fields and advisory ending.
+
+    Args:
+        monkeypatch: Pytest fixture that isolates external state for this case.
+    """
     monkeypatch.delenv("CURSOR_CODE_REMOTE", raising=False)
     monkeypatch.setattr(cursor.common, "native_identity", lambda event, _host: event)
     effects: list[str] = []
@@ -293,10 +368,39 @@ def test_cursor_routes_prompt_completion_context_and_stop(
     assert effects == ["post:False", "post:True", "observe"]
 
 
+@pytest.mark.parametrize("failed", [False, True])
+def test_cursor_nonbootstrap_linear_completion_uses_normal_admission(
+    monkeypatch: pytest.MonkeyPatch, failed: bool
+) -> None:
+    """Route an unassigned Linear completion through normal tool settlement.
+
+    Args:
+        monkeypatch: Pytest fixture isolating the native callback boundary.
+        failed: Whether Cursor reports provider failure instead of success.
+    """
+    monkeypatch.delenv("CURSOR_CODE_REMOTE", raising=False)
+    monkeypatch.setattr(cursor.common, "native_identity", lambda event, _host: event)
+    monkeypatch.setattr(cursor.common, "lookup_required", lambda _event, _host: False)
+    settled: list[bool] = []
+    monkeypatch.setattr(
+        cursor.common,
+        "native_post",
+        lambda _event, _host, failed: settled.append(failed),
+    )
+    # An ordinary provider result must never disappear at the bootstrap branch.
+    name = "postToolUseFailure" if failed else "postToolUse"
+    assert cursor.handle({"hook_event_name": name, "tool_name": "MCP:get_issue"}) == {}
+    assert settled == [failed]
+
+
 def test_cursor_subagent_denied_before_identity_or_completion(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Keep child-session work outside the parent binding."""
+    """Keep child-session work outside the parent binding.
+
+    Args:
+        monkeypatch: Pytest fixture that isolates external state for this case.
+    """
     monkeypatch.delenv("CURSOR_CODE_REMOTE", raising=False)
     monkeypatch.setattr(cursor.common, "native_identity", lambda *_args: pytest.fail("identity"))
     result = cursor.handle({"hook_event_name": "subagentStart"})
@@ -316,7 +420,11 @@ def test_claude_failure_blocks_prompt_and_reports_advisory_fallback() -> None:
 def test_claude_unknown_child_and_permission_events_do_not_grant_access(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Keep child identity unsupported and leave host permission decisions untouched."""
+    """Keep child identity unsupported and leave host permission decisions untouched.
+
+    Args:
+        monkeypatch: Pytest fixture that isolates external state for this case.
+    """
     monkeypatch.delenv("CURSOR_VERSION", raising=False)
     monkeypatch.setattr(claude.common, "native_identity", lambda event, _host: event)
     assert claude.handle({"hook_event_name": "PermissionRequest"}) == {}
@@ -336,7 +444,13 @@ def test_claude_unknown_child_and_permission_events_do_not_grant_access(
 def test_claude_catches_native_failure_as_bounded_tool_denial(
     monkeypatch: pytest.MonkeyPatch, error: Exception, code: str
 ) -> None:
-    """Keep exception contents out of the PreToolUse response."""
+    """Keep exception contents out of the PreToolUse response.
+
+    Args:
+        monkeypatch: Pytest fixture that isolates external state for this case.
+        error: Exception raised by the simulated failure.
+        code: Diagnostic code selected for this case.
+    """
     monkeypatch.delenv("CURSOR_VERSION", raising=False)
     monkeypatch.setattr(
         claude.common,
@@ -360,9 +474,15 @@ def test_claude_catches_native_failure_as_bounded_tool_denial(
     ],
 )
 def test_cursor_failure_renders_documented_event_field(name: str, field: str) -> None:
-    """Use the documented native field for each denied or advisory event."""
+    """Use the documented native field for each denied or advisory event.
+
+    Args:
+        name: Event or case name selected for this test.
+        field: Request or event field varied by this case.
+    """
     response = cursor.failure(name, "SOURCE_STALE")
     assert field in response
+    # Advisory fields carry the diagnostic text; the permission field is a literal.
     if field != "permission":
         assert "SOURCE_STALE" in response[field]
     assert cursor.failure("unknown", "SOURCE_STALE") == {}
@@ -371,7 +491,11 @@ def test_cursor_failure_renders_documented_event_field(name: str, field: str) ->
 def test_cursor_prompt_continue_and_unsupported_event_are_bounded(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Continue a valid prompt without granting tools and deny unknown event grammar."""
+    """Continue a valid prompt without granting tools and deny unknown event grammar.
+
+    Args:
+        monkeypatch: Pytest fixture that isolates external state for this case.
+    """
     monkeypatch.delenv("CURSOR_CODE_REMOTE", raising=False)
     monkeypatch.setattr(cursor.common, "native_identity", lambda event, _host: event)
     monkeypatch.setattr(cursor.common, "prompt", lambda *_args: {})
@@ -380,7 +504,11 @@ def test_cursor_prompt_continue_and_unsupported_event_are_bounded(
 
 
 def test_cursor_main_delegates_to_bounded_native_runner(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Use the shared supervised protocol for one Cursor event."""
+    """Use the shared supervised protocol for one Cursor event.
+
+    Args:
+        monkeypatch: Pytest fixture that isolates external state for this case.
+    """
     calls: list[tuple[object, object]] = []
     monkeypatch.setattr(
         cursor.common,
@@ -394,7 +522,11 @@ def test_cursor_main_delegates_to_bounded_native_runner(monkeypatch: pytest.Monk
 def test_claude_main_uses_runner_when_not_cursor_imported(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Run one Claude protocol exchange only outside Cursor-imported settings."""
+    """Run one Claude protocol exchange only outside Cursor-imported settings.
+
+    Args:
+        monkeypatch: Pytest fixture that isolates external state for this case.
+    """
     monkeypatch.delenv("CURSOR_VERSION", raising=False)
     calls: list[tuple[object, object]] = []
     monkeypatch.setattr(

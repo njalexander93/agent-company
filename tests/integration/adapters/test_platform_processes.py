@@ -60,13 +60,16 @@ def test_hook_bounds_malformed_and_open_stdin(
         assert process.stdin is not None
         process.stdin.write(json.dumps({"hook_event_name": event}).encode()[:-1])
         process.stdin.flush()
+        # An unterminated input pipe must still produce a bounded exit.
         try:
             process.wait(timeout=6)
+        # Kill a hung hook so the regression fails without blocking the suite.
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait()
             pytest.fail("Hook did not bound an open stdin pipe")
         finally:
+            # Close the input pipe after the bounded process check.
             process.stdin.close()
         assert process.stdout is not None and process.stderr is not None
         output, errors = process.stdout.read(), process.stderr.read()
@@ -97,6 +100,7 @@ def test_supervisor_reaps_worker_and_preserves_failure_contract(
     path = source / "agent_company/adapters" / (host + ".py")
     sentinel = tmp_path / "late-write"
     started = tmp_path / "worker-started"
+    # Choose a worker that writes late or one that loops forever.
     if fault == "late_write":
         body = (
             "    import time\n    from pathlib import Path\n"
@@ -106,6 +110,7 @@ def test_supervisor_reaps_worker_and_preserves_failure_contract(
             "    return {}\n"
         )
     else:
+        # The other fault raises a synchronous lifecycle conflict.
         body = '    raise core.WorkspaceError("BINDING_CONFLICT")\n'
     original = path.read_text(encoding="utf-8")
     marker = '\nif __name__ == "__main__":'
@@ -131,7 +136,9 @@ def test_supervisor_reaps_worker_and_preserves_failure_contract(
     if host == "cursor":
         assert response["permission"] == "deny"
     else:
+        # Claude reports denial in its hook-specific response.
         assert response["hookSpecificOutput"]["permissionDecision"] == "deny"
+    # The late-write case must start its worker before timeout enforcement.
     if fault == "late_write":
         assert started.exists(), "The mutation worker must actually start before the deadline"
         assert "BUSY" in result.stderr
@@ -139,11 +146,16 @@ def test_supervisor_reaps_worker_and_preserves_failure_contract(
         time.sleep(3.2)
         assert not sentinel.exists()
     else:
+        # Synchronous failure must surface its lifecycle conflict.
         assert "BINDING_CONFLICT" in result.stdout
 
 
 def test_supervisor_rejects_oversized_worker_output(tmp_path: Path) -> None:
-    """The real worker transport bounds a handler response before host publication."""
+    """The real worker transport bounds a handler response before host publication.
+
+    Args:
+        tmp_path: Disposable directory for repository or file fixtures.
+    """
     source = tmp_path / "src"
     shutil.copytree(ROOT / "src", source, ignore=shutil.ignore_patterns("__pycache__"))
     adapter = source / "agent_company/adapters/codex.py"

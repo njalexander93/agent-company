@@ -18,7 +18,7 @@ retention steps still attempt to preserve available diagnostic evidence.
 | `Linux Tests (Unit/Integration)` | Ubuntu 24.04 | Unit and integration suites both pass. |
 | `Windows Tests (Unit/Integration)` | Windows 2025 | Unit and integration suites both pass. |
 | `MacOS Tests (Unit/Integration)` | macOS 15 | Unit and integration suites both pass. |
-| `Test Quality Check` | Ubuntu 24.04 | Six valid native suites, three tooling unit records, the unchanged Linux/Windows **80% unrounded** aggregate, reviewed function gaps, focused test lint and three assertion probes pass. |
+| `Test Quality Check` | Ubuntu 24.04 | Required native unit, integration and tooling evidence from **Linux, Windows and macOS**, per-OS function checks, the historical **80% unrounded** aggregate, focused test lint and three assertion probes pass. |
 
 Quality and the three OS jobs can run concurrently. Quality steps run in order:
 `validate-config`, `format-check`, `lint`, then `type-check`. Later steps still run
@@ -30,9 +30,13 @@ does not cancel peer jobs on failure.
 Test Quality waits for all three OS jobs. Unless cancelled, it runs even when an
 OS job fails. A missing or failed native record produces a named failure while
 independent lint and assertion probes still run. It validates both suites from
-Linux, Windows and macOS, plus separate tooling unit evidence on each OS. Only
-Linux and Windows enter the original 80% production aggregate. macOS evidence is
-required and cannot raise a failing Linux/Windows result. The gate retains a
+Linux, Windows and macOS, plus separate tooling unit evidence on each OS.
+All three operating systems are equal supported development environments,
+regardless of the OS used by the author or reviewer. The historical 80% production
+aggregate combines Linux and Windows evidence. That calculation is an additional
+coverage gate; it does not define platform support. Each OS must independently
+pass its applicable native checks, and results from another OS cannot replace them.
+The gate retains a
 `quality.json` result for each control; a blocked dependent check is not a pass.
 It also retains native suite totals, a pinned-base source diff and the order
 replay status as **advisory** entries. These do not create a hidden score or a
@@ -75,7 +79,8 @@ host-hook delivery. See [development limits](development.md#source-layout) and
 
    This still runs configuration, formatting, lint, types and the full test suite
    on the current OS. It stops at the first failure and saves evidence in ignored
-   `.coverage.local/`. **Combined Windows/Linux coverage remains pending.**
+   `.coverage.local/`. **The other native OS runs and combined quality validation
+   remain pending.**
 3. Reproduce quality steps individually. Run all four to inspect independent
    failures, as the workflow does:
 
@@ -109,7 +114,9 @@ host-hook delivery. See [development limits](development.md#source-layout) and
    Replace angle-bracket paths with actual paths; quote paths containing spaces.
    The quality check rejects missing, failed, duplicate or incomplete native
    suites, dirty checkouts, changed source bytes and mismatched revisions. Its
-   `combined/` subdirectory retains the original Linux/Windows coverage result.
+   `combined/` subdirectory retains the historical Linux/Windows aggregate.
+   Native Linux, Windows and macOS evidence remains separately required; this
+   subdirectory is not a summary of supported operating systems.
    The standalone combiner still accepts split or full suite evidence for its
    narrower historical check, including a successful native `check-local`
    record. Copy each default `.coverage.local/` output beneath its OS directory

@@ -14,7 +14,15 @@ pytestmark = pytest.mark.unit
 
 
 def base_request(operation: str, **fields: object) -> dict[str, Any]:
-    """Create one explicitly bound request for the modeled issue."""
+    """Create one explicitly bound request for the modeled issue.
+
+    Args:
+        operation: Lifecycle operation encoded in the request.
+        **fields: Additional fields merged into the request.
+
+    Returns:
+        Versioned request bound to the modeled repository, issue, and participant.
+    """
     return {
         "schema_version": 1,
         "operation": operation,
@@ -35,16 +43,35 @@ class MemoryControl:
         self.data: dict[str, object] = {}
 
     def exists(self, name: str) -> bool:
-        """Report no recorded cleanup intent in this active issue."""
+        """Report no recorded cleanup intent in this active issue.
+
+        Args:
+            name: Requested file, directory, or control-entry name.
+
+        Returns:
+            Whether the requested test entry exists.
+        """
         assert name == "cleanup.json"
         return False
 
     def put(self, name: str, value: object) -> None:
-        """Retain a control document for later read-back."""
+        """Retain a control document for later read-back.
+
+        Args:
+            name: Requested file, directory, or control-entry name.
+            value: Document value stored by the fake control boundary.
+        """
         self.data[name] = copy.deepcopy(value)
 
     def json(self, name: str) -> Any:
-        """Return the exact previously published control document."""
+        """Return the exact previously published control document.
+
+        Args:
+            name: Requested file, directory, or control-entry name.
+
+        Returns:
+            Decoded JSON value for the selected fake file.
+        """
         return copy.deepcopy(self.data[name])
 
 
@@ -53,21 +80,35 @@ class MemoryStore:
 
     def __init__(self) -> None:
         """Hold the bound session and observed view calls."""
+        # Initialize repository identity, view-call log, and binding-write log.
         self.registration = {"repo_id": "repo"}
         self.views: list[str] = []
         self.saved: list[str] = []
         self.task = None
 
     def binding(self) -> dict[str, object]:
-        """Return the existing exact issue and generation binding."""
+        """Return the existing exact issue and generation binding.
+
+        Returns:
+            Participant binding used by the operation.
+        """
         return {"issue_id": "AGENT-30", "binding_generation": 2}
 
     def view(self, identifier: str) -> None:
-        """Record that the issue view is exposed to this participant."""
+        """Record that the issue view is exposed to this participant.
+
+        Args:
+            identifier: Issue or participant identifier used in this scenario.
+        """
         self.views.append(identifier)
 
     def save_binding(self, _state: dict[str, Any], key: str) -> None:
-        """Record a binding persistence effect for attach flows."""
+        """Record a binding persistence effect for attach flows.
+
+        Args:
+            _state: Unused state argument accepted by this fake.
+            key: Participant key recorded as saved.
+        """
         self.saved.append(key)
 
 
@@ -75,13 +116,20 @@ class MemoryIssue:
     """Retain committed state and files while recording requested transactions."""
 
     def __init__(self, *, acknowledged: bool = True) -> None:
-        """Start with one assigned participant and immutable note bytes."""
+        """Start with one assigned participant and immutable note bytes.
+
+        Args:
+            acknowledged: Whether the participant starts with a current packet acknowledgment.
+        """
+        # Initialize issue identity, control handle, and transaction logs.
         self.id = "AGENT-30"
         self.control = MemoryControl()
         self.store = MemoryStore()
         self.recoveries = 0
         self.commits: list[tuple[str | None, dict[str, Any], dict[str, bytes]]] = []
+        # Bind the initial coordinator to the modeled host and session.
         key = core.participant_key(base_request("read"))
+        # Install its roadmap packet and baseline committed issue state.
         packet = [
             {
                 "id": "roadmap",
@@ -135,11 +183,19 @@ class MemoryIssue:
         self.recoveries += 1
 
     def files(self) -> dict[str, bytes]:
-        """Return the current committed payload as an isolated mutable copy."""
+        """Return the current committed payload as an isolated mutable copy.
+
+        Returns:
+            File mapping retained by the fake store.
+        """
         return self.payload.copy()
 
     def committed_state(self) -> dict[str, Any]:
-        """Return the currently committed control state."""
+        """Return the currently committed control state.
+
+        Returns:
+            State currently committed by the fake issue.
+        """
         return copy.deepcopy(self.state)
 
     def commit(
@@ -150,8 +206,20 @@ class MemoryIssue:
         result: dict[str, Any],
         event_type: str | None = None,
     ) -> dict[str, Any]:
-        """Persist modeled bytes and expose the requested event and state effects."""
+        """Persist modeled bytes and expose the requested event and state effects.
+
+        Args:
+            state: Issue state used by this scenario.
+            files: File contents used to build or inspect the workspace.
+            _request: Unused request argument accepted by this fake.
+            result: Response returned by the fake collaborator.
+            event_type: Event type selected by the case.
+
+        Returns:
+            Committed revision returned by the fake persistence boundary.
+        """
         self.commits.append((event_type, copy.deepcopy(state), files.copy()))
+        # Shape the issue state for the requested transition.
         self.state = copy.deepcopy(state)
         self.payload = files.copy()
         return {"ok": True, "code": "OK", **result}
@@ -159,8 +227,10 @@ class MemoryIssue:
 
 def test_read_returns_only_assigned_matching_references_without_commit() -> None:
     """Read the packet and current revision without changing state."""
+    # Create the modeled issue and retain its pre-operation state.
     store, issue = MemoryStore(), MemoryIssue()
     before = copy.deepcopy(issue.state)
+    # Dispatch the read request against the modeled issue.
     result = core.operate(store, issue, base_request("read"))  # type: ignore[arg-type]
     assert result["ok"] is True
     assert result["revision"] == 7
@@ -173,8 +243,11 @@ def test_read_returns_only_assigned_matching_references_without_commit() -> None
 
 def test_diagnose_reports_absent_and_present_issue_without_binding_read() -> None:
     """Diagnosis reveals only committed issue presence and storage state."""
+    # Create a modeled store and issue at the active revision.
     store, issue = MemoryStore(), MemoryIssue()
+    # Dispatch the diagnose request against the modeled issue.
     result = core.operate(store, issue, base_request("diagnose"))  # type: ignore[arg-type]
+    # Confirm the exact participant and issue report a present binding.
     assert result == {
         "ok": True,
         "code": "PRESENT",
@@ -183,8 +256,11 @@ def test_diagnose_reports_absent_and_present_issue_without_binding_read() -> Non
         "revision": 7,
         "storage": "present",
     }
+    # Shape the issue state for the requested transition.
     issue.state = {}
+    # Dispatch the diagnose request against the modeled issue.
     result = core.operate(store, issue, base_request("diagnose"))  # type: ignore[arg-type]
+    # Confirm the exact participant and issue report an absent binding.
     assert result == {
         "ok": True,
         "code": "ABSENT",
@@ -198,10 +274,13 @@ def test_diagnose_reports_absent_and_present_issue_without_binding_read() -> Non
 
 def test_ready_rejects_unacknowledged_packet_without_commit() -> None:
     """Block ordinary tools until the assigned packet was acknowledged."""
+    # Create the modeled issue and retain its pre-operation state.
     store, issue = MemoryStore(), MemoryIssue(acknowledged=False)
     before = copy.deepcopy(issue.state)
+    # Dispatch the ready request and capture its rejection.
     with pytest.raises(core.WorkspaceError) as captured:
         core.operate(store, issue, base_request("ready"))  # type: ignore[arg-type]
+    # Confirm the rejected operation reports NOT_READY.
     assert captured.value.code == "NOT_READY"
     assert issue.state == before
     assert issue.commits == []
@@ -209,21 +288,29 @@ def test_ready_rejects_unacknowledged_packet_without_commit() -> None:
 
 def test_acknowledge_updates_status_only_for_matching_packet_digest() -> None:
     """Commit readiness only when the caller names the current packet digest."""
+    # Create a modeled store and issue at the active revision.
     store, issue = MemoryStore(), MemoryIssue(acknowledged=False)
+    # Hash the source bytes before testing stale-read detection.
     digest = core.sha(core.canonical(next(iter(issue.state["participants"].values()))["packet"]))
+    # Dispatch the acknowledge request and capture its rejection.
     with pytest.raises(core.WorkspaceError) as captured:
         core.operate(store, issue, base_request("acknowledge", packet_digest="wrong"))  # type: ignore[arg-type]
+    # Confirm the rejected operation reports SOURCE_STALE.
     assert captured.value.code == "SOURCE_STALE"
     assert issue.commits == []
+    # Dispatch the acknowledge request against the modeled issue.
     result = core.operate(store, issue, base_request("acknowledge", packet_digest=digest))  # type: ignore[arg-type]
     assert result["ok"] is True
+    # Inspect the participant record after the operation.
     member = next(iter(issue.state["participants"].values()))
+    # Check reader status and acknowledged source digest.
     assert (member["status"], member["ack"]) == ("ready", digest)
     assert issue.commits[-1][0] == "acknowledge"
 
 
 def test_update_replaces_owned_note_with_attributable_provenance() -> None:
     """Commit exact replacement bytes and record their source and author."""
+    # Create the issue, select its reader, and pin the source reference.
     store, issue = MemoryStore(), MemoryIssue()
     key = issue.state["coordinator"]
     source = {"id": "issue", "locator": "context/issue.md", "sha256": core.sha(b"source")}
@@ -235,6 +322,7 @@ def test_update_replaces_owned_note_with_attributable_provenance() -> None:
         content="new note é",
         provenance={"sources": [source], "applicability": "AGENT-30", "status": "draft"},
     )
+    # Check the operation response and committed issue state.
     assert core.operate(store, issue, request)["ok"] is True  # type: ignore[arg-type]
     assert issue.payload["context/note.md"] == "new note é".encode()
     assert issue.state["provenance"]["context/note.md"]["author"] == key
@@ -244,14 +332,17 @@ def test_update_replaces_owned_note_with_attributable_provenance() -> None:
 
 def test_update_rejects_stale_digest_without_writing() -> None:
     """Leave payload and provenance unchanged for stale replacement content."""
+    # Create the modeled issue and retain its pre-operation state.
     store, issue = MemoryStore(), MemoryIssue()
     before = copy.deepcopy(issue.state)
+    # Dispatch the update request and capture its rejection.
     with pytest.raises(core.WorkspaceError) as captured:
         core.operate(
             store,
             issue,
             base_request("update", expected_revision=7, path="context/note.md", old_digest="bad"),
         )  # type: ignore[arg-type]
+    # Confirm the rejected operation reports REVISION_CONFLICT.
     assert captured.value.code == "REVISION_CONFLICT"
     assert issue.state == before
     assert issue.commits == []
@@ -259,24 +350,33 @@ def test_update_rejects_stale_digest_without_writing() -> None:
 
 def test_tool_start_requires_ack_and_records_only_observed_id() -> None:
     """Reserve a supported tool after packet readiness and reject duplicates."""
+    # Create a modeled store and issue, then build the lifecycle request.
     store, issue = MemoryStore(), MemoryIssue()
     request = base_request("tool-start", tool_id="tool-1")
+    # Check the operation response and committed issue state.
     assert core.operate(store, issue, request)["ok"] is True  # type: ignore[arg-type]
+    # Inspect the participant record after the operation.
     member = next(iter(issue.state["participants"].values()))
     assert member["pending"] == {"tool-1": {"status": "pending"}}
+    # Dispatch the tool-start request and capture its rejection.
     with pytest.raises(core.WorkspaceError) as captured:
         core.operate(store, issue, base_request("tool-start", tool_id="tool-1"))  # type: ignore[arg-type]
+    # Confirm the rejected operation reports REQUEST_CONFLICT.
     assert captured.value.code == "REQUEST_CONFLICT"
     assert len(issue.commits) == 1
 
 
 def test_tool_complete_requires_matching_pending_id_before_settlement() -> None:
     """Never infer completion for an unrecorded tool."""
+    # Create a modeled store and issue at the active revision.
     store, issue = MemoryStore(), MemoryIssue()
+    # Dispatch the tool-complete request and capture its rejection.
     with pytest.raises(core.WorkspaceError) as captured:
         core.operate(store, issue, base_request("tool-complete", tool_id="other", completed=True))  # type: ignore[arg-type]
+    # Confirm the rejected operation reports UNKNOWN_OPERATION.
     assert captured.value.code == "UNKNOWN_OPERATION"
     assert issue.commits == []
+    # Dispatch the tool-start request against the modeled issue.
     core.operate(store, issue, base_request("tool-start", tool_id="tool-1"))  # type: ignore[arg-type]
     result = core.operate(
         store, issue, base_request("tool-complete", tool_id="tool-1", completed=True)
@@ -287,21 +387,27 @@ def test_tool_complete_requires_matching_pending_id_before_settlement() -> None:
 
 def test_tool_complete_retains_unknown_process_with_handle() -> None:
     """Keep asynchronous work pending under its observed handle."""
+    # Create a modeled store and issue at the active revision.
     store, issue = MemoryStore(), MemoryIssue()
+    # Dispatch the tool-start request against the modeled issue.
     core.operate(store, issue, base_request("tool-start", tool_id="tool-1"))  # type: ignore[arg-type]
     core.operate(
         store,
         issue,
         base_request("tool-complete", tool_id="tool-1", completed=False, async_handle="pid-7"),
     )  # type: ignore[arg-type]
+    # Inspect the participant record after the operation.
     member = next(iter(issue.state["participants"].values()))
     assert member["pending"] == {"tool-1": {"status": "unknown", "handle": "pid-7"}}
 
 
 def test_scope_assigns_reader_packet_and_owned_note() -> None:
     """Replace one participant scope while retaining coordinator ownership."""
+    # Create a modeled store and issue at the active revision.
     store, issue = MemoryStore(), MemoryIssue()
+    # Resolve the exact participant key for this request.
     reader = core.participant_key({"host": "codex", "session_id": "reader"})
+    # Build the reader-scoped packet used by this case.
     packet = [
         {
             "id": "issue",
@@ -314,6 +420,7 @@ def test_scope_assigns_reader_packet_and_owned_note() -> None:
             "reader": reader,
         }
     ]
+    # Dispatch the scope request against the modeled issue.
     result = core.operate(
         store,
         issue,
@@ -325,6 +432,7 @@ def test_scope_assigns_reader_packet_and_owned_note() -> None:
             owned_paths=["context/issue.md"],
         ),
     )  # type: ignore[arg-type]
+    # Confirm the reader packet contains only assigned references.
     assert result["packet_digest"] == core.sha(core.canonical(packet))
     assert issue.state["assignments"][reader]["packet"] == packet
     assert issue.state["owners"]["context/issue.md"] == reader
@@ -333,8 +441,11 @@ def test_scope_assigns_reader_packet_and_owned_note() -> None:
 
 def test_scope_updates_detached_reader_packet_without_reviving_generation() -> None:
     """A scope edit does not silently reattach a detached participant."""
+    # Create a modeled store and issue at the active revision.
     store, issue = MemoryStore(), MemoryIssue()
+    # Resolve the exact participant key for this request.
     reader = core.participant_key({"host": "codex", "session_id": "reader"})
+    # Shape the issue state for the requested transition.
     issue.state["participants"][reader] = {
         "generation": 4,
         "status": "detached",
@@ -345,6 +456,7 @@ def test_scope_updates_detached_reader_packet_without_reviving_generation() -> N
     packet = [
         {**issue.state["participants"][issue.state["coordinator"]]["packet"][0], "reader": reader}
     ]
+    # Dispatch the scope request against the modeled issue.
     result = core.operate(
         store,
         issue,
@@ -358,6 +470,7 @@ def test_scope_updates_detached_reader_packet_without_reviving_generation() -> N
 
 def test_join_grants_reader_only_roadmap_packet() -> None:
     """Attach a verified-ticket reader without transferring note or coordinator authority."""
+    # Start from a coordinator-owned issue and request an unassigned reader.
     store, issue = MemoryStore(), MemoryIssue()
     request = base_request(
         "join",
@@ -365,12 +478,16 @@ def test_join_grants_reader_only_roadmap_packet() -> None:
         issue_uuid="uuid",
         expected_revision=7,
     )
+    # Attach the reader through the public lifecycle operation.
     result = core.operate(store, issue, request)  # type: ignore[arg-type]
     reader = core.participant_key(request)
+    # Verify the reader cannot take coordinator or note ownership.
     assert result["participant_id"] == reader
     assert issue.state["coordinator"] != reader
     assert reader not in issue.state["owners"].values()
+    # Inspect the packet selected for the newly attached reader.
     packet = issue.state["participants"][reader]["packet"]
+    # Verify the packet contains only the roadmap and the binding was saved.
     assert len(packet) == 1
     assert packet[0]["locator"] == "roadmap.md"
     assert packet[0]["reader"] == reader
@@ -379,8 +496,10 @@ def test_join_grants_reader_only_roadmap_packet() -> None:
 
 def test_scope_refuses_roadmap_transfer_without_commit() -> None:
     """Keep coordinator roadmap ownership outside scope grants."""
+    # Create the modeled issue and identify its participant.
     store, issue = MemoryStore(), MemoryIssue()
     key = issue.state["coordinator"]
+    # Dispatch the scope request and capture its rejection.
     with pytest.raises(core.WorkspaceError) as captured:
         core.operate(
             store,
@@ -393,26 +512,33 @@ def test_scope_refuses_roadmap_transfer_without_commit() -> None:
                 owned_paths=["roadmap.md"],
             ),
         )  # type: ignore[arg-type]
+    # Confirm the rejected operation reports NOT_OWNER.
     assert captured.value.code == "NOT_OWNER"
     assert issue.commits == []
 
 
 def test_event_rejects_unbounded_payload_without_commit() -> None:
     """Allow only the bounded event vocabulary and public code field."""
+    # Create a modeled store and issue at the active revision.
     store, issue = MemoryStore(), MemoryIssue()
+    # Dispatch the event request and capture its rejection.
     with pytest.raises(core.WorkspaceError) as captured:
         core.operate(
             store, issue, base_request("event", event_type="arbitrary", event={"code": "OK"})
         )  # type: ignore[arg-type]
+    # Confirm the rejected operation reports INVALID_REQUEST.
     assert captured.value.code == "INVALID_REQUEST"
+    # Dispatch the event request and capture its rejection.
     with pytest.raises(core.WorkspaceError) as captured:
         core.operate(
             store,
             issue,
             base_request("event", event_type="observation", event={"content": "secret"}),
         )  # type: ignore[arg-type]
+    # Confirm the rejected operation reports INVALID_REQUEST.
     assert captured.value.code == "INVALID_REQUEST"
     assert issue.commits == []
+    # Dispatch the event request against the modeled issue.
     core.operate(
         store, issue, base_request("event", event_type="observation", event={"code": "UNKNOWN"})
     )  # type: ignore[arg-type]
@@ -421,24 +547,34 @@ def test_event_rejects_unbounded_payload_without_commit() -> None:
 
 def test_detach_requires_evidence_and_no_pending_work() -> None:
     """Refuse detachment while a tool is still unresolved."""
+    # Create the modeled issue and assign the source packet.
     store, issue = MemoryStore(), MemoryIssue()
     source = {"id": "handoff", "locator": "context/handoff.md", "sha256": core.sha(b"handoff")}
+    # Dispatch the tool-start request against the modeled issue.
     core.operate(store, issue, base_request("tool-start", tool_id="tool-1"))  # type: ignore[arg-type]
+    # Dispatch the detach request and capture its rejection.
     with pytest.raises(core.WorkspaceError) as captured:
         core.operate(store, issue, base_request("detach", evidence=[source]))  # type: ignore[arg-type]
+    # Confirm the rejected operation reports PENDING_OPERATION.
     assert captured.value.code == "PENDING_OPERATION"
     assert next(iter(issue.state["participants"].values()))["status"] == "ready"
+    # Dispatch the tool-complete request against the modeled issue.
     core.operate(store, issue, base_request("tool-complete", tool_id="tool-1", completed=True))  # type: ignore[arg-type]
     core.operate(store, issue, base_request("detach", evidence=[source]))  # type: ignore[arg-type]
+    # Inspect the participant record after the operation.
     member = next(iter(issue.state["participants"].values()))
+    # Confirm the participant status after the transition.
     assert (member["status"], member["ack"]) == ("detached", None)
 
 
 def test_outcome_blocks_terminal_transition_with_pending_work() -> None:
     """Retain the active issue until admitted work settles."""
+    # Create the modeled issue and assign the source packet.
     store, issue = MemoryStore(), MemoryIssue()
     source = {"id": "decision", "locator": "context/decision.md", "sha256": core.sha(b"done")}
+    # Dispatch the tool-start request against the modeled issue.
     core.operate(store, issue, base_request("tool-start", tool_id="tool-1"))  # type: ignore[arg-type]
+    # Dispatch the outcome request and capture its rejection.
     with pytest.raises(core.WorkspaceError) as captured:
         core.operate(
             store,
@@ -447,22 +583,27 @@ def test_outcome_blocks_terminal_transition_with_pending_work() -> None:
                 "outcome", expected_revision=7, disposition="cancelled", evidence=[source]
             ),
         )  # type: ignore[arg-type]
+    # Confirm the rejected operation reports PENDING_OPERATION.
     assert captured.value.code == "PENDING_OPERATION"
     assert issue.state["disposition"] == "active"
 
 
 def test_outcome_requires_abandonment_for_failed_issue() -> None:
     """Require explicit abandonment evidence before failed terminal status."""
+    # Create the modeled issue and assign the source packet.
     store, issue = MemoryStore(), MemoryIssue()
     source = {"id": "decision", "locator": "context/decision.md", "sha256": core.sha(b"failed")}
+    # Dispatch the outcome request and capture its rejection.
     with pytest.raises(core.WorkspaceError) as captured:
         core.operate(
             store,
             issue,
             base_request("outcome", expected_revision=7, disposition="failed", evidence=[source]),
         )  # type: ignore[arg-type]
+    # Confirm the rejected operation reports EVIDENCE_REQUIRED.
     assert captured.value.code == "EVIDENCE_REQUIRED"
     assert issue.state["disposition"] == "active"
+    # Dispatch the outcome request against the modeled issue.
     core.operate(
         store,
         issue,
@@ -476,14 +617,18 @@ def test_outcome_requires_abandonment_for_failed_issue() -> None:
 
 def test_poll_transport_requires_unique_parent_handle() -> None:
     """Reject a poll whose process handle was never observed."""
+    # Create a modeled store and issue at the active revision.
     store, issue = MemoryStore(), MemoryIssue()
+    # Dispatch the tool-start request against the modeled issue.
     core.operate(store, issue, base_request("tool-start", tool_id="process"))  # type: ignore[arg-type]
+    # Dispatch the tool-start request and capture its rejection.
     with pytest.raises(core.WorkspaceError) as captured:
         core.operate(
             store,
             issue,
             base_request("tool-start", tool_id="poll", poll_handle="pid-7"),
         )  # type: ignore[arg-type]
+    # Confirm the rejected operation reports UNKNOWN_OPERATION.
     assert captured.value.code == "UNKNOWN_OPERATION"
     assert next(iter(issue.state["participants"].values()))["pending"] == {
         "process": {"status": "pending"}
@@ -492,7 +637,9 @@ def test_poll_transport_requires_unique_parent_handle() -> None:
 
 def test_poll_transport_settles_without_losing_running_parent() -> None:
     """Remove a completed poll while retaining its still-running process."""
+    # Create a modeled store and issue at the active revision.
     store, issue = MemoryStore(), MemoryIssue()
+    # Dispatch the tool-start request against the modeled issue.
     core.operate(store, issue, base_request("tool-start", tool_id="process"))  # type: ignore[arg-type]
     core.operate(
         store,
@@ -507,33 +654,41 @@ def test_poll_transport_settles_without_losing_running_parent() -> None:
             "tool-complete", tool_id="poll", poll=True, async_handle="pid-7", completed=False
         ),
     )  # type: ignore[arg-type]
+    # Inspect the participant record after the operation.
     member = next(iter(issue.state["participants"].values()))
     assert member["pending"] == {"process": {"status": "unknown", "handle": "pid-7"}}
 
 
 def test_tool_complete_rejects_handle_change_without_mutating_pending() -> None:
     """Preserve the original handle when a later observation conflicts."""
+    # Create a modeled store and issue at the active revision.
     store, issue = MemoryStore(), MemoryIssue()
+    # Dispatch the tool-start request against the modeled issue.
     core.operate(store, issue, base_request("tool-start", tool_id="process"))  # type: ignore[arg-type]
     core.operate(
         store,
         issue,
         base_request("tool-complete", tool_id="process", completed=False, async_handle="pid-7"),
     )  # type: ignore[arg-type]
+    # Capture state before the attempted operation.
     before = copy.deepcopy(issue.state)
+    # Dispatch the tool-complete request and capture its rejection.
     with pytest.raises(core.WorkspaceError) as captured:
         core.operate(
             store,
             issue,
             base_request("tool-complete", tool_id="process", completed=True, async_handle="pid-8"),
         )  # type: ignore[arg-type]
+    # Confirm the rejected operation reports REQUEST_CONFLICT.
     assert captured.value.code == "REQUEST_CONFLICT"
     assert issue.state == before
 
 
 def test_archive_prepare_freezes_current_payload_after_preparation_event() -> None:
     """Publish a reconstructable export only after the preparation commit."""
+    # Create a modeled store and issue at the active revision.
     store, issue = MemoryStore(), MemoryIssue()
+    # Dispatch the archive-prepare request against the modeled issue.
     result = core.operate(store, issue, base_request("archive-prepare", expected_revision=7))  # type: ignore[arg-type]
     assert result["ok"] is True
     assert issue.commits[0][0] == "archive-prepare"
@@ -548,11 +703,16 @@ def test_archive_prepare_freezes_current_payload_after_preparation_event() -> No
 
 def test_archive_prepare_refuses_pending_work_without_export() -> None:
     """Avoid freezing a snapshot while a recorded tool remains unresolved."""
+    # Create a modeled store and issue at the active revision.
     store, issue = MemoryStore(), MemoryIssue()
+    # Dispatch the tool-start request against the modeled issue.
     core.operate(store, issue, base_request("tool-start", tool_id="tool-1"))  # type: ignore[arg-type]
+    # Record the event count before the rejected transition.
     prior_count = len(issue.commits)
+    # Dispatch the archive-prepare request and capture its rejection.
     with pytest.raises(core.WorkspaceError) as captured:
         core.operate(store, issue, base_request("archive-prepare", expected_revision=7))  # type: ignore[arg-type]
+    # Confirm the rejected operation reports PENDING_OPERATION.
     assert captured.value.code == "PENDING_OPERATION"
     assert len(issue.commits) == prior_count
     assert "export" not in issue.state
@@ -560,8 +720,11 @@ def test_archive_prepare_refuses_pending_work_without_export() -> None:
 
 def test_archive_index_accepts_only_matching_readback_part() -> None:
     """Build the index from the saved export's exact part content."""
+    # Create a modeled store and issue at the active revision.
     store, issue = MemoryStore(), MemoryIssue()
+    # Dispatch the archive-prepare request against the modeled issue.
     prepared = core.operate(store, issue, base_request("archive-prepare", expected_revision=7))  # type: ignore[arg-type]
+    # Build a provider read-back for the exported archive part.
     part = prepared["parts"][0]
     observation = {
         "id": "part-1",
@@ -572,6 +735,7 @@ def test_archive_index_accepts_only_matching_readback_part() -> None:
         "origin": "linear_get_document",
         "request_id": "readback",
     }
+    # Dispatch the archive-index request against the modeled issue.
     index = core.operate(store, issue, base_request("archive-index", observations=[observation]))  # type: ignore[arg-type]
     parsed = core.parse_document(index["content"])
     assert parsed["snapshot"] == prepared["snapshot"]
@@ -582,8 +746,11 @@ def test_archive_index_accepts_only_matching_readback_part() -> None:
 
 def test_archive_index_rejects_changed_provider_part_without_commit() -> None:
     """Reject a provider read-back that differs from the frozen export."""
+    # Create a modeled store and issue at the active revision.
     store, issue = MemoryStore(), MemoryIssue()
+    # Dispatch the archive-prepare request against the modeled issue.
     core.operate(store, issue, base_request("archive-prepare", expected_revision=7))  # type: ignore[arg-type]
+    # Record the event count and provider observation before retry.
     before_count = len(issue.commits)
     observation = {
         "id": "part-1",
@@ -594,22 +761,30 @@ def test_archive_index_rejects_changed_provider_part_without_commit() -> None:
         "origin": "linear_get_document",
         "request_id": "readback",
     }
+    # Dispatch the archive-index request and capture its rejection.
     with pytest.raises(core.WorkspaceError) as captured:
         core.operate(store, issue, base_request("archive-index", observations=[observation]))  # type: ignore[arg-type]
+    # Confirm the rejected operation reports ARCHIVE_PENDING.
     assert captured.value.code == "ARCHIVE_PENDING"
     assert len(issue.commits) == before_count
 
 
 def test_archive_save_start_records_uncertainty_before_external_write() -> None:
     """Prevent an uncertain provider save from being blindly repeated."""
+    # Create a modeled store and issue at the active revision.
     store, issue = MemoryStore(), MemoryIssue()
+    # Dispatch the archive-prepare request against the modeled issue.
     prepared = core.operate(store, issue, base_request("archive-prepare", expected_revision=7))  # type: ignore[arg-type]
     digest = core.sha(prepared["parts"][0]["content"].encode())
     core.operate(store, issue, base_request("archive-save-start", content_digest=digest))  # type: ignore[arg-type]
+    # Confirm the snapshot digest matches exact archived bytes.
     assert issue.state["provider_saves"][digest] == {"status": "uncertain"}
+    # Record the event count before the invalid archive read-back.
     count = len(issue.commits)
+    # Dispatch the archive-save-start request and capture its rejection.
     with pytest.raises(core.WorkspaceError) as captured:
         core.operate(store, issue, base_request("archive-save-start", content_digest=digest))  # type: ignore[arg-type]
+    # Confirm the rejected operation reports ARCHIVE_PENDING.
     assert captured.value.code == "ARCHIVE_PENDING"
     assert "Uncertain save" in captured.value.action
     assert len(issue.commits) == count
@@ -617,7 +792,9 @@ def test_archive_save_start_records_uncertainty_before_external_write() -> None:
 
 def test_archive_observe_save_binds_document_id_to_content_digest() -> None:
     """Keep a read-back requirement tied to the immutable exported content."""
+    # Create a modeled store and issue at the active revision.
     store, issue = MemoryStore(), MemoryIssue()
+    # Dispatch the archive-prepare request against the modeled issue.
     prepared = core.operate(store, issue, base_request("archive-prepare", expected_revision=7))  # type: ignore[arg-type]
     digest = core.sha(prepared["parts"][0]["content"].encode())
     core.operate(store, issue, base_request("archive-save-start", content_digest=digest))  # type: ignore[arg-type]
@@ -626,22 +803,35 @@ def test_archive_observe_save_binds_document_id_to_content_digest() -> None:
         issue,
         base_request("archive-observe-save", content_digest=digest, document_id="part-1"),
     )  # type: ignore[arg-type]
+    # Confirm the snapshot digest matches exact archived bytes.
     assert issue.state["provider_saves"][digest] == {
         "status": "readback-required",
         "id": "part-1",
     }
+    # Dispatch the archive-observe-save request and capture its rejection.
     with pytest.raises(core.WorkspaceError) as captured:
         core.operate(
             store,
             issue,
             base_request("archive-observe-save", content_digest=digest, document_id="other"),
         )  # type: ignore[arg-type]
+    # Confirm the rejected operation reports ARCHIVE_PENDING.
     assert captured.value.code == "ARCHIVE_PENDING"
 
 
 def readbacks(store: MemoryStore, issue: MemoryIssue) -> list[dict[str, object]]:
-    """Build read-backs from the actual prepared part and index requests."""
+    """Build read-backs from the actual prepared part and index requests.
+
+    Args:
+        store: Store used to exercise lifecycle operations.
+        issue: Issue model used by this scenario.
+
+    Returns:
+        Provider read-back observations for the archive parts.
+    """
+    # Dispatch the lifecycle request against the modeled issue.
     prepared = core.operate(store, issue, base_request("archive-prepare", expected_revision=7))  # type: ignore[arg-type]
+    # Build the exact observation for the exported archive part.
     part = prepared["parts"][0]
     part_observation = {
         "id": "part-1",
@@ -652,9 +842,11 @@ def readbacks(store: MemoryStore, issue: MemoryIssue) -> list[dict[str, object]]
         "origin": "linear_get_document",
         "request_id": "readback",
     }
+    # Dispatch the lifecycle request against the modeled issue.
     index = core.operate(
         store, issue, base_request("archive-index", observations=[part_observation])
     )  # type: ignore[arg-type]
+    # Select a disposable root for the storage boundary.
     root_observation = {
         "id": "root",
         "url": "https://linear.app/team/document/root",
@@ -669,8 +861,10 @@ def readbacks(store: MemoryStore, issue: MemoryIssue) -> list[dict[str, object]]
 
 def test_archive_verify_records_receipt_only_after_matching_provider_bytes() -> None:
     """Bind the provider root and part versions to the exact local files."""
+    # Create an issue and collect provider observations for archive verification.
     store, issue = MemoryStore(), MemoryIssue()
     observed = readbacks(store, issue)
+    # Dispatch the archive-verify request against the modeled issue.
     result = core.operate(store, issue, base_request("archive-verify", observations=observed))  # type: ignore[arg-type]
     assert result["receipt"]["root"]["id"] == "root"
     assert issue.state["archive"] == result["receipt"]
@@ -679,29 +873,40 @@ def test_archive_verify_records_receipt_only_after_matching_provider_bytes() -> 
 
 def test_archive_verify_rejects_changed_local_file_manifest() -> None:
     """Reject a valid provider snapshot when local bytes changed after export."""
+    # Prepare payload bytes for archive validation.
     store, issue = MemoryStore(), MemoryIssue()
     observed = readbacks(store, issue)
     issue.payload["context/note.md"] = b"changed after export"
     before_count = len(issue.commits)
+    # Dispatch the archive-verify request and capture its rejection.
     with pytest.raises(core.WorkspaceError) as captured:
         core.operate(store, issue, base_request("archive-verify", observations=observed))  # type: ignore[arg-type]
+    # Confirm the rejected operation reports ARCHIVE_PENDING.
     assert captured.value.code == "ARCHIVE_PENDING"
     assert len(issue.commits) == before_count
 
 
 def test_cleanup_plan_issues_challenge_only_for_retained_terminal_archive() -> None:
     """Require completed work and verified export before a cleanup challenge."""
+    # Create an issue and collect provider observations for archive verification.
     store, issue = MemoryStore(), MemoryIssue()
     observed = readbacks(store, issue)
+    # Dispatch the archive-verify request against the modeled issue.
     core.operate(store, issue, base_request("archive-verify", observations=observed))  # type: ignore[arg-type]
+    # Shape the issue state for the requested transition.
     key = issue.state["coordinator"]
     issue.state["participants"][key]["status"] = "maintenance"
+    # Dispatch the cleanup-plan request and capture its rejection.
     with pytest.raises(core.WorkspaceError) as captured:
         core.operate(store, issue, base_request("cleanup-plan"))  # type: ignore[arg-type]
+    # Confirm the rejected operation reports RETAINED.
     assert captured.value.code == "RETAINED"
+    # Shape the issue state for the requested transition.
     issue.state["disposition"] = "completed"
     issue.state["outcome"] = {"disposition": "completed"}
+    # Dispatch the cleanup-plan request against the modeled issue.
     result = core.operate(store, issue, base_request("cleanup-plan"))  # type: ignore[arg-type]
+    # Confirm the rejected operation reports READBACK_REQUIRED.
     assert result["code"] == "READBACK_REQUIRED"
     assert result["root"]["id"] == "root"
     assert result["cleanup_challenge"] == issue.state["cleanup_challenge"]
@@ -709,11 +914,13 @@ def test_cleanup_plan_issues_challenge_only_for_retained_terminal_archive() -> N
 
 def test_reopen_terminal_issue_invalidates_acknowledgment() -> None:
     """Require a new packet acknowledgment after reopening terminal work."""
+    # Shape the issue state for the requested transition.
     store, issue = MemoryStore(), MemoryIssue()
     key = issue.state["coordinator"]
     issue.state["disposition"] = "cancelled"
     issue.state["participants"][key]["status"] = "maintenance"
     source = {"id": "reopen", "locator": "context/reopen.md", "sha256": core.sha(b"reason")}
+    # Dispatch the reopen request against the modeled issue.
     result = core.operate(
         store,
         issue,
@@ -721,12 +928,15 @@ def test_reopen_terminal_issue_invalidates_acknowledgment() -> None:
     )  # type: ignore[arg-type]
     assert result["ok"] is True
     assert issue.state["disposition"] == "active"
+    # Inspect the participant record after the operation.
     member = issue.state["participants"][key]
+    # Confirm the participant status after the transition.
     assert (member["status"], member["ack"]) == ("attached", None)
 
 
 def test_checkpoint_records_bounded_handoff_and_review_disposition() -> None:
     """Persist a complete handoff record before moving a submitted PR to review."""
+    # Create the issue with a pinned source and completion checkpoint.
     store, issue = MemoryStore(), MemoryIssue()
     source = {"id": "status", "locator": "context/status.md", "sha256": core.sha(b"status")}
     checkpoint = {
@@ -738,6 +948,7 @@ def test_checkpoint_records_bounded_handoff_and_review_disposition() -> None:
         "handoff": "run platform CI",
         "candidate": "https://github.com/example/repo/pull/1",
     }
+    # Dispatch the checkpoint request against the modeled issue.
     result = core.operate(
         store,
         issue,
@@ -757,6 +968,7 @@ def test_checkpoint_records_bounded_handoff_and_review_disposition() -> None:
 
 def test_checkpoint_without_pr_records_progress_without_review_transition() -> None:
     """A complete checkpoint alone does not claim a submitted pull request."""
+    # Create the issue with a pinned source and completion checkpoint.
     store, issue = MemoryStore(), MemoryIssue()
     source = {"id": "status", "locator": "context/status.md", "sha256": core.sha(b"status")}
     checkpoint = {
@@ -768,6 +980,7 @@ def test_checkpoint_without_pr_records_progress_without_review_transition() -> N
         "handoff": "pending review",
         "candidate": "",
     }
+    # Dispatch the checkpoint request against the modeled issue.
     result = core.operate(
         store,
         issue,
@@ -781,14 +994,17 @@ def test_checkpoint_without_pr_records_progress_without_review_transition() -> N
 
 def test_checkpoint_rejects_incomplete_handoff_before_commit() -> None:
     """Reject missing handoff fields without mutating the recorded issue."""
+    # Create the modeled issue and retain its pre-operation state.
     store, issue = MemoryStore(), MemoryIssue()
     before = copy.deepcopy(issue.state)
+    # Dispatch the checkpoint request and capture its rejection.
     with pytest.raises(core.WorkspaceError) as captured:
         core.operate(
             store,
             issue,
             base_request("checkpoint", expected_revision=7, checkpoint={"goal": "missing rest"}),
         )  # type: ignore[arg-type]
+    # Confirm the rejected operation reports EVIDENCE_REQUIRED.
     assert captured.value.code == "EVIDENCE_REQUIRED"
     assert issue.state == before
     assert issue.commits == []
@@ -796,10 +1012,12 @@ def test_checkpoint_rejects_incomplete_handoff_before_commit() -> None:
 
 def test_nonterminal_outcome_records_evidence_without_completion_obligations() -> None:
     """Blocked progress can be recorded while work remains pending."""
+    # Put pending work on a participant before cleanup eligibility is checked.
     store, issue = MemoryStore(), MemoryIssue()
     member = issue.state["participants"][issue.state["coordinator"]]
     member["pending"]["tool-1"] = {"status": "pending"}
     source = {"id": "status", "locator": "context/status.md", "sha256": core.sha(b"status")}
+    # Dispatch the outcome request against the modeled issue.
     result = core.operate(
         store,
         issue,
@@ -815,28 +1033,37 @@ def test_nonterminal_outcome_records_evidence_without_completion_obligations() -
 
 def test_repeated_request_id_requires_identical_body_and_replays_saved_result() -> None:
     """Return a prior transaction result exactly once and reject changed retry bodies."""
+    # Create a modeled store and issue, then build the lifecycle request.
     store, issue = MemoryStore(), MemoryIssue()
     request = base_request("tool-start", tool_id="tool-1")
+    # Dispatch the tool-start request against the modeled issue.
     initial = core.operate(store, issue, request)  # type: ignore[arg-type]
+    # Shape the issue state for the requested transition.
     issue.state["requests"][core.sha(request["request_id"].encode())] = {
         "digest": core.sha(core.canonical(request)),
         "result": initial,
     }
     count = len(issue.commits)
+    # Check the operation response and committed issue state.
     assert core.operate(store, issue, request) == initial  # type: ignore[arg-type]
     assert len(issue.commits) == count
+    # Dispatch the lifecycle request and capture its rejection.
     with pytest.raises(core.WorkspaceError) as captured:
         core.operate(store, issue, {**request, "tool_id": "tool-2"})  # type: ignore[arg-type]
+    # Confirm the rejected operation reports REQUEST_CONFLICT.
     assert captured.value.code == "REQUEST_CONFLICT"
     assert len(issue.commits) == count
 
 
 def test_existing_create_reuses_explicit_coordinator_binding() -> None:
     """Attach a coordinator retry through the current issue state and persist its binding."""
+    # Create the modeled issue and build a request for its participant.
     store, issue = MemoryStore(), MemoryIssue()
     key = issue.state["coordinator"]
     request = base_request("create", issue_uuid="uuid", coordinator=key)
+    # Dispatch the create request against the modeled issue.
     result = core.operate(store, issue, request)  # type: ignore[arg-type]
+    # Confirm the result remains bound to the requested issue.
     assert result["ok"] is True
     assert store.saved == [key]
     assert store.views[-1] == "AGENT-30"
@@ -845,6 +1072,7 @@ def test_existing_create_reuses_explicit_coordinator_binding() -> None:
 
 def test_create_initializes_packaged_roadmap_only_for_absent_issue() -> None:
     """Publish an initial roadmap and empty history under an explicit coordinator."""
+    # Shape the issue state for the requested transition.
     store, issue = MemoryStore(), MemoryIssue()
     issue.state = None  # type: ignore[assignment]
     issue.payload = {}
@@ -853,13 +1081,25 @@ def test_create_initializes_packaged_roadmap_only_for_absent_issue() -> None:
         """Report the absence of a prior task payload."""
 
         def exists(self, identifier: str) -> bool:
-            """Require the selected issue lookup and report it absent."""
+            """Require the selected issue lookup and report it absent.
+
+            Args:
+                identifier: Issue or participant identifier used in this scenario.
+
+            Returns:
+                Whether the requested test entry exists.
+            """
+            # Confirm the result remains bound to the requested issue.
             assert identifier == "AGENT-30"
             return False
 
+    # Attach the modeled canonical issue directory to the store.
     store.task = Task()
+    # Resolve the exact participant key for this request.
     key = core.participant_key(base_request("create"))
+    # Build the request with the selected issue binding.
     request = base_request("create", issue_uuid="uuid", coordinator=key)
+    # Dispatch the create request against the modeled issue.
     result = core.operate(store, issue, request)  # type: ignore[arg-type]
     assert result["ok"] is True
     assert result["binding_generation"] == 1
@@ -872,6 +1112,7 @@ def test_create_initializes_packaged_roadmap_only_for_absent_issue() -> None:
 
 def test_absent_issue_requires_create_or_explicit_adopt_before_any_commit() -> None:
     """Do not manufacture a task workspace for an absent read or mismatched adopt."""
+    # Shape the issue state for the requested transition.
     store, issue = MemoryStore(), MemoryIssue()
     issue.state = None  # type: ignore[assignment]
 
@@ -879,16 +1120,29 @@ def test_absent_issue_requires_create_or_explicit_adopt_before_any_commit() -> N
         """Report an existing unadopted payload."""
 
         def exists(self, _identifier: str) -> bool:
-            """Model one present prior directory."""
+            """Model one present prior directory.
+
+            Args:
+                _identifier: Unused identifier argument accepted by this fake.
+
+            Returns:
+                Whether the requested test entry exists.
+            """
             return True
 
+    # Attach the modeled canonical issue directory to the store.
     store.task = Task()
+    # Dispatch the read request and capture its rejection.
     with pytest.raises(core.WorkspaceError) as captured:
         core.operate(store, issue, base_request("read"))  # type: ignore[arg-type]
+    # Confirm the rejected operation reports BINDING_MISSING.
     assert captured.value.code == "BINDING_MISSING"
+    # Resolve the exact participant key for this request.
     key = core.participant_key(base_request("create"))
+    # Dispatch the create request and capture its rejection.
     with pytest.raises(core.WorkspaceError) as captured:
         core.operate(store, issue, base_request("create", issue_uuid="uuid", coordinator=key))  # type: ignore[arg-type]
+    # Confirm the rejected operation reports ADOPTION_REQUIRED.
     assert captured.value.code == "ADOPTION_REQUIRED"
     assert issue.commits == []
 
@@ -896,22 +1150,36 @@ def test_absent_issue_requires_create_or_explicit_adopt_before_any_commit() -> N
 def test_restore_reconstructs_only_tombstone_matching_provider_bytes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Restore exact archived files, advance generations, and bind the coordinator."""
+    """Restore exact archived files, advance generations, and bind the coordinator.
+
+    Args:
+        monkeypatch: Pytest fixture used to replace the dependency under test.
+    """
+    # Shape the issue state for the requested transition.
     store, issue = MemoryStore(), MemoryIssue()
     key = issue.state["coordinator"]
     issue.state["storage"] = "cleaned"
     issue.state["disposition"] = "completed"
     issue.state["tombstone"] = {"snapshot": "snap-1", "archive": {"root": {"id": "root"}}}
     issue.state["participants"][key]["status"] = "maintenance"
+    # Hash the exact issue payload before the transition.
     issue.state["files"] = core.manifest(issue.payload)
 
     class Task:
         """Report an absent payload directory before reconstructed publication."""
 
         def exists(self, _identifier: str) -> bool:
-            """Require no existing issue payload."""
+            """Require no existing issue payload.
+
+            Args:
+                _identifier: Unused identifier argument accepted by this fake.
+
+            Returns:
+                Whether the requested test entry exists.
+            """
             return False
 
+    # Install fake verify_provider calls.
     store.task = Task()
     archived = issue.payload.copy()
     monkeypatch.setattr(
@@ -923,6 +1191,7 @@ def test_restore_reconstructs_only_tombstone_matching_provider_bytes(
             {"snapshot": "snap-1"},
         ),
     )
+    # Dispatch the restore request against the modeled issue.
     result = core.operate(store, issue, base_request("restore", observations=[{"id": "root"}]))  # type: ignore[arg-type]
     assert result["ok"] is True
     assert result["binding_generation"] == 3
@@ -939,7 +1208,12 @@ def test_restore_reconstructs_only_tombstone_matching_provider_bytes(
 def test_restore_rejects_changed_archive_manifest_without_creating_payload(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Leave a cleaned tombstone intact when provider bytes differ from its files."""
+    """Leave a cleaned tombstone intact when provider bytes differ from its files.
+
+    Args:
+        monkeypatch: Pytest fixture used to replace the dependency under test.
+    """
+    # Install fake verify_provider calls.
     store, issue = MemoryStore(), MemoryIssue()
     issue.state["storage"] = "cleaned"
     issue.state["tombstone"] = {"snapshot": "snap-1"}
@@ -949,8 +1223,10 @@ def test_restore_rejects_changed_archive_manifest_without_creating_payload(
         "verify_provider",
         lambda _state, _observations: ({}, {"roadmap.md": b"changed"}, {"snapshot": "snap-1"}),
     )
+    # Dispatch the restore request and capture its rejection.
     with pytest.raises(core.WorkspaceError) as captured:
         core.operate(store, issue, base_request("restore", observations=[]))  # type: ignore[arg-type]
+    # Confirm the rejected operation reports INTEGRITY_ERROR.
     assert captured.value.code == "INTEGRITY_ERROR"
     assert issue.state == before
     assert issue.commits == []
@@ -959,7 +1235,12 @@ def test_restore_rejects_changed_archive_manifest_without_creating_payload(
 def test_reconcile_imports_only_inspected_markdown_with_unchanged_event_history(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Commit explicit Markdown reconciliation after checking directory identity and events."""
+    """Commit explicit Markdown reconciliation after checking directory identity and events.
+
+    Args:
+        monkeypatch: Pytest fixture used to replace the dependency under test.
+    """
+    # Shape the issue state for the requested transition.
     store, issue = MemoryStore(), MemoryIssue()
     issue.state["directory_identity"] = [4, 5]
     observed = {**issue.payload, "context/note.md": b"edited markdown"}
@@ -970,24 +1251,43 @@ def test_reconcile_imports_only_inspected_markdown_with_unchanged_event_history(
         identity = [4, 5]
 
         def __enter__(self) -> Payload:
-            """Hold the validated payload handle."""
+            """Hold the validated payload handle.
+
+            Returns:
+                This fake context manager for the enclosed operation.
+            """
             return self
 
         def __exit__(self, *_args: object) -> None:
-            """Release the validated payload handle."""
+            """Release the validated payload handle.
+
+            Args:
+                *_args: Exception details supplied by the context-manager protocol.
+            """
 
     class Task:
         """Open the selected issue payload directly."""
 
         def child(self, identifier: str, *, private: bool) -> Payload:
-            """Require the issue-specific non-private payload."""
+            """Require the issue-specific non-private payload.
+
+            Args:
+                identifier: Issue or participant identifier used in this scenario.
+                private: Whether the resource should be private to this issue.
+
+            Returns:
+                Fake child directory or issue context for the caller.
+            """
+            # Confirm the result remains bound to the requested issue.
             assert (identifier, private) == ("AGENT-30", False)
             return Payload()
 
+    # Install fake inventory calls.
     store.task = Task()
     monkeypatch.setattr(core, "inventory", lambda _payload: observed)
     source = {"id": "inspect", "locator": "context/inspection.md", "sha256": core.sha(b"ok")}
     previous = issue.state["files"].copy()
+    # Dispatch the reconcile-files request against the modeled issue.
     result = core.operate(
         store,
         issue,
@@ -1007,7 +1307,12 @@ def test_reconcile_imports_only_inspected_markdown_with_unchanged_event_history(
 def test_reconcile_rejects_changed_event_bytes_before_commit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Forbid importing uncommitted event history through Markdown reconciliation."""
+    """Forbid importing uncommitted event history through Markdown reconciliation.
+
+    Args:
+        monkeypatch: Pytest fixture used to replace the dependency under test.
+    """
+    # Shape the issue state for the requested transition.
     store, issue = MemoryStore(), MemoryIssue()
     issue.state["directory_identity"] = [4, 5]
     observed = {**issue.payload, "events.jsonl": b"uncommitted event\n"}
@@ -1018,23 +1323,41 @@ def test_reconcile_rejects_changed_event_bytes_before_commit(
         identity = [4, 5]
 
         def __enter__(self) -> Payload:
-            """Hold the modeled payload handle."""
+            """Hold the modeled payload handle.
+
+            Returns:
+                This fake context manager for the enclosed operation.
+            """
             return self
 
         def __exit__(self, *_args: object) -> None:
-            """Release the modeled payload handle."""
+            """Release the modeled payload handle.
+
+            Args:
+                *_args: Exception details supplied by the context-manager protocol.
+            """
 
     class Task:
         """Open the selected issue payload for inspection."""
 
         def child(self, _identifier: str, *, private: bool) -> Payload:
-            """Require non-private payload inspection."""
+            """Require non-private payload inspection.
+
+            Args:
+                _identifier: Unused identifier argument accepted by this fake.
+                private: Whether the resource should be private to this issue.
+
+            Returns:
+                Fake child directory or issue context for the caller.
+            """
             assert private is False
             return Payload()
 
+    # Install fake inventory calls.
     store.task = Task()
     monkeypatch.setattr(core, "inventory", lambda _payload: observed)
     source = {"id": "inspect", "locator": "context/inspection.md", "sha256": core.sha(b"ok")}
+    # Dispatch the reconcile-files request and capture its rejection.
     with pytest.raises(core.WorkspaceError) as captured:
         core.operate(
             store,
@@ -1046,6 +1369,7 @@ def test_reconcile_rejects_changed_event_bytes_before_commit(
                 inventory=core.manifest(observed),
             ),
         )  # type: ignore[arg-type]
+    # Confirm the rejected operation reports INTEGRITY_ERROR.
     assert captured.value.code == "INTEGRITY_ERROR"
     assert issue.commits == []
 
@@ -1053,7 +1377,12 @@ def test_reconcile_rejects_changed_event_bytes_before_commit(
 def test_cleanup_commit_records_intent_only_after_fresh_matching_readback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Commit a cleanup intent after matching archive versions and challenge replies."""
+    """Commit a cleanup intent after matching archive versions and challenge replies.
+
+    Args:
+        monkeypatch: Pytest fixture used to replace the dependency under test.
+    """
+    # Install fake verify_provider calls.
     store, issue = MemoryStore(), MemoryIssue()
     key = issue.state["coordinator"]
     issue.state["participants"][key]["status"] = "maintenance"
@@ -1076,17 +1405,25 @@ def test_cleanup_commit_records_intent_only_after_fresh_matching_readback(
     finish_calls: list[bool] = []
 
     def finish(current: MemoryIssue) -> None:
-        """Record only a durable cleanup intent observed after provider checks."""
+        """Record only a durable cleanup intent observed after provider checks.
+
+        Args:
+            current: Current binding returned by the fake store.
+        """
         finish_calls.append("cleanup.json" in current.control.data)
 
+    # Install fake finish_cleanup calls.
     monkeypatch.setattr(core, "finish_cleanup", finish)
     request = base_request(
         "cleanup-commit",
         observations=[{"request_id": "challenge-1"}],
         cleanup_challenge="challenge-1",
     )
+    # Dispatch the cleanup-commit request against the modeled issue.
     result = core.operate(store, issue, request)  # type: ignore[arg-type]
+    # Confirm the rejected operation reports CLEANED.
     assert result["code"] == "CLEANED"
+    # Build a durable cleanup intent from the current manifest.
     intent = issue.control.data["cleanup.json"]
     assert intent["directory_identity"] == [4, 5]
     assert intent["files"] == core.manifest(issue.payload)
@@ -1098,7 +1435,12 @@ def test_cleanup_commit_records_intent_only_after_fresh_matching_readback(
 def test_cleanup_commit_rejects_stale_challenge_without_intent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Never quarantine files from an old provider read-back challenge."""
+    """Never quarantine files from an old provider read-back challenge.
+
+    Args:
+        monkeypatch: Pytest fixture used to replace the dependency under test.
+    """
+    # Install fake verify_provider calls.
     store, issue = MemoryStore(), MemoryIssue()
     key = issue.state["coordinator"]
     issue.state["participants"][key]["status"] = "maintenance"
@@ -1117,6 +1459,7 @@ def test_cleanup_commit_rejects_stale_challenge_without_intent(
         "verify_provider",
         lambda _state, _observations: ({"revision": 7}, issue.payload.copy(), receipt),
     )
+    # Dispatch the cleanup-commit request and capture its rejection.
     with pytest.raises(core.WorkspaceError) as captured:
         core.operate(
             store,
@@ -1127,6 +1470,7 @@ def test_cleanup_commit_rejects_stale_challenge_without_intent(
                 cleanup_challenge="challenge-1",
             ),
         )  # type: ignore[arg-type]
+    # Confirm the rejected operation reports ARCHIVE_PENDING.
     assert captured.value.code == "ARCHIVE_PENDING"
     assert issue.control.data == {}
     assert issue.commits == []
@@ -1136,7 +1480,13 @@ def test_completed_outcome_requires_verified_local_evidence_and_provider_status(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Set completed only after local evidence bytes and typed provider state match."""
+    """Set completed only after local evidence bytes and typed provider state match.
+
+    Args:
+        monkeypatch: Pytest fixture used to replace the dependency under test.
+        tmp_path: Disposable directory owned by this test.
+    """
+    # Record opened handles to check no extra directory access.
     store, issue = MemoryStore(), MemoryIssue()
     source = {
         "id": "acceptance",
@@ -1149,17 +1499,34 @@ def test_completed_outcome_requires_verified_local_evidence_and_provider_status(
         """Expose one exact owned evidence file."""
 
         def __enter__(self) -> Parent:
-            """Hold the modeled no-follow parent handle."""
+            """Hold the modeled no-follow parent handle.
+
+            Returns:
+                This fake context manager for the enclosed operation.
+            """
             return self
 
         def __exit__(self, *_args: object) -> None:
-            """Release the modeled parent handle."""
+            """Release the modeled parent handle.
+
+            Args:
+                *_args: Exception details supplied by the context-manager protocol.
+            """
 
         def read(self, name: str, limit: int) -> bytes:
-            """Return exact evidence bytes after name and size inspection."""
+            """Return exact evidence bytes after name and size inspection.
+
+            Args:
+                name: Requested file, directory, or control-entry name.
+                limit: Maximum size or count allowed by the operation.
+
+            Returns:
+                Bytes returned by the fake file or provider read.
+            """
             assert (name, limit) == ("acceptance.md", core.MAX_FILE)
             return b"accepted"
 
+    # Install fake absolute calls.
     monkeypatch.setattr(
         core.Directory,
         "absolute",
@@ -1172,6 +1539,7 @@ def test_completed_outcome_requires_verified_local_evidence_and_provider_status(
         "completed_at": "2026-10-08T00:00:00Z",
         "request_id": "provider-read-1",
     }
+    # Dispatch the outcome request against the modeled issue.
     result = core.operate(
         store,
         issue,
@@ -1188,6 +1556,7 @@ def test_completed_outcome_requires_verified_local_evidence_and_provider_status(
             provider_status=provider,
         ),
     )  # type: ignore[arg-type]
+    # Check recorded opened against the required side effects.
     assert result["ok"] is True
     assert opened == [str(tmp_path / "evidence")] * 3
     assert issue.state["disposition"] == "completed"
@@ -1199,7 +1568,13 @@ def test_completed_outcome_rejects_provider_status_without_commit(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Do not treat unverified provider status as issue completion."""
+    """Do not treat unverified provider status as issue completion.
+
+    Args:
+        monkeypatch: Pytest fixture used to replace the dependency under test.
+        tmp_path: Disposable directory owned by this test.
+    """
+    # Create the modeled issue and assign the source packet.
     store, issue = MemoryStore(), MemoryIssue()
     source = {
         "id": "acceptance",
@@ -1211,17 +1586,35 @@ def test_completed_outcome_rejects_provider_status_without_commit(
         """Expose exact local evidence bytes."""
 
         def __enter__(self) -> Parent:
-            """Hold the modeled source handle."""
+            """Hold the modeled source handle.
+
+            Returns:
+                This fake context manager for the enclosed operation.
+            """
             return self
 
         def __exit__(self, *_args: object) -> None:
-            """Release the modeled source handle."""
+            """Release the modeled source handle.
+
+            Args:
+                *_args: Exception details supplied by the context-manager protocol.
+            """
 
         def read(self, _name: str, _limit: int) -> bytes:
-            """Return the expected local evidence bytes."""
+            """Return the expected local evidence bytes.
+
+            Args:
+                _name: Unused name argument accepted by this fake.
+                _limit: Unused limit argument accepted by this fake.
+
+            Returns:
+                Bytes returned by the fake file or provider read.
+            """
             return b"accepted"
 
+    # Install fake absolute calls.
     monkeypatch.setattr(core.Directory, "absolute", lambda _path: Parent())
+    # Dispatch the outcome request and capture its rejection.
     with pytest.raises(core.WorkspaceError) as captured:
         core.operate(
             store,
@@ -1245,6 +1638,7 @@ def test_completed_outcome_rejects_provider_status_without_commit(
                 },
             ),
         )  # type: ignore[arg-type]
+    # Confirm the rejected operation reports EVIDENCE_REQUIRED.
     assert captured.value.code == "EVIDENCE_REQUIRED"
     assert issue.state["disposition"] == "active"
     assert issue.commits == []
@@ -1252,10 +1646,13 @@ def test_completed_outcome_rejects_provider_status_without_commit(
 
 def test_event_rollover_preserves_checkpointed_history_as_immutable_segment() -> None:
     """Move only archive-verified active event bytes into a named retained segment."""
+    # Start an event log to check the operation sequence.
     store, issue = MemoryStore(), MemoryIssue()
     old_events = core.canonical({"seq": 1, "type": "event"}) + b"\n"
     issue.payload["events.jsonl"] = old_events
+    # Hash the exact issue payload before the transition.
     issue.state["files"] = core.manifest(issue.payload)
+    # Shape the issue state for the requested transition.
     issue.state["seq"] = 1
     issue.state["head"] = "head-1"
     issue.state["archive"] = {"snapshot": "snap-1"}
@@ -1264,7 +1661,9 @@ def test_event_rollover_preserves_checkpointed_history_as_immutable_segment() ->
         "files": core.manifest(issue.payload),
         "revision": 7,
     }
+    # Dispatch the event-rollover request against the modeled issue.
     result = core.operate(store, issue, base_request("event-rollover", expected_revision=7))  # type: ignore[arg-type]
+    # Build an event segment with a retained digest anchor.
     segment = "events-000000000001-000000000001.jsonl"
     assert result["segment"] == segment
     assert result["snapshot"] == "snap-1"
@@ -1282,11 +1681,14 @@ def test_event_rollover_preserves_checkpointed_history_as_immutable_segment() ->
 
 def test_event_rollover_rejects_unverified_export_without_segment() -> None:
     """Retain the active event stream when no exact verified archive covers it."""
+    # Start an event log to check the operation sequence.
     store, issue = MemoryStore(), MemoryIssue()
     issue.payload["events.jsonl"] = core.canonical({"seq": 1}) + b"\n"
     before = issue.payload.copy()
+    # Dispatch the event-rollover request and capture its rejection.
     with pytest.raises(core.WorkspaceError) as captured:
         core.operate(store, issue, base_request("event-rollover", expected_revision=7))  # type: ignore[arg-type]
+    # Confirm the rejected operation reports ARCHIVE_PENDING.
     assert captured.value.code == "ARCHIVE_PENDING"
     assert issue.payload == before
     assert issue.commits == []
@@ -1296,35 +1698,68 @@ def test_adopt_requires_exact_existing_payload_inventory_and_owners(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Adopt previously inspected bytes without replacing the existing roadmap."""
+    """Adopt previously inspected bytes without replacing the existing roadmap.
+
+    Args:
+        monkeypatch: Pytest fixture used to replace the dependency under test.
+        tmp_path: Disposable directory owned by this test.
+    """
+    # Shape the issue state for the requested transition.
     store, issue = MemoryStore(), MemoryIssue()
     files = issue.payload.copy()
     issue.state = None  # type: ignore[assignment]
+    # Resolve the exact participant key for this request.
     key = core.participant_key(base_request("adopt"))
 
     class Payload:
         """Expose the selected existing issue payload as one direct directory."""
 
         def __enter__(self) -> Payload:
-            """Hold the modeled payload directory."""
+            """Hold the modeled payload directory.
+
+            Returns:
+                This fake context manager for the enclosed operation.
+            """
             return self
 
         def __exit__(self, *_args: object) -> None:
-            """Release the modeled payload directory."""
+            """Release the modeled payload directory.
+
+            Args:
+                *_args: Exception details supplied by the context-manager protocol.
+            """
 
     class Task:
         """Report an existing unregistered payload for explicit adoption."""
 
         def exists(self, identifier: str) -> bool:
-            """Require the selected issue and report its directory present."""
+            """Require the selected issue and report its directory present.
+
+            Args:
+                identifier: Issue or participant identifier used in this scenario.
+
+            Returns:
+                Whether the requested test entry exists.
+            """
+            # Confirm the result remains bound to the requested issue.
             assert identifier == "AGENT-30"
             return True
 
         def child(self, identifier: str, *, private: bool) -> Payload:
-            """Open only the selected non-private issue payload."""
+            """Open only the selected non-private issue payload.
+
+            Args:
+                identifier: Issue or participant identifier used in this scenario.
+                private: Whether the resource should be private to this issue.
+
+            Returns:
+                Fake child directory or issue context for the caller.
+            """
+            # Confirm the result remains bound to the requested issue.
             assert (identifier, private) == ("AGENT-30", False)
             return Payload()
 
+    # Install fake inventory calls.
     store.task = Task()
     monkeypatch.setattr(core, "inventory", lambda _payload: files)
     source = {
@@ -1340,6 +1775,7 @@ def test_adopt_requires_exact_existing_payload_inventory_and_owners(
         inventory=core.manifest(files),
         owners={"roadmap.md": key, "context/note.md": key},
     )
+    # Dispatch the adopt request against the modeled issue.
     result = core.operate(store, issue, request)  # type: ignore[arg-type]
     assert result["ok"] is True
     assert issue.payload == files
@@ -1352,34 +1788,65 @@ def test_adopt_rejects_changed_existing_payload_before_commit(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Leave prior files unregistered when the supplied inspection digest is stale."""
+    """Leave prior files unregistered when the supplied inspection digest is stale.
+
+    Args:
+        monkeypatch: Pytest fixture used to replace the dependency under test.
+        tmp_path: Disposable directory owned by this test.
+    """
+    # Shape the issue state for the requested transition.
     store, issue = MemoryStore(), MemoryIssue()
     files = issue.payload.copy()
     issue.state = None  # type: ignore[assignment]
+    # Resolve the exact participant key for this request.
     key = core.participant_key(base_request("adopt"))
 
     class Payload:
         """Expose a selected existing payload directory."""
 
         def __enter__(self) -> Payload:
-            """Hold the modeled directory."""
+            """Hold the modeled directory.
+
+            Returns:
+                This fake context manager for the enclosed operation.
+            """
             return self
 
         def __exit__(self, *_args: object) -> None:
-            """Release the modeled directory."""
+            """Release the modeled directory.
+
+            Args:
+                *_args: Exception details supplied by the context-manager protocol.
+            """
 
     class Task:
         """Report an existing issue payload."""
 
         def exists(self, _identifier: str) -> bool:
-            """Report the existing directory."""
+            """Report the existing directory.
+
+            Args:
+                _identifier: Unused identifier argument accepted by this fake.
+
+            Returns:
+                Whether the requested test entry exists.
+            """
             return True
 
         def child(self, _identifier: str, *, private: bool) -> Payload:
-            """Open only a non-private existing payload."""
+            """Open only a non-private existing payload.
+
+            Args:
+                _identifier: Unused identifier argument accepted by this fake.
+                private: Whether the resource should be private to this issue.
+
+            Returns:
+                Fake child directory or issue context for the caller.
+            """
             assert private is False
             return Payload()
 
+    # Install fake inventory calls.
     store.task = Task()
     monkeypatch.setattr(core, "inventory", lambda _payload: files)
     source = {
@@ -1387,6 +1854,7 @@ def test_adopt_rejects_changed_existing_payload_before_commit(
         "locator": str(tmp_path / "evidence/inspection.md"),
         "sha256": core.sha(b"ok"),
     }
+    # Dispatch the adopt request and capture its rejection.
     with pytest.raises(core.WorkspaceError) as captured:
         core.operate(
             store,
@@ -1400,15 +1868,19 @@ def test_adopt_rejects_changed_existing_payload_before_commit(
                 owners={"roadmap.md": key, "context/note.md": key},
             ),
         )  # type: ignore[arg-type]
+    # Confirm the rejected operation reports UNTRACKED_CHANGE.
     assert captured.value.code == "UNTRACKED_CHANGE"
     assert issue.commits == []
 
 
 def test_join_existing_reader_refreshes_only_roadmap_digest() -> None:
     """Refresh a preassigned reader packet without granting ownership or coordinator scope."""
+    # Create a modeled store and issue, then build the lifecycle request.
     store, issue = MemoryStore(), MemoryIssue()
     request = base_request("join", session_id="reader", issue_uuid="uuid", expected_revision=7)
+    # Resolve the exact participant key for this request.
     reader = core.participant_key(request)
+    # Shape the issue state for the requested transition.
     previous = {
         "id": "roadmap",
         "locator": "roadmap.md",
@@ -1427,8 +1899,11 @@ def test_join_existing_reader_refreshes_only_roadmap_digest() -> None:
         "ack": core.sha(core.canonical([previous])),
     }
     issue.state["assignments"] = {reader: {"packet": [previous]}}
+    # Dispatch the join request against the modeled issue.
     result = core.operate(store, issue, request)  # type: ignore[arg-type]
+    # Copy committed state for a controlled mutation.
     current = issue.state["participants"][reader]
+    # Confirm the attached reader identity matches the packet scope.
     assert result["participant_id"] == reader
     assert current["packet"][0]["sha256"] == issue.state["files"]["roadmap.md"]
     assert current["ack"] is None
@@ -1439,8 +1914,11 @@ def test_join_existing_reader_refreshes_only_roadmap_digest() -> None:
 
 def test_transfer_coordinator_moves_roadmap_ownership_with_evidence() -> None:
     """Move the coordinator role and canonical roadmap owner in one transaction."""
+    # Create a modeled store and issue at the active revision.
     store, issue = MemoryStore(), MemoryIssue()
+    # Resolve the exact participant key for this request.
     reader = core.participant_key({"host": "codex", "session_id": "reader"})
+    # Shape the issue state for the requested transition.
     issue.state["participants"][reader] = {
         "generation": 1,
         "status": "attached",
@@ -1449,6 +1927,7 @@ def test_transfer_coordinator_moves_roadmap_ownership_with_evidence() -> None:
         "ack": None,
     }
     source = {"id": "transfer", "locator": "context/transfer.md", "sha256": core.sha(b"vote")}
+    # Dispatch the transfer-coordinator request against the modeled issue.
     result = core.operate(
         store,
         issue,
@@ -1467,8 +1946,11 @@ def test_transfer_coordinator_moves_roadmap_ownership_with_evidence() -> None:
 
 def test_reconcile_participant_detaches_selected_generation_after_pending_clear() -> None:
     """Retire exactly the targeted stale participant generation with evidence."""
+    # Create a modeled store and issue at the active revision.
     store, issue = MemoryStore(), MemoryIssue()
+    # Resolve the exact participant key for this request.
     reader = core.participant_key({"host": "codex", "session_id": "reader"})
+    # Shape the issue state for the requested transition.
     issue.state["participants"][reader] = {
         "generation": 3,
         "status": "ready",
@@ -1477,6 +1959,7 @@ def test_reconcile_participant_detaches_selected_generation_after_pending_clear(
         "ack": "old-digest",
     }
     source = {"id": "reconcile", "locator": "context/reconcile.md", "sha256": core.sha(b"clear")}
+    # Dispatch the reconcile-participant request against the modeled issue.
     result = core.operate(
         store,
         issue,
@@ -1496,13 +1979,18 @@ def test_reconcile_participant_detaches_selected_generation_after_pending_clear(
 
 def test_archive_prepare_seal_requires_terminal_issue_and_detached_readers() -> None:
     """Freeze a terminal issue only after every other participant has detached."""
+    # Create the modeled issue and identify its participant.
     store, issue = MemoryStore(), MemoryIssue()
     key = issue.state["coordinator"]
+    # Dispatch the archive-prepare request and capture its rejection.
     with pytest.raises(core.WorkspaceError) as captured:
         core.operate(store, issue, base_request("archive-prepare", expected_revision=7, seal=True))  # type: ignore[arg-type]
+    # Confirm the rejected operation reports RETAINED.
     assert captured.value.code == "RETAINED"
     assert issue.commits == []
+    # Resolve the exact participant key for this request.
     reader = core.participant_key({"host": "codex", "session_id": "reader"})
+    # Shape the issue state for the requested transition.
     issue.state["participants"][reader] = {
         "generation": 1,
         "status": "detached",
@@ -1511,6 +1999,7 @@ def test_archive_prepare_seal_requires_terminal_issue_and_detached_readers() -> 
         "ack": None,
     }
     issue.state["disposition"] = "completed"
+    # Dispatch the archive-prepare request against the modeled issue.
     result = core.operate(
         store, issue, base_request("archive-prepare", expected_revision=7, seal=True)
     )  # type: ignore[arg-type]
@@ -1522,15 +2011,20 @@ def test_archive_prepare_seal_requires_terminal_issue_and_detached_readers() -> 
 
 def test_replayed_create_restores_saved_result_and_binding_without_new_commit() -> None:
     """Replay an identical creation receipt and its referenced response payload."""
+    # Create the modeled issue and build a request for its participant.
     store, issue = MemoryStore(), MemoryIssue()
     key = issue.state["coordinator"]
     request = base_request("create", issue_uuid="uuid", coordinator=key)
+    # Persist the control document before resuming cleanup.
     issue.control.put("result.json", {"binding_generation": 2, "participant_id": key})
+    # Shape the issue state for the requested transition.
     issue.state["requests"][core.sha(request["request_id"].encode())] = {
         "digest": core.sha(core.canonical(request)),
         "result": {"ok": True, "code": "OK", "result_ref": "result.json"},
     }
+    # Dispatch the create request against the modeled issue.
     result = core.operate(store, issue, request)  # type: ignore[arg-type]
+    # Confirm the cleanup result belongs to the requested issue.
     assert result == {
         "ok": True,
         "code": "OK",
@@ -1545,20 +2039,35 @@ def test_replayed_create_restores_saved_result_and_binding_without_new_commit() 
 def test_restore_commit_failure_keeps_prior_cleaned_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Restore the prior in-memory tombstone if reconstruction publication fails."""
+    """Restore the prior in-memory tombstone if reconstruction publication fails.
+
+    Args:
+        monkeypatch: Pytest fixture used to replace the dependency under test.
+    """
+    # Shape the issue state for the requested transition.
     store, issue = MemoryStore(), MemoryIssue()
     issue.state["storage"] = "cleaned"
     issue.state["tombstone"] = {"snapshot": "snap-1"}
+    # Hash the exact issue payload before the transition.
     issue.state["files"] = core.manifest(issue.payload)
+    # Retain the prior event digest before appending a new event.
     prior = copy.deepcopy(issue.state)
 
     class Task:
         """Report no duplicate issue payload."""
 
         def exists(self, _identifier: str) -> bool:
-            """Keep the payload absent before restore."""
+            """Keep the payload absent before restore.
+
+            Args:
+                _identifier: Unused identifier argument accepted by this fake.
+
+            Returns:
+                Whether the requested test entry exists.
+            """
             return False
 
+    # Install fake verify_provider calls.
     store.task = Task()
     monkeypatch.setattr(
         core,
@@ -1567,10 +2076,20 @@ def test_restore_commit_failure_keeps_prior_cleaned_state(
     )
 
     def fail_commit(*_args: object, **_kwargs: object) -> None:
-        """Model failed durable transaction publication."""
+        """Model failed durable transaction publication.
+
+        Args:
+            *_args: Extra arguments accepted to match the collaborator signature.
+            **_kwargs: Extra options accepted to match the collaborator signature.
+
+        Raises:
+            OSError: When the injected native or persistence failure occurs.
+        """
         raise OSError("storage failure")
 
+    # Install fake commit calls.
     monkeypatch.setattr(issue, "commit", fail_commit)
+    # Dispatch the restore request and capture its rejection.
     with pytest.raises(OSError, match="storage failure"):
         core.operate(store, issue, base_request("restore", observations=[]))  # type: ignore[arg-type]
     assert issue.state == prior
@@ -1579,6 +2098,7 @@ def test_restore_commit_failure_keeps_prior_cleaned_state(
 
 def test_archive_prepare_reuses_identical_durable_preparation_receipt() -> None:
     """Retry export publication without appending a second preparation event."""
+    # Shape the issue state for the requested transition.
     store, issue = MemoryStore(), MemoryIssue()
     request = base_request("archive-prepare", expected_revision=7)
     prepared_request = {**request, "request_id": request["request_id"] + ":prepare"}
@@ -1586,6 +2106,7 @@ def test_archive_prepare_reuses_identical_durable_preparation_receipt() -> None:
         "digest": core.sha(core.canonical(prepared_request)),
         "result": {"ok": True},
     }
+    # Dispatch the archive-prepare request against the modeled issue.
     result = core.operate(store, issue, request)  # type: ignore[arg-type]
     assert result["ok"] is True
     assert [event for event, _state, _files in issue.commits] == [None]
@@ -1593,10 +2114,13 @@ def test_archive_prepare_reuses_identical_durable_preparation_receipt() -> None:
 
 def test_unsupported_operation_never_commits_issue_state() -> None:
     """Return the bounded unsupported diagnostic without publishing payload bytes."""
+    # Create the modeled issue and retain its pre-operation state.
     store, issue = MemoryStore(), MemoryIssue()
     before = copy.deepcopy(issue.state)
+    # Dispatch the unrecognized request and capture its rejection.
     with pytest.raises(core.WorkspaceError) as captured:
         core.operate(store, issue, base_request("unrecognized"))  # type: ignore[arg-type]
+    # Confirm the rejected operation reports UNSUPPORTED_OPERATION.
     assert captured.value.code == "UNSUPPORTED_OPERATION"
     assert issue.state == before
     assert issue.commits == []
@@ -1604,7 +2128,9 @@ def test_unsupported_operation_never_commits_issue_state() -> None:
 
 def test_poll_without_pre_hook_correlates_unique_pending_parent() -> None:
     """Settle only one participant-local process when a host omits polling admission."""
+    # Create a modeled store and issue at the active revision.
     store, issue = MemoryStore(), MemoryIssue()
+    # Dispatch the tool-start request against the modeled issue.
     core.operate(store, issue, base_request("tool-start", tool_id="process"))  # type: ignore[arg-type]
     core.operate(
         store,
@@ -1624,7 +2150,9 @@ def test_poll_without_pre_hook_correlates_unique_pending_parent() -> None:
 
 def test_poll_transport_can_retire_after_its_parent_already_completed() -> None:
     """Remove a previously admitted poll without reviving its settled parent process."""
+    # Create a modeled store and issue at the active revision.
     store, issue = MemoryStore(), MemoryIssue()
+    # Dispatch the tool-start request against the modeled issue.
     core.operate(store, issue, base_request("tool-start", tool_id="process"))  # type: ignore[arg-type]
     core.operate(
         store,
@@ -1650,20 +2178,27 @@ def test_poll_transport_can_retire_after_its_parent_already_completed() -> None:
 
 def test_unfinished_tool_without_handle_cannot_be_settled() -> None:
     """Keep a pending call when the host supplies neither completion nor process handle."""
+    # Create a modeled store and issue at the active revision.
     store, issue = MemoryStore(), MemoryIssue()
+    # Dispatch the tool-start request against the modeled issue.
     core.operate(store, issue, base_request("tool-start", tool_id="process"))  # type: ignore[arg-type]
+    # Capture state before the attempted operation.
     before = copy.deepcopy(issue.state)
+    # Dispatch the tool-complete request and capture its rejection.
     with pytest.raises(core.WorkspaceError) as captured:
         core.operate(
             store, issue, base_request("tool-complete", tool_id="process", completed=False)
         )  # type: ignore[arg-type]
+    # Confirm the rejected operation reports UNKNOWN_OPERATION.
     assert captured.value.code == "UNKNOWN_OPERATION"
     assert issue.state == before
 
 
 def test_repeated_unknown_process_observation_does_not_append_event() -> None:
     """Refresh one unchanged async handle without consuming an event slot."""
+    # Create a modeled store and issue at the active revision.
     store, issue = MemoryStore(), MemoryIssue()
+    # Dispatch the tool-start request against the modeled issue.
     core.operate(store, issue, base_request("tool-start", tool_id="process"))  # type: ignore[arg-type]
     core.operate(
         store,

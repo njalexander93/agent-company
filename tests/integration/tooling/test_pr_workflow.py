@@ -21,7 +21,9 @@ def test_workflow_exposes_five_checks_without_masking_failed_steps() -> None:
     Raises:
         AssertionError: A failed check is masked or prevents a later required check.
     """
+    # Load the actual PR workflow job and dependency graph.
     jobs = yaml.safe_load(WORKFLOW.read_text())["jobs"]
+    # Require the five named checks and failure-preserving step conditions.
     assert set(jobs) == {"quality", "tests", "coverage"}
     assert jobs["quality"]["name"] == "Code Quality Check"
     assert jobs["coverage"]["name"] == "Test Quality Check"
@@ -49,10 +51,13 @@ def test_workflow_exposes_five_checks_without_masking_failed_steps() -> None:
         "python-tooling-windows",
         "python-tooling-macos",
     }
+    # Inspect every CI job for its required setup and evidence-retention behavior.
     for job in jobs.values():
         assert "continue-on-error" not in job
+        # Inspect each job step for contributor-runner and retention conventions.
         for step in job["steps"]:
             assert "continue-on-error" not in step
+            # Verify each Python runner step uses the pinned project command.
             if step.get("run", "").startswith("poetry run python scripts/"):
                 assert step["if"] == "${{ !cancelled() }}"
 
@@ -71,6 +76,7 @@ def test_workflow_collectors_retain_failure_and_run_later_checks(
     Raises:
         AssertionError: A failure is lost, a later check is absent, or suite data collides.
     """
+    # Read the actual workflow job steps and install a disposable command failure.
     steps = yaml.safe_load(WORKFLOW.read_text())["jobs"][job]["steps"]
     selected = [
         step
@@ -78,6 +84,7 @@ def test_workflow_collectors_retain_failure_and_run_later_checks(
         if step.get("run", "").startswith("poetry run python scripts/dev.py ")
     ]
     tasks = [shlex.split(step["run"])[4] for step in selected]
+    # Require later collection steps to run while the job still fails.
     assert tasks == (
         ["validate-config", "format-check", "lint", "type-check"]
         if job == "quality"
@@ -88,6 +95,7 @@ def test_workflow_collectors_retain_failure_and_run_later_checks(
     monkeypatch.setattr(dev, "identity", lambda: dict(state))
     monkeypatch.setattr(dev, "checkout_state", lambda: dict(state))
     commands = {}
+    # Verify the native suite steps preserve the expected command order.
     for index, task in enumerate(tasks):
         program = (
             "import os; from pathlib import Path; "
@@ -109,6 +117,7 @@ def test_workflow_collectors_retain_failure_and_run_later_checks(
         manifest = json.loads((evidence / "manifest.json").read_text())
         assert manifest["commands"][0]["exit_code"] == results[-1]
         assert (tmp_path / task).is_file()
+        # Apply native-suite requirements only to the matrix test job.
         if job == "tests":
             command = manifest["commands"][0]["command"]
             assert "--cov" in command if task != "test-tooling-unit" else "--cov=scripts" in command
@@ -116,6 +125,7 @@ def test_workflow_collectors_retain_failure_and_run_later_checks(
             assert any(arg.startswith("--junitxml=") for arg in command)
             contexts.append((evidence / f"{task}-0.log").read_text().strip())
     assert results == [7, *([0] * (len(tasks) - 1))]
+    # Require the native-test job to upload its evidence even after a suite failure.
     if job == "tests":
         assert contexts[0] != contexts[1]
 
@@ -134,6 +144,7 @@ def test_split_collector_rejects_candidate_changes(
     Raises:
         AssertionError: A changed candidate receives successful suite evidence.
     """
+    # Inject changed checkout identity into a split collector run.
     state = {"sha": "fixture", "status": "", "tracked_digest": "before"}
     monkeypatch.setattr(dev, "ROOT", tmp_path)
     monkeypatch.setattr(dev, "identity", lambda: dict(state))
@@ -142,5 +153,6 @@ def test_split_collector_rejects_candidate_changes(
     monkeypatch.setattr(
         sys, "argv", ["dev.py", task, "--platform-coverage", "--evidence-dir", str(tmp_path)]
     )
+    # Require its receipt to report the candidate mismatch.
     assert dev.main() == 1
     assert json.loads((tmp_path / "manifest.json").read_text())["candidate_unchanged"] is False

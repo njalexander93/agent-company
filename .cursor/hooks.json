@@ -21,6 +21,19 @@
         "failClosed": true
       }
     ],
+    "beforeMCPExecution": [
+      {
+        "command": "git -c alias.task-workspace-hook=!./src/agent_company/adapters/launch.sh task-workspace-hook cursor",
+        "timeout": 10,
+        "failClosed": true
+      }
+    ],
+    "afterMCPExecution": [
+      {
+        "command": "git -c alias.task-workspace-hook=!./src/agent_company/adapters/launch.sh task-workspace-hook cursor",
+        "timeout": 10
+      }
+    ],
     "postToolUse": [
       {
         "command": "git -c alias.task-workspace-hook=!./src/agent_company/adapters/launch.sh task-workspace-hook cursor",

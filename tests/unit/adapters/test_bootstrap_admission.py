@@ -18,7 +18,15 @@ OTHER = Path(Path.cwd().anchor) / "other"
 
 
 def base(operation: str, **extra: object) -> dict[str, Any]:
-    """Build one bounded command request for an observed Codex session."""
+    """Build one bounded command request for an observed Codex session.
+
+    Args:
+        operation: Lifecycle operation encoded into the shell command.
+        extra: Request fields used to test exact admission.
+
+    Returns:
+        A lifecycle request bound to the disposable session.
+    """
     return {
         "schema_version": 1,
         "operation": operation,
@@ -33,7 +41,12 @@ def base(operation: str, **extra: object) -> dict[str, Any]:
 def test_canonical_bootstrap_allows_exact_diagnostic_and_rejects_extra_unready_fields(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Permit one exact recovery diagnostic without opening assignment state."""
+    """Permit one exact recovery diagnostic without opening assignment state.
+
+    Args:
+        monkeypatch: Replaces repository and binding access boundaries.
+    """
+    # Diagnose a registered checkout without opening an assignment directory.
     monkeypatch.setattr(
         common.core,
         "repository",
@@ -47,6 +60,7 @@ def test_canonical_bootstrap_allows_exact_diagnostic_and_rejects_extra_unready_f
     event = {"cwd": str(CHECKOUT), "session_id": "session"}
     valid = common.bootstrap_command(base("diagnose"), "codex")
     assert common.canonical_bootstrap(event, valid, "codex", ready=False) is True
+    # Extra fields and unknown operations cannot use the narrow unready exception.
     extra = common.bootstrap_command(base("diagnose", arbitrary="injection"), "codex")
     assert common.canonical_bootstrap(event, extra, "codex", ready=False) is False
     unknown = common.bootstrap_command(base("delete-all"), "codex")
@@ -56,7 +70,12 @@ def test_canonical_bootstrap_allows_exact_diagnostic_and_rejects_extra_unready_f
 def test_canonical_bootstrap_requires_issue_to_match_persisted_assignment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Accept only the selected issue, never a command-supplied alternate issue."""
+    """Accept only the selected issue, never a command-supplied alternate issue.
+
+    Args:
+        monkeypatch: Replaces repository and binding access boundaries.
+    """
+    # Expose only the expected root/task/bindings path and one persisted assignment.
     root = CHECKOUT
     key = core.participant_key(base("read"))
     opened: list[str] = []
@@ -65,27 +84,56 @@ def test_canonical_bootstrap_requires_issue_to_match_persisted_assignment(
         """Expose a direct three-level root/task/bindings handle chain."""
 
         def __init__(self, level: int = 0) -> None:
-            """Select root, task, or binding lookup."""
+            """Select root, task, or binding lookup.
+
+            Args:
+                level: Root, task, or bindings depth in the fake directory chain.
+            """
             self.level = level
 
         def __enter__(self) -> Node:
-            """Hold the modeled opened directory."""
+            """Hold the modeled opened directory.
+
+            Returns:
+                This directory node.
+            """
             return self
 
         def __exit__(self, *_args: object) -> None:
-            """Release the modeled directory."""
+            """Release the modeled directory.
+
+            Args:
+                _args: Context manager exception fields, unused by this fake.
+            """
 
         def child(self, name: str) -> Node:
-            """Require direct task then binding traversal."""
+            """Require direct task then binding traversal.
+
+            Args:
+                name: Child directory requested by the bootstrap parser.
+
+            Returns:
+                A node at the next directory depth.
+            """
+            # Reject traversal outside the two assignment directories.
             opened.append(name)
             assert name == (".task" if self.level == 0 else ".bindings")
             return Node(self.level + 1)
 
         def json(self, name: str) -> dict[str, str]:
-            """Read only the persisted assignment for the actual session."""
+            """Read only the persisted assignment for the actual session.
+
+            Args:
+                name: Assignment filename for the actual session.
+
+            Returns:
+                The bound shorthand issue ID.
+            """
+            # The parser may read only the actual session's assignment.
             assert (self.level, name) == (2, key + ".assignment.json")
             return {"issue_id": "AGENT-30"}
 
+    # Compare an exact issue request with a command-supplied foreign issue.
     monkeypatch.setattr(common.core, "repository", lambda _path: (root, None, [root]))
     monkeypatch.setattr(common.core.Directory, "absolute", lambda _path: Node())
     event = {"cwd": str(CHECKOUT), "session_id": "session"}
@@ -99,7 +147,12 @@ def test_canonical_bootstrap_requires_issue_to_match_persisted_assignment(
 def test_canonical_bootstrap_rejects_foreign_worktree_before_binding_lookup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Reject commands redirected to another Git worktree before reading assignment."""
+    """Reject commands redirected to another Git worktree before reading assignment.
+
+    Args:
+        monkeypatch: Replaces repository and binding access boundaries.
+    """
+    # Detect a command redirected away from the observed checkout.
     monkeypatch.setattr(common.core, "repository", lambda path: (Path(path), None, []))
     monkeypatch.setattr(
         common.core.Directory,
@@ -115,13 +168,20 @@ def test_canonical_bootstrap_rejects_foreign_worktree_before_binding_lookup(
 def test_windows_bootstrap_command_roundtrips_only_literal_powershell_arguments(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Encode the bounded request and reject altered PowerShell command structure."""
+    """Encode the bounded request and reject altered PowerShell command structure.
+
+    Args:
+        monkeypatch: Forces the Windows command transport branch.
+    """
+    # Encode a valid request under Windows quoting rules.
     monkeypatch.setattr(common, "os", SimpleNamespace(name="nt"))
     request = base("diagnose")
     command = common.bootstrap_command(request, "codex")
     assert command.startswith("& '")
     assert common.bootstrap_request(command, "codex", common.PYTHON, common.LIFECYCLE) == request
+    # Reject appended commands and loss of the call operator.
     for changed in (command + " ; Write-Host bad", command.replace("& ", "", 1)):
+        # Each altered command must fail the literal PowerShell grammar.
         with pytest.raises(ValueError, match="Noncanonical PowerShell command"):
             common.bootstrap_request(changed, "codex", common.PYTHON, common.LIFECYCLE)
 
@@ -129,10 +189,16 @@ def test_windows_bootstrap_command_roundtrips_only_literal_powershell_arguments(
 def test_windows_bootstrap_rejects_unsafe_literal_argv_and_wrong_entry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Windows bootstrap accepts only the exact encoded entry and safe literal argv."""
+    """Windows bootstrap accepts only the exact encoded entry and safe literal argv.
+
+    Args:
+        monkeypatch: Forces Windows transport and an unsafe interpreter path.
+    """
+    # Build the canonical Windows command before altering individual tokens.
     monkeypatch.setattr(common, "os", SimpleNamespace(name="nt"))
     request = base("diagnose")
     command = common.bootstrap_command(request, "codex")
+    # Wrong entry switch and malformed quoting must fail parsing.
     with pytest.raises(ValueError, match="Unexpected Windows bootstrap entry"):
         common.bootstrap_request(
             command.replace("--request-base64", "--other"),
@@ -140,6 +206,7 @@ def test_windows_bootstrap_rejects_unsafe_literal_argv_and_wrong_entry(
             common.PYTHON,
             common.LIFECYCLE,
         )
+    # A quote injected into the interpreter token cannot be safely parsed.
     with pytest.raises(ValueError, match="Unsupported PowerShell quoting"):
         common.bootstrap_request(
             command.replace(common.PYTHON, common.PYTHON + '"'),
@@ -147,6 +214,8 @@ def test_windows_bootstrap_rejects_unsafe_literal_argv_and_wrong_entry(
             common.PYTHON,
             common.LIFECYCLE,
         )
+    # An unsafe interpreter path cannot be emitted as a command argument.
     monkeypatch.setattr(common, "PYTHON", 'unsafe"python')
+    # Failure must happen at command construction, before any shell runs.
     with pytest.raises(ValueError, match="Unsupported PowerShell argument"):
         common.bootstrap_command(request, "codex")

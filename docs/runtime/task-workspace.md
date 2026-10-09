@@ -61,7 +61,7 @@ Responses contain `ok`, `code`, identifiers, current `revision`, `binding_genera
 | `bind` | Bind an explicitly named issue and scope to a host session. Existing identical binding is idempotent; conflicting issue requires `rebind`. Initial coordinator is explicitly designated at create/adopt; joining a session does not confer that role. |
 | `create` | Under the persistent issue lock, create only if absent and no tombstone/history exists; atomically publish a complete template workspace. Concurrent creators converge; differing identities/scopes conflict. |
 | `attach`, `resume` | Validate membership, scope, binding generation and payload; register a participant and preserve bytes. A missing directory with a tombstone enters recovery, never empty creation. |
-| `join` | After the exact Codex foreground ticket read, attach a new session as a roadmap-only reader. Require the matching immutable issue UUID and reject caller-supplied packets or ownership. The coordinator and existing assignments stay unchanged. This internal adapter route is excluded from unready shell bootstrap commands. |
+| `join` | After the exact foreground ticket read through a supported runtime adapter, attach a new session as a roadmap-only reader. Require the matching immutable issue UUID and reject caller-supplied packets or ownership. The coordinator and existing assignments stay unchanged. This internal adapter route is excluded from unready shell bootstrap commands. |
 | `rebind` | Explicit old/new issue and expected binding generation; detach old participation, then bind the new issue. Preserve old issue state. Refuse while participant-owned external operations remain unresolved. Never rebind a parent under active child participants. |
 | `scope`, `read` | Coordinator installs a versioned packet manifest; participant reads only permitted references/notes. `read` checks each required digest and scope. Scope changes invalidate prior acknowledgment. |
 | `acknowledge`, `ready` | Acknowledge exact packet digest/required-source availability, then check binding, scope, ownership, unresolved transaction and filesystem access. This establishes delivery facts, not comprehension or execution authority. |
@@ -131,9 +131,9 @@ For this increment, retain the complete bounded stream until verified archive an
 
 ## Archive provider boundary and recovery
 
-**Selected first bridge: foreground Codex connector calls plus deterministic local verification.** Python command hooks have no established access to the foreground connector session. Do not invoke imagined Python MCP functions, scrape credentials or start a second Codex model from a hook.
+**Provider bridge: foreground operations plus deterministic local verification.** The shared lifecycle consumes explicit provider observations; runtime adapters translate the selected host's tool protocol. A command hook does not gain the foreground session's authenticated provider access. Use that session's available tools and pass verified observations through the documented boundary.
 
-The available tool declarations provide:
+The currently documented archive bridge uses these Codex connector declarations. These names describe one integration, not a requirement that every runtime use Codex. Archive support in another runtime requires equivalent write/read-back observations and explicit protocol verification:
 
 - `mcp__codex_apps__linear_save_document({issue, title, content})` to create a document, or `{id, content}` to update it.
 - `mcp__codex_apps__linear_get_document({id})` for read-back.
@@ -179,19 +179,7 @@ A hook can deny a covered action only when the host actually invokes and honors 
 
 An unready session may use only:
 
-1. On a Codex path with observable native callbacks for the exact tool, the `linear_get_issue({id})`
-   call for the exact `Task: <issue-id>` assignment. The prompt records the requested
-   identifier and no issue workspace. The adapter records the admitted tool ID,
-   matches its completion, verifies the returned identifier and immutable UUID,
-   then runs local registration, attachment, packet reading and readiness. A typed
-   `NOT_FOUND` or the exact observed Linear missing-reference envelope stops without
-   workspace creation. That envelope reports Linear could not find the requested
-   identifier; generic `INVALID_ARGUMENT` and unverified provider errors are not
-   reclassified as missing tickets. This exception does not admit issue edits,
-   arbitrary searches, outer `functions.exec` wrappers or other MCP calls. Codex
-   [documents hook decisions for nested code-mode tool calls](https://learn.chatgpt.com/docs/hooks#tool-calls-from-code-mode);
-   model-visible wrapping alone does not identify the native callback. An actually
-   observed outer-wrapper-only hook event receives no exemption.
+1. The exact Linear issue read for the recorded `Task: <issue-id>` assignment through a supported runtime adapter. The prompt records the identifier without creating an issue workspace. The adapter validates the native request and matching completion, verifies the returned identifier and immutable UUID, then runs shared registration, attachment, packet reading and readiness. Confirmed missing-ticket responses stop without workspace creation; generic invalid requests and other provider failures retain their diagnostics. This exception admits no issue edits, unrelated provider calls or opaque execution wrappers. See [ticket-read protocols](host-hooks.md#ticket-read-protocols) for the implemented host mappings and evidence limits.
 2. Host user-input/permission UI needed to grant the exact requested paths.
 3. The reviewed lifecycle command's exact `diagnose/register/bind/adopt/resume/restore` invocation for its assigned issue and allowlisted arguments. Allow no shell operators, redirection, command substitution, wrapper interpreters, arbitrary files or additional command. Parse a strict argument vector; reject anything the adapter cannot prove is this command.
 4. The exact Linear read/save operations bound to a pending immutable archive/recovery request, with checked issue/document ID and expected payload digest. This exception does not allow general provider edits. If nested tool calls conceal those arguments, use an observable direct call or retain the data.

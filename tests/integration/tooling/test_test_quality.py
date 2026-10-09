@@ -16,7 +16,13 @@ pytestmark = pytest.mark.integration
 def test_quality_retains_multiple_failures_and_independent_results(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Invalid native evidence blocks its dependents but lint and probes still run."""
+    """Invalid native evidence blocks its dependents but lint and probes still run.
+
+    Args:
+        tmp_path: Disposable directory supplied by pytest for this case.
+        monkeypatch: Pytest fixture that restores patched dependencies after this case.
+    """
+    # Supply separate malformed native and tooling evidence trees.
     inputs = tmp_path / "native"
     tooling = tmp_path / "tooling"
     output = tmp_path / "out"
@@ -63,6 +69,7 @@ def test_quality_retains_multiple_failures_and_independent_results(
             str(output),
         ],
     )
+    # Inspect the final named results for every independent check.
     assert quality.main() == 1
     report = json.loads((output / "quality.json").read_text())
     assert report["passed"] is False
@@ -85,27 +92,39 @@ def test_quality_retains_multiple_failures_and_independent_results(
 def test_assertion_probe_rejects_unintended_outcomes_and_accepts_repair(
     tmp_path: Path, defect: str
 ) -> None:
-    """Only a selected assertion failure counts; a repaired spec passes again."""
+    """Only a selected assertion failure counts; a repaired spec passes again.
+
+    Args:
+        tmp_path: Disposable directory supplied by pytest for this case.
+        defect: Parameterized defect injected into this candidate.
+    """
+    # Load the selected fault probes into a disposable candidate.
     cases = json.loads((ROOT / "scripts/quality_probes.json").read_text())
+    # Write every selected probe case into the disposable mutation specification.
     for case in cases:
         case["source_sha256"] = hashlib.sha256(
             (ROOT / case["source_path"]).read_bytes()
         ).hexdigest()
     spec = tmp_path / "probes.json"
     spec.write_text(json.dumps(cases))
+    # Reject wrong failures and accept the repaired intended assertion.
     assert quality.run_probes(spec, tmp_path)["status"] == "passed"
     first = cases[0]
+    # Turn the mutation into a survivor to prove lack of detection fails the gate.
     if defect == "survivor":
         first["new"] = "return hashlib.sha256(data).hexdigest()  # harmless change"
+    # Inject invalid Python so a syntax error cannot masquerade as an assertion failure.
     elif defect == "syntax":
         first["new"] = "return ("
     else:
+        # Use a stale replacement target to prove mutation setup must match source.
         first["old"] = "a stale mutation target"
     spec.write_text(json.dumps(cases))
     result = quality.run_probes(spec, tmp_path)
     assert result["status"] == "failed"
     assert result["detail"][0]["status"] == "failed"
     cases = json.loads((ROOT / "scripts/quality_probes.json").read_text())
+    # Run every probe baseline before accepting mutation outcomes.
     for case in cases:
         case["source_sha256"] = hashlib.sha256(
             (ROOT / case["source_path"]).read_bytes()
@@ -115,8 +134,14 @@ def test_assertion_probe_rejects_unintended_outcomes_and_accepts_repair(
 
 
 def test_probe_timeout_is_failed_and_does_not_stop_peer_probes(tmp_path: Path) -> None:
-    """A baseline deadline fails only its case; other selected faults still run."""
+    """A baseline deadline fails only its case; other selected faults still run.
+
+    Args:
+        tmp_path: Disposable directory supplied by pytest for this case.
+    """
+    # Force one selected assertion probe to exceed its time limit.
     cases = json.loads((ROOT / "scripts/quality_probes.json").read_text())
+    # Check each reported probe names the expected controlled assertion failure.
     for case in cases:
         case["source_sha256"] = hashlib.sha256(
             (ROOT / case["source_path"]).read_bytes()
@@ -125,6 +150,7 @@ def test_probe_timeout_is_failed_and_does_not_stop_peer_probes(tmp_path: Path) -
     spec = tmp_path / "probes.json"
     spec.write_text(json.dumps(cases))
     failed = quality.run_probes(spec, tmp_path)
+    # Require a failed timeout result while peer probes continue.
     assert failed["status"] == "failed"
     assert failed["detail"][0]["error"] == "baseline timed out"
     assert [item["status"] for item in failed["detail"][1:]] == ["passed", "passed"]

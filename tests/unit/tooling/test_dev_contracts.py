@@ -16,13 +16,20 @@ pytestmark = pytest.mark.unit
 def test_checkout_state_digests_tracked_bytes_and_reports_dirty_state(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Untracked noise cannot change the digest; a tracked edit must change it."""
+    """Untracked noise cannot change the digest; a tracked edit must change it.
+
+    Args:
+        tmp_path: Disposable directory supplied by pytest for this case.
+        monkeypatch: Pytest fixture that restores patched dependencies after this case.
+    """
+    # Create tracked bytes and a controlled Git status in a checkout.
     root = tmp_path / "checkout"
     root.mkdir()
     tracked = root / "tracked.py"
     tracked.write_text("value = 1\n")
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    # Initialize and commit the disposable tracked source used by runner identity tests.
     for command in (
         ["init", "-q"],
         ["add", "tracked.py"],
@@ -39,6 +46,7 @@ def test_checkout_state_digests_tracked_bytes_and_reports_dirty_state(
         subprocess.run(["git", *command], cwd=root, check=True, capture_output=True)
     monkeypatch.setattr(dev, "ROOT", root)
     baseline = dev.checkout_state()
+    # Require the digest and dirty state to change for the right reasons.
     assert baseline["status"] == ""
     (root / "untracked.txt").write_text("noise")
     untracked = dev.checkout_state()
@@ -53,7 +61,13 @@ def test_checkout_state_digests_tracked_bytes_and_reports_dirty_state(
 def test_tooling_unit_run_has_separate_script_coverage_and_receipt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The tooling unit task cannot claim production instrumentation or coverage."""
+    """The tooling unit task cannot claim production instrumentation or coverage.
+
+    Args:
+        tmp_path: Disposable directory supplied by pytest for this case.
+        monkeypatch: Pytest fixture that restores patched dependencies after this case.
+    """
+    # Select the tooling unit task with its own evidence directory.
     state = {"sha": "candidate", "status": "", "tracked_digest": "bytes"}
     monkeypatch.setattr(dev, "ROOT", tmp_path)
     monkeypatch.setattr(dev, "identity", lambda: dict(state))
@@ -62,6 +76,16 @@ def test_tooling_unit_run_has_separate_script_coverage_and_receipt(
     seen: list[list[str]] = []
 
     def run(command: list[str], environment: dict[str, str], log: Path | None) -> int:
+        """Check script coverage and receipt paths for the tooling unit command.
+
+        Args:
+            command: Exact command arguments supplied to the child or fake runner.
+            environment: Environment passed to the child process.
+            log: Optional path for persistent command output.
+
+        Returns:
+            Controlled process exit status for this test.
+        """
         seen.append(command)
         assert log is not None
         assert environment["COVERAGE_FILE"] == str(tmp_path / "evidence/.coverage")
@@ -76,6 +100,7 @@ def test_tooling_unit_run_has_separate_script_coverage_and_receipt(
     monkeypatch.setattr(
         sys, "argv", ["dev.py", "test-tooling-unit", "--evidence-dir", str(evidence)]
     )
+    # Check source selection, receipt location, and recorded artifacts.
     assert dev.main() == 0
     assert len(seen) == 1
     command = seen[0]

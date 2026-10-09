@@ -13,7 +13,14 @@ pytestmark = pytest.mark.integration
 
 
 def repository(tmp_path: Path) -> Path:
-    """Create an unregistered Git worktree for startup tests."""
+    """Create an unregistered Git worktree for startup tests.
+
+    Args:
+        tmp_path: Disposable directory for repository or file fixtures.
+
+    Returns:
+        The committed but unregistered repository root.
+    """
     root = tmp_path / "main"
     root.mkdir()
     subprocess.run(["git", "-C", str(root), "init", "-q"], check=True)
@@ -37,12 +44,25 @@ def repository(tmp_path: Path) -> Path:
 
 
 def event(root: Path, name: str, **fields: object) -> dict[str, object]:
-    """Build a hook event with its actual test session identity."""
+    """Build a hook event with its actual test session identity.
+
+    Args:
+        root: Disposable repository root used by this case.
+        name: Event or case name selected for this test.
+        fields: Event or request fields varied by this case.
+
+    Returns:
+        The native hook event envelope for this case.
+    """
     return {"cwd": str(root), "session_id": "master", "hook_event_name": name, **fields}
 
 
 def ticket_response() -> dict[str, object]:
-    """Model the verified foreground Linear connector result shape."""
+    """Model the verified foreground Linear connector result shape.
+
+    Returns:
+        A successful Codex connector result fixture.
+    """
     return {
         "isError": False,
         "content": [
@@ -51,7 +71,7 @@ def ticket_response() -> dict[str, object]:
                 "text": json.dumps(
                     {
                         "id": "TEST-1",
-                        "uuid": "ticket-uuid",
+                        "uuid": "c0a8f3be-1c13-4f2b-9a1e-b2e61f11f977",
                         "title": "Test issue",
                         "description": "A ticket description.",
                     }
@@ -66,7 +86,16 @@ def linear_error(
     status: int = 400,
     error_code: str = "INVALID_ARGUMENT",
 ) -> dict[str, object]:
-    """Model the observed Linear connector error with narrow variable fields."""
+    """Model the observed Linear connector error with narrow variable fields.
+
+    Args:
+        message: Provider or adapter diagnostic text varied by this case.
+        status: HTTP or provider status selected for this case.
+        error_code: Typed provider failure selected for this case.
+
+    Returns:
+        A typed connector error result fixture.
+    """
     return {
         "isError": True,
         "structuredContent": {"error_code": error_code},
@@ -89,7 +118,11 @@ def linear_error(
 def test_ticket_read_precedes_workspace_and_automatically_establishes_readiness(
     tmp_path: Path,
 ) -> None:
-    """A Task line must permit the exact issue read before any local readiness gate."""
+    """A Task line must permit the exact issue read before any local readiness gate.
+
+    Args:
+        tmp_path: Disposable directory for repository or file fixtures.
+    """
     root = repository(tmp_path)
     codex.handle(event(root, "UserPromptSubmit", prompt="Task: TEST-1"))
     assert not (root / ".task" / "TEST-1").exists()
@@ -117,7 +150,16 @@ def test_ticket_read_precedes_workspace_and_automatically_establishes_readiness(
 
 
 def lookup(root: Path, session: str, response: object) -> dict[str, object]:
-    """Run one exact direct lookup and matching completion callback."""
+    """Run one exact direct lookup and matching completion callback.
+
+    Args:
+        root: Disposable repository root used by this case.
+        session: Session identity selected for this case.
+        response: Provider or hook response supplied by this case.
+
+    Returns:
+        The ticket lookup hook result.
+    """
     fields = {
         "tool_name": "mcp__codex_apps__linear_get_issue",
         "tool_input": {"id": "TEST-1"},
@@ -155,7 +197,13 @@ def test_provider_failures_create_no_workspace(
     response: object,
     code: str,
 ) -> None:
-    """Recognize only verified missing-reference shapes; preserve other failures."""
+    """Recognize only verified missing-reference shapes; preserve other failures.
+
+    Args:
+        tmp_path: Disposable directory for repository or file fixtures.
+        response: Provider or hook response supplied by this case.
+        code: Diagnostic code selected for this case.
+    """
     root = repository(tmp_path)
     codex.handle(event(root, "UserPromptSubmit", prompt="Task: TEST-1"))
     result = lookup(root, "master", response)
@@ -164,7 +212,11 @@ def test_provider_failures_create_no_workspace(
 
 
 def test_repeat_start_preserves_roadmap_and_coordinator(tmp_path: Path) -> None:
-    """The same session can resume without replacing approved task content."""
+    """The same session can resume without replacing approved task content.
+
+    Args:
+        tmp_path: Disposable directory for repository or file fixtures.
+    """
     root = repository(tmp_path)
     codex.handle(event(root, "UserPromptSubmit", prompt="Task: TEST-1"))
     assert "TASK_WORKSPACE_READY" in lookup(root, "master", ticket_response())["systemMessage"]
@@ -181,6 +233,7 @@ def test_repeat_start_preserves_roadmap_and_coordinator(tmp_path: Path) -> None:
         "issue_id": "TEST-1",
         "repo_id": json.loads((root / ".task" / ".repository.json").read_text())["repo_id"],
     }
+    # Inspect committed state after ticket-driven coordinator setup.
     with core.Store(base) as store, store.issues.child("TEST-1") as control, control.lock():
         issue = core.Issue(store, control, "TEST-1")
         issue.recover()
@@ -188,7 +241,11 @@ def test_repeat_start_preserves_roadmap_and_coordinator(tmp_path: Path) -> None:
 
 
 def test_other_session_joins_as_reader_without_taking_coordinator(tmp_path: Path) -> None:
-    """A new session becomes ready with roadmap scope and no write ownership."""
+    """A new session becomes ready with roadmap scope and no write ownership.
+
+    Args:
+        tmp_path: Disposable directory for repository or file fixtures.
+    """
     root = repository(tmp_path)
     codex.handle(event(root, "UserPromptSubmit", prompt="Task: TEST-1"))
     lookup(root, "master", ticket_response())
@@ -231,6 +288,7 @@ def test_other_session_joins_as_reader_without_taking_coordinator(tmp_path: Path
         "issue_id": "TEST-1",
         "repo_id": json.loads((root / ".task" / ".repository.json").read_text())["repo_id"],
     }
+    # Inspect committed state after a repeat setup attempt.
     with core.Store(base) as store, store.issues.child("TEST-1") as control, control.lock():
         issue = core.Issue(store, control, "TEST-1")
         issue.recover()
@@ -246,8 +304,71 @@ def test_other_session_joins_as_reader_without_taking_coordinator(tmp_path: Path
     assert "TASK_WORKSPACE_READY" in lookup(root, "other", ticket_response())["systemMessage"]
 
 
+@pytest.mark.parametrize("reader_host", ["codex", "claude-code", "cursor", "future-host"])
+def test_verified_reader_join_is_runtime_neutral_and_retains_scope(
+    tmp_path: Path, reader_host: str
+) -> None:
+    """Join any explicit host as a reader under the original coordinator.
+
+    Args:
+        tmp_path: Disposable directory for the shared lifecycle repository.
+        reader_host: Explicit host identifier for the joining session.
+    """
+    root = repository(tmp_path)
+    issue = startup.ticket(ticket_response(), "TEST-1")
+    coordinator = startup.start(event(root, "", session_id="master"), issue, host="codex")
+    coordinator_key = core.participant_key({"host": "codex", "session_id": "master"})
+    reader_event = event(root, "", session_id="reader")
+
+    # A verified ticket joins the same issue without assuming a Codex host.
+    ready = startup.start(reader_event, issue, host=reader_host)
+    reader_key = core.participant_key({"host": reader_host, "session_id": "reader"})
+    assert ready["participant_id"] == reader_key
+    assert ready["coordinator"] == coordinator_key
+    assert coordinator["participant_id"] == coordinator_key
+    base = {
+        "schema_version": 1,
+        "worktree": str(root),
+        "host": reader_host,
+        "session_id": "reader",
+        "issue_id": "TEST-1",
+        "repo_id": json.loads((root / ".task" / ".repository.json").read_text())["repo_id"],
+    }
+    # Committed ownership and the reader packet remain constrained to roadmap access.
+    with core.Store(base) as store, store.issues.child("TEST-1") as control, control.lock():
+        committed = core.Issue(store, control, "TEST-1")
+        committed.recover()
+        state = committed.committed_state()
+        assert state["coordinator"] == coordinator_key
+        assert state["owners"] == {"roadmap.md": coordinator_key}
+        assert [ref["locator"] for ref in state["participants"][reader_key]["packet"]] == [
+            "roadmap.md"
+        ]
+
+    # A different immutable issue UUID cannot reuse this reader binding.
+    with pytest.raises(core.WorkspaceError, match="ISSUE_MISMATCH"):
+        startup.start(
+            reader_event,
+            {**issue, "uuid": "d7a4c098-4b6d-402e-bfd1-326af3959e84"},
+            host=reader_host,
+        )
+    # A caller-supplied packet cannot widen the shared join operation.
+    rogue = {
+        **base,
+        "request_id": "rogue-reader-join",
+        "operation": "join",
+        "issue_uuid": issue["uuid"],
+        "packet": [{"locator": "context/private.md"}],
+    }
+    assert core.execute(rogue)["code"] == "INVALID_REQUEST"
+
+
 def test_join_rejects_wrong_uuid_and_caller_scope(tmp_path: Path) -> None:
-    """The reader join cannot choose arbitrary notes or bypass issue identity."""
+    """The reader join cannot choose arbitrary notes or bypass issue identity.
+
+    Args:
+        tmp_path: Disposable directory for repository or file fixtures.
+    """
     root = repository(tmp_path)
     codex.handle(event(root, "UserPromptSubmit", prompt="Task: TEST-1"))
     lookup(root, "master", ticket_response())
@@ -260,7 +381,7 @@ def test_join_rejects_wrong_uuid_and_caller_scope(tmp_path: Path) -> None:
                 "text": json.dumps(
                     {
                         "id": "TEST-1",
-                        "uuid": "wrong-uuid",
+                        "uuid": "d7a4c098-4b6d-402e-bfd1-326af3959e84",
                     }
                 ),
             }
@@ -277,7 +398,7 @@ def test_join_rejects_wrong_uuid_and_caller_scope(tmp_path: Path) -> None:
         "session_id": "other",
         "repo_id": base["repo_id"],
         "issue_id": "TEST-1",
-        "issue_uuid": "ticket-uuid",
+        "issue_uuid": "c0a8f3be-1c13-4f2b-9a1e-b2e61f11f977",
         "packet": [{"locator": "context/private.md"}],
     }
     assert core.execute(rogue)["code"] == "INVALID_REQUEST"
@@ -291,7 +412,11 @@ def test_join_rejects_wrong_uuid_and_caller_scope(tmp_path: Path) -> None:
 
 
 def test_resume_refreshes_only_committed_coordinator_roadmap(tmp_path: Path) -> None:
-    """A normal roadmap update can resume; an external edit remains a conflict."""
+    """A normal roadmap update can resume; an external edit remains a conflict.
+
+    Args:
+        tmp_path: Disposable directory for repository or file fixtures.
+    """
     root = repository(tmp_path)
     codex.handle(event(root, "UserPromptSubmit", prompt="Task: TEST-1"))
     lookup(root, "master", ticket_response())
@@ -329,7 +454,11 @@ def test_resume_refreshes_only_committed_coordinator_roadmap(tmp_path: Path) -> 
 
 
 def test_ordinary_issue_read_after_start_is_not_a_new_bootstrap(tmp_path: Path) -> None:
-    """A later issue read follows ordinary tracked-tool admission and completion."""
+    """A later issue read follows ordinary tracked-tool admission and completion.
+
+    Args:
+        tmp_path: Disposable directory for repository or file fixtures.
+    """
     root = repository(tmp_path)
     codex.handle(event(root, "UserPromptSubmit", prompt="Task: TEST-1"))
     lookup(root, "master", ticket_response())
@@ -348,14 +477,31 @@ def test_completion_retry_after_partial_setup_preserves_correlation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A failed setup completion can retry with the same observed tool ID."""
+    """A failed setup completion can retry with the same observed tool ID.
+
+    Args:
+        tmp_path: Disposable directory for repository or file fixtures.
+        monkeypatch: Pytest fixture that isolates external state for this case.
+    """
     root = repository(tmp_path)
     codex.handle(event(root, "UserPromptSubmit", prompt="Task: TEST-1"))
     original = startup._call
     calls = 0
 
     def fail_once(request: dict[str, object]) -> dict[str, object]:
+        """Fail one scope request, then forward later lifecycle operations.
+
+        Args:
+            request: Startup lifecycle request under test.
+
+        Returns:
+            The real lifecycle result after the injected failure.
+
+        Raises:
+            core.WorkspaceError: For the first scope attempt.
+        """
         nonlocal calls
+        # Inject one local setup failure after the verified provider read.
         if request["operation"] == "scope" and calls == 0:
             calls += 1
             raise core.WorkspaceError("BUSY")
@@ -378,14 +524,31 @@ def test_new_lookup_after_partial_setup_failure_preserves_ticket_gate(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A completed ticket read can be retried with a new tool ID after setup fails."""
+    """A completed ticket read can be retried with a new tool ID after setup fails.
+
+    Args:
+        tmp_path: Disposable directory for repository or file fixtures.
+        monkeypatch: Pytest fixture that isolates external state for this case.
+    """
     root = repository(tmp_path)
     codex.handle(event(root, "UserPromptSubmit", prompt="Task: TEST-1"))
     original = startup._call
     failed_once = False
 
     def fail_once(request: dict[str, object]) -> dict[str, object]:
+        """Fail one scope request, then permit a fresh ticket-read retry.
+
+        Args:
+            request: Startup lifecycle request under test.
+
+        Returns:
+            The real lifecycle result after the injected failure.
+
+        Raises:
+            core.WorkspaceError: For the first scope attempt.
+        """
         nonlocal failed_once
+        # Inject one local setup failure after the verified provider read.
         if request["operation"] == "scope" and not failed_once:
             failed_once = True
             raise core.WorkspaceError("BUSY")
@@ -408,6 +571,7 @@ def test_new_lookup_after_partial_setup_failure_preserves_ticket_gate(
     )
     wrong_issue = {**first, "tool_input": {"id": "OTHER-2"}, "tool_use_id": "other-issue"}
     assert "BINDING_CONFLICT" in str(codex.handle(event(root, "PreToolUse", **wrong_issue)))
+    # An unassigned session must not inherit another participant’s binding.
     with pytest.raises(core.WorkspaceError, match="BINDING_MISSING"):
         codex.handle(event(root, "PreToolUse", session_id="other", **first))
 
@@ -422,7 +586,11 @@ def test_new_lookup_after_partial_setup_failure_preserves_ticket_gate(
 
 
 def test_linked_checkout_supplies_governing_sources(tmp_path: Path) -> None:
-    """Task bytes come from main; governing files come from the selected checkout."""
+    """Task bytes come from main; governing files come from the selected checkout.
+
+    Args:
+        tmp_path: Disposable directory for repository or file fixtures.
+    """
     main = repository(tmp_path)
     other = tmp_path / "other"
     subprocess.run(
@@ -441,7 +609,11 @@ def test_linked_checkout_supplies_governing_sources(tmp_path: Path) -> None:
 
 
 def test_optional_missing_packet_source_does_not_block_resume(tmp_path: Path) -> None:
-    """Read the available references and leave an optional absent source absent."""
+    """Read the available references and leave an optional absent source absent.
+
+    Args:
+        tmp_path: Disposable directory for repository or file fixtures.
+    """
     root = repository(tmp_path)
     codex.handle(event(root, "UserPromptSubmit", prompt="Task: TEST-1"))
     lookup(root, "master", ticket_response())
@@ -478,7 +650,11 @@ def test_optional_missing_packet_source_does_not_block_resume(tmp_path: Path) ->
 
 
 def test_lookup_requires_exact_ticket_and_tool_correlation(tmp_path: Path) -> None:
-    """A different identifier or completion tool ID cannot establish readiness."""
+    """A different identifier or completion tool ID cannot establish readiness.
+
+    Args:
+        tmp_path: Disposable directory for repository or file fixtures.
+    """
     root = repository(tmp_path)
     codex.handle(event(root, "UserPromptSubmit", prompt="Task: TEST-1"))
     wrong = codex.handle(
@@ -510,7 +686,11 @@ def test_lookup_requires_exact_ticket_and_tool_correlation(tmp_path: Path) -> No
 
 
 def test_reader_resume_refreshes_only_core_roadmap_packet(tmp_path: Path) -> None:
-    """A joined reader stays ready after the coordinator's committed update."""
+    """A joined reader stays ready after the coordinator's committed update.
+
+    Args:
+        tmp_path: Disposable directory for repository or file fixtures.
+    """
     root = repository(tmp_path)
     codex.handle(event(root, "UserPromptSubmit", prompt="Task: TEST-1"))
     lookup(root, "master", ticket_response())
@@ -545,7 +725,11 @@ def test_reader_resume_refreshes_only_core_roadmap_packet(tmp_path: Path) -> Non
 
 
 def test_malformed_completed_result_allows_new_lookup_id(tmp_path: Path) -> None:
-    """A completed malformed provider result does not strand lookup correlation."""
+    """A completed malformed provider result does not strand lookup correlation.
+
+    Args:
+        tmp_path: Disposable directory for repository or file fixtures.
+    """
     root = repository(tmp_path)
     codex.handle(event(root, "UserPromptSubmit", prompt="Task: TEST-1"))
     first = {
@@ -563,11 +747,16 @@ def test_malformed_completed_result_allows_new_lookup_id(tmp_path: Path) -> None
 
 
 def test_new_task_line_fences_previous_ready_session_until_ticket_read(tmp_path: Path) -> None:
-    """A ready binding cannot admit ordinary tools for a newly requested Task."""
+    """A ready binding cannot admit ordinary tools for a newly requested Task.
+
+    Args:
+        tmp_path: Disposable directory for repository or file fixtures.
+    """
     root = repository(tmp_path)
     codex.handle(event(root, "UserPromptSubmit", prompt="Task: TEST-1"))
     lookup(root, "master", ticket_response())
     codex.handle(event(root, "UserPromptSubmit", prompt="Task: TEST-1"))
+    # Neither interactive request tool can bypass ticket-first startup.
     for tool_name, tool_input in (
         ("Read", {"file_path": str(root / "AGENTS.md")}),
         ("exec_command", {"cmd": "pwd", "login": False, "shell": "/bin/sh"}),

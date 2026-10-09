@@ -53,6 +53,7 @@ def async_handle(value: object) -> str | None:
     """
     # Preserve absence, but do not equate malformed supplied metadata with absence.
     if value is None:
+        # No asynchronous identity was supplied to correlate.
         return None
     # Booleans are not integer process identities despite Python's subtype relation.
     core.require(type(value) in {str, int}, "ASYNC_HANDLE_CONFLICT")
@@ -88,11 +89,13 @@ def bootstrap(event: core.JSONObject, ready: bool = False) -> bool:
     """
     # Restrict bootstrap handling to observable shell tool calls.
     if event.get("tool_name") not in {"Bash", "exec_command"}:
+        # A non-shell call cannot carry the canonical bootstrap command.
         return False
-    # Select and decode the documented command input.
+    # Select the one command field defined for this shell transport.
     args = event.get("tool_input", {})
     command_field = "command" if event["tool_name"] == "Bash" else "cmd"
     other_field = "cmd" if command_field == "command" else "command"
+    # Reject ambiguous fields, interactive shells, and unsupported tool options.
     if (
         not isinstance(args, dict)
         or command_field not in args
@@ -115,8 +118,9 @@ def bootstrap(event: core.JSONObject, ready: bool = False) -> bool:
             "prefix_rule",
         }
     ):
+        # Invalid shell metadata cannot enter the bootstrap exception.
         return False
-    # Select and decode the documented command input.
+    # Verify the exact command spelling against the scoped lifecycle route.
     command = args[command_field]
     return common.canonical_bootstrap(event, command, "codex", ready, PYTHON, LIFECYCLE)
 
@@ -135,35 +139,45 @@ def provider_gate(event: core.JSONObject) -> bool:
         OSError: If archive state cannot be read.
     """
     tool = event.get("tool_name", "")
+    # Ignore tools outside the two archive provider operations.
     if tool not in {
         "mcp__codex_apps__linear_save_document",
         "mcp__codex_apps__linear_get_document",
     }:
+        # Ordinary provider tools stay subject to the normal readiness gate.
         return False
     # Build the request from explicit caller or observed session identities.
     request = request_for(event, "ready")
+    # Lock the issue and verify coordinator authority before provider access.
     with (
         core.Store(request) as store,
         store.issues.child(request["issue_id"]) as control,
         control.lock(),
     ):
+        # Load the committed issue under lock before checking provider arguments.
         issue = core.Issue(store, control, request["issue_id"])
         issue.recover()
         state = issue.committed_state()
         core.authorize(state, request, coordinator=True, maintenance=True)
+        # A present payload must still pass integrity checks before provider I/O.
         if state["storage"] != "cleaned":
+            # Validate local files while they remain available.
             issue.files()
-        # Select and decode the documented command input.
+        # Inspect only the host-provided provider arguments.
         args = event.get("tool_input", {})
         # Permit reads only of document IDs already recorded for this issue archive.
         if tool.endswith("linear_get_document"):
+            # Assemble IDs from pending saves and the durable archive receipt.
             identifiers = {x["id"] for x in state.get("provider_saves", {}).values() if x.get("id")}
+            # Include confirmed root and part documents when an archive exists.
             if state.get("archive"):
+                # Read-back may revisit each retained archive document.
                 identifiers.add(state["archive"]["root"]["id"])
                 identifiers.update(x["id"] for x in state["archive"]["parts"])
             return set(args) == {"id"} and args["id"] in identifiers
         # A cleaned issue may read its archive but cannot start another save.
         if state["storage"] == "cleaned":
+            # Cleanup closes the provider-write lane permanently.
             return False
         export = control.json("export-" + state["export"]["snapshot"] + ".json")
         documents = export["parts"] + (
@@ -171,6 +185,7 @@ def provider_gate(event: core.JSONObject) -> bool:
         )
         # Reject provider writes that differ from the immutable export request.
         if args not in documents:
+            # Arbitrary document content cannot be saved through this gate.
             return False
         # Identify the exact content whose save uncertainty must be recorded.
         digest = core.sha(args["content"].encode())
@@ -211,41 +226,78 @@ def prompt(event: core.JSONObject) -> core.JSONObject:
 
 
 def startup_lookup_state(event: core.JSONObject, suffix: str) -> bool:
-    """Check whether this session has a pending explicit Task lookup marker."""
+    """Check whether this session has a pending explicit Task lookup marker.
+
+    Args:
+        event: Observed Codex session and checkout identity.
+        suffix: Exact marker suffix to inspect in this session's bindings.
+
+    Returns:
+        Whether this session has the requested marker.
+    """
+    # Resolve the exact repository and participant before inspecting marker files.
     root, _, _ = core.repository(event["cwd"])
     key = core.participant_key({"host": "codex", "session_id": event["session_id"]})
+    # Inspect marker files through validated no-follow directory handles.
     with core.Directory.absolute(root) as directory:
+        # An absent task workspace cannot contain a pending lookup.
         if not directory.exists(".task"):
+            # Let ordinary startup recovery handle the missing workspace.
             return False
+        # Read only the bindings folder under the selected repository.
         with directory.child(".task") as task:
+            # An absent bindings folder has no per-session lookup marker.
             if not task.exists(".bindings"):
+                # Do not invent a binding on a read-only marker check.
                 return False
+            # Query the exact participant-specific marker name.
             with task.child(".bindings") as bindings:
+                # Return only the requested marker's existence.
                 return bindings.exists(key + suffix)
 
 
 def ticket_lookup(event: core.JSONObject, complete: bool = False) -> core.JSONObject | None:
-    """Admit and settle the direct issue read for the exact recorded Task identity."""
+    """Admit and settle the direct issue read for the exact recorded Task identity.
+
+    Args:
+        event: Observed Codex Linear tool call and optional provider result.
+        complete: Whether this is the correlated PostToolUse callback.
+
+    Returns:
+        None for another tool, empty admission, or verified readiness context.
+
+    Raises:
+        core.WorkspaceError: If the task, tool, provider, or startup contract fails.
+    """
+    # Only the exact direct Linear issue tool may cross the ticket-first gate.
     if event.get("tool_name") != "mcp__codex_apps__linear_get_issue":
+        # Other tools do not participate in the assigned-ticket handshake.
         return None
     root, _, _ = core.repository(event["cwd"])
     key = core.participant_key({"host": "codex", "session_id": event["session_id"]})
+    # Lock this participant's binding while validating the assigned issue and call.
     with (
         core.Directory.absolute(root) as directory,
         directory.child(".task") as task,
         task.child(".bindings") as bindings,
         bindings.lock("assignment.lock"),
     ):
+        # Correlate the requested issue with the durable assignment and lookup marker.
         assignment = bindings.json(key + ".assignment.json")
         identifier = assignment["issue_id"]
         core.require(bindings.json(key + ".lookup-required.json") == assignment, "BINDING_CONFLICT")
+        # Reject a broad or redirected issue query before recording tool identity.
         if event.get("tool_input") != {"id": identifier}:
+            # The exact issue ID is the only permitted provider argument.
             raise core.WorkspaceError("BINDING_CONFLICT")
         tool_id = core.token(event["tool_use_id"])
         name = key + ".lookup.json"
         correlation = {"id": identifier, "tool_id": tool_id}
+        # Pre-tool callbacks reserve the provider call; post-tool callbacks settle it.
         if not complete:
+            # Repeated pre-hooks must match the same issue and tool correlation.
             if bindings.exists(name):
+                # Validate a retry against the previously admitted lookup.
                 previous = bindings.json(name)
                 core.require(
                     previous == correlation
@@ -259,9 +311,12 @@ def ticket_lookup(event: core.JSONObject, complete: bool = False) -> core.JSONOb
                     ),
                     "BINDING_CONFLICT",
                 )
+                # A completed attempt permits a fresh exact lookup tool ID.
                 if previous.get("completed") is True and previous.get("tool_id") != tool_id:
+                    # Replace stale correlation before this provider call runs.
                     bindings.put(name, correlation)
             else:
+                # Record the first permitted direct issue read.
                 bindings.put(name, correlation)
             return {}
         core.require(bindings.exists(name), "BINDING_MISSING")
@@ -269,43 +324,58 @@ def ticket_lookup(event: core.JSONObject, complete: bool = False) -> core.JSONOb
             bindings.json(name) in (correlation, {**correlation, "completed": True}),
             "BINDING_CONFLICT",
         )
+    # Decode the provider payload and verify it describes the assigned issue.
     try:
+        # A missing or malformed result cannot establish ticket readiness.
         response = event.get("tool_response")
+        # Hosts may serialize the provider's structured response as JSON text.
         if isinstance(response, str):
+            # Parse serialized content before checking the issue identity.
             try:
+                # Preserve the provider's structured fields for ticket verification.
                 response = json.loads(response)
             except ValueError as error:
+                # Bad JSON is a provider response failure, not an issue mismatch.
                 raise core.WorkspaceError("PROVIDER_RESPONSE_INVALID") from error
         verified = startup.ticket(response, identifier)
     except core.WorkspaceError:
+        # Drop failed correlation so the participant can retry the exact issue read.
         with (
             core.Directory.absolute(root) as directory,
             directory.child(".task") as task,
             task.child(".bindings") as bindings,
             bindings.lock("assignment.lock"),
         ):
+            # Keep the assignment while clearing only the failed lookup attempt.
             bindings.unlink(name)
         raise
+    # Build the task workspace only from the verified issue payload.
     try:
+        # Startup may fail after the provider call already completed.
         ready = startup.start(event, verified)
     except Exception:
         # The provider call has completed. Preserve same-ID completion retry while
         # allowing a fresh, exact lookup if partial workspace setup failed.
+        # Mark a settled provider call for safe same-ID completion retry.
         with (
             core.Directory.absolute(root) as directory,
             directory.child(".task") as task,
             task.child(".bindings") as bindings,
             bindings.lock("assignment.lock"),
         ):
+            # Preserve a newer correlation if another callback replaced this one.
             if bindings.json(name) == correlation:
+                # Distinguish completed provider work from an uncalled reservation.
                 bindings.put(name, {**correlation, "completed": True})
         raise
+    # Remove lookup gates only after workspace startup succeeds.
     with (
         core.Directory.absolute(root) as directory,
         directory.child(".task") as task,
         task.child(".bindings") as bindings,
         bindings.lock("assignment.lock"),
     ):
+        # Clear both the in-flight call and required-read marker atomically.
         bindings.unlink(name)
         bindings.unlink(key + ".lookup-required.json")
     message = (
@@ -313,7 +383,9 @@ def ticket_lookup(event: core.JSONObject, complete: bool = False) -> core.JSONOb
         + identifier
         + " read; assigned source bytes verified and packet acknowledged."
     )
+    # Readers receive an explicit reminder that issue ownership did not move.
     if ready["participant_id"] != ready["coordinator"]:
+        # State the coordinator boundary in the host-visible readiness message.
         message += (
             " Reader scope only. Coordinator "
             + ready["coordinator"]
@@ -339,29 +411,43 @@ def handle(event: core.JSONObject) -> core.JSONObject:
     name = event.get("hook_event_name")
     # Record explicit task identity before attempting assigned setup.
     if name == "UserPromptSubmit":
+        # Store the user's task binding before admitting later tools.
         return prompt(event)
     # Leave permission decisions to the host.
     if name == "PermissionRequest":
+        # This lifecycle adapter never decides host permissions.
         return {}  # Never grant host permissions.
     # Require readiness or an exact recovery route before admitting tool work.
     if name == "PreToolUse":
+        # A pending ticket read takes precedence over ordinary tool admission.
+        # Restrict this recovery window to the assigned direct issue call.
         if startup_lookup_state(event, ".lookup-required.json"):
+            # Any other tool must wait for the assigned issue response.
+            # Reject unrelated calls without consuming the ticket marker.
             if event.get("tool_name") != "mcp__codex_apps__linear_get_issue":
+                # Return a bounded admission denial to the host.
                 return denial("TICKET_READ_REQUIRED")
+            # Reserve the exact issue call and report validation failures.
             try:
+                # The provider result will be checked in PostToolUse.
                 ticket_lookup(event)
                 return {}
             except (core.WorkspaceError, OSError, KeyError, TypeError) as error:
+                # Fail closed when assignment or lookup state is invalid.
                 code = error.code if isinstance(error, core.WorkspaceError) else "RECOVERY_REQUIRED"
                 return denial(code)
         # Allow only the exact scoped bootstrap route before ordinary readiness checks.
         if bootstrap(event):
+            # The admitted bootstrap call establishes readiness itself.
             return {}
+        # Provider gates validate pending external reads before ordinary work.
         try:
             # Allow the exact pending archive provider call only after gate validation.
             if provider_gate(event):
+                # Admit only the correlated provider call.
                 return {}
         except core.WorkspaceError:
+            # Ordinary readiness evaluation supplies the final denial.
             pass
         tool = event.get("tool_name", "")
         # Deny covered child creation until host child identity can be verified.
@@ -375,27 +461,35 @@ def handle(event: core.JSONObject) -> core.JSONObject:
                 "followup_task",
             )
         ):
+            # Native child identity cannot be tied to a lifecycle participant.
             return denial("HOST_UNSUPPORTED_CHILD_IDENTITY")
         # Keep identity and permission clarification available to unready sessions.
         if tool in {"request_user_input", "request_user_input_async"}:
+            # Clarification remains available while readiness is unresolved.
             return {}
         # Build the request from explicit caller or observed session identities.
         request = request_for(event, "ready")
         result = core.execute(request)
         # Preserve the precise core failure in the host response.
         if not result["ok"]:
+            # Reflect the core readiness failure without starting tool work.
             return denial(result["code"])
         # Avoid counting the lifecycle transaction itself as pending external work.
         if bootstrap(event, ready=True):
+            # A ready lifecycle transaction is not tracked as external work.
             return {}
         # Bind an observed polling transport to its unique original operation.
         polling = tool == "write_stdin"
         poll_handle = None
+        # Polling calls must carry the previously issued shell session handle.
         if polling:
+            # Validate the handle before recording a new poll operation.
             try:
+                # Uncorrelated poll handles cannot settle another tool's work.
                 poll_handle = async_handle(event.get("tool_input", {}).get("session_id"))
                 core.require(poll_handle is not None, "ASYNC_HANDLE_CONFLICT")
             except core.WorkspaceError as error:
+                # Return the specific handle conflict as an admission denial.
                 return denial(error.code)
         # Reserve and record the transport separately when the host emits its pre-hook.
         result = core.execute(
@@ -410,14 +504,19 @@ def handle(event: core.JSONObject) -> core.JSONObject:
         return {} if result["ok"] else denial(result["code"])
     # Settle work only from typed completion facts and validated handle correlation.
     if name == "PostToolUse":
+        # Settle a reserved Linear ticket read before generic tool completion.
+        # The lookup marker identifies the pre-hook admitted issue call.
         if event.get("tool_name") == "mcp__codex_apps__linear_get_issue" and startup_lookup_state(
             event, ".lookup.json"
         ):
+            # Verify the provider result and start the assigned workspace.
             try:
+                # Successful startup returns a host-visible readiness message.
                 lookup_result = ticket_lookup(event, complete=True)
                 assert lookup_result is not None
                 return lookup_result
             except (core.WorkspaceError, OSError, KeyError, TypeError) as error:
+                # Explain the bounded ticket failure without granting readiness.
                 code = error.code if isinstance(error, core.WorkspaceError) else "RECOVERY_REQUIRED"
                 return {
                     "systemMessage": (
@@ -442,19 +541,27 @@ def handle(event: core.JSONObject) -> core.JSONObject:
         response = event.get("tool_response", {})
         # Decode serialized tool responses; malformed shapes supply no completion evidence.
         if isinstance(response, str):
+            # A host-serialized result must be decoded before reading status fields.
             try:
+                # Preserve typed completion facts from valid JSON responses.
                 response = json.loads(response)
             except ValueError:
+                # Invalid JSON carries no trustworthy completion facts.
                 response = {}
+        # Ignore non-object provider payloads for completion decisions.
         if not isinstance(response, dict):
+            # Treat unexpected response shapes as absent metadata.
             response = {}
         # Unknown response shapes keep the operation pending; never infer completion.
         tool_name = event.get("tool_name", "")
         polling = tool_name == "write_stdin"
         # Validate supplied handle types before any completion or correlation decision.
         try:
+            # Read the response handle, then compare it with a polling input handle.
             handle = async_handle(response.get("session_id"))
+            # A poll can settle only the asynchronous session it targeted.
             if polling:
+                # Reject missing or conflicting polling handles.
                 input_handle = async_handle(event.get("tool_input", {}).get("session_id"))
                 core.require(
                     input_handle is not None and (handle is None or handle == input_handle),
@@ -462,18 +569,22 @@ def handle(event: core.JSONObject) -> core.JSONObject:
                 )
                 handle = input_handle
         except core.WorkspaceError as error:
+            # Surface handle conflicts without claiming operation completion.
             return {"systemMessage": "TASK_WORKSPACE_NOT_READY: " + error.code}
         # Normalize response metadata without inferring completion from missing values.
         exit_code = response.get("exit_code")
         completed = type(exit_code) is int
         # Accept typed isError completion only outside asynchronous shell transport.
         if tool_name not in {"Bash", "exec_command", "write_stdin"}:
+            # Synchronous tools can finish through an explicit error flag.
             completed = completed or type(response.get("isError")) is bool
         # Treat an explicit handle-free shell error as a finished failed call.
         elif response.get("isError") is True and handle is None:
+            # A shell failure with no session handle is terminal.
             completed = True
         # Retain work when the response proves neither completion nor a valid handle.
         if not completed and handle is None:
+            # Keep the operation pending until a final status or handle arrives.
             return {}
         # Key idempotency by completion facts so a later final response is not an old retry.
         observation = [event["tool_use_id"], completed, handle, polling]
@@ -489,10 +600,12 @@ def handle(event: core.JSONObject) -> core.JSONObject:
         )
         # Preserve the precise core failure in the host response.
         if not result["ok"]:
+            # The core owns the completion decision and its denial code.
             return {"systemMessage": "TASK_WORKSPACE_NOT_READY: " + result["code"]}
         return {}
     # Report the unsupported child-identity boundary without granting readiness.
     if name == "SubagentStart":
+        # The host has not provided a verifiable child-to-tool mapping.
         return {
             "systemMessage": (
                 "HOST_UNSUPPORTED: Native child-to-tool identity is not verified. "
@@ -501,15 +614,21 @@ def handle(event: core.JSONObject) -> core.JSONObject:
         }
     # Allow lifecycle recovery while preserving tool-level readiness enforcement.
     if name in {"SessionStart", "PreCompact", "PostCompact"}:
+        # Recheck persisted task binding after a session transition.
+        # Core validation may reject a stale or absent binding.
         try:
+            # A recovered session receives only its existing task scope.
             result = core.execute(request_for(event, "ready"))
         except core.WorkspaceError as error:
+            # Render validation failure as a bounded startup diagnostic.
             result = {"ok": False, "code": error.code}
         # Leave successful compaction hooks unobtrusive after checking readiness.
         if result["ok"] and name in {"PreCompact", "PostCompact"}:
+            # Successful compaction needs no repeated task context.
             return {}
         # Expose successful binding context without copying task-note content.
         if result["ok"]:
+            # Tell the host how to retrieve the permitted packet.
             return {
                 "hookSpecificOutput": {
                     "hookEventName": name,
@@ -532,6 +651,8 @@ def handle(event: core.JSONObject) -> core.JSONObject:
         }
     # Record only bounded optional facts for advisory lifecycle endings.
     if name in {"Stop", "Interrupt", "SessionEnd", "SubagentStop"}:
+        # Exit hooks record an optional observation without settling work.
+        # Missing workspace state must not break an advisory host event.
         try:
             # Build the request from explicit caller or observed session identities.
             request = request_for(event, "event")
@@ -543,6 +664,7 @@ def handle(event: core.JSONObject) -> core.JSONObject:
                 }
             )
         except (core.WorkspaceError, OSError):
+            # A failed observation has no authority over readiness or completion.
             pass  # Optional observations cannot establish completion or retirement.
     return {}
 
@@ -557,9 +679,13 @@ def failure(name: str, code: str) -> core.JSONObject:
     Returns:
         A denial for admission events, or an advisory diagnostic.
     """
+    # Admission failures must block the tool rather than merely notify the host.
     if name == "PreToolUse":
+        # Reuse the standard pre-tool denial structure.
         return denial(code)
+    # Prompt failures must block task work before tool calls begin.
     if name == "UserPromptSubmit":
+        # Attach the bounded diagnostic to the blocking prompt response.
         return {"decision": "block", "reason": "TASK_WORKSPACE_NOT_READY: " + code}
     return {"systemMessage": "TASK_WORKSPACE_NOT_READY: " + code}
 
@@ -573,5 +699,7 @@ def main() -> int:
     return runner.run(handle, failure, error_status=0)
 
 
+# Execute the hook protocol only for direct script invocation.
 if __name__ == "__main__":
+    # Preserve Codex's exit-zero hook response convention.
     sys.exit(main())

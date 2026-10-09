@@ -91,6 +91,7 @@ class ReviewRegressions(Fixture):
             controls = {"login": False, "shell": "powershell.exe" if os.name == "nt" else "/bin/sh"}
             event["tool_input"] = {**controls, field: command}
             self.assertTrue(hook.bootstrap(event))
+            # Mixed or foreign command fields cannot pass the selected host contract.
             for bad in ({field: command, foreign_field: command}, {foreign_field: command}):
                 event["tool_input"] = {**controls, **bad}
                 self.assertFalse(hook.bootstrap(event))
@@ -216,8 +217,8 @@ class ReviewRegressions(Fixture):
         hook.automatic_attach(event, "TEST-1")
         self.assertEqual(self.state()["revision"], before)
 
-    def test_narrow_recovery_commands_pass_actual_adapter_gate(self) -> None:
-        """Admit bounded recovery commands while rejecting unknown request fields.
+    def test_narrow_recovery_commands_wait_for_first_ticket_read(self) -> None:
+        """Deny even bounded recovery commands while the first ticket read is pending.
 
         Raises:
             AssertionError: An asserted lifecycle or boundary invariant does not hold.
@@ -256,7 +257,7 @@ class ReviewRegressions(Fixture):
                     "shell": "powershell.exe" if os.name == "nt" else "/bin/sh",
                 },
             }
-            self.assertEqual(hook.handle(event), {})
+            self.assertIn("TICKET_READ_REQUIRED", str(hook.handle(event)))
             # Add an unsupported field and require the bootstrap exception to close.
             request["unknown_field"] = "no"
             event["tool_input"]["command"] = common.bootstrap_command(request, "codex")

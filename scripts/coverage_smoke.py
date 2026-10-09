@@ -32,8 +32,18 @@ def test_child_only():
 
 
 def probe(*, instrumented: bool = True, isolated_child: bool = False) -> dict[str, object]:
-    """Run a disposable child-only pytest case and inspect its real coverage arcs."""
+    """Run a disposable child-only pytest case and inspect its real coverage arcs.
+
+    Args:
+        instrumented: Whether the child process uses the coverage startup hook.
+        isolated_child: Whether to launch the child in Python isolated mode.
+
+    Returns:
+        Observed child lines, arcs, status, and configuration identity.
+    """
+    # Time the child-only probe for native evidence.
     started = time.monotonic()
+    # Build and run the child case in a disposable directory.
     with tempfile.TemporaryDirectory(prefix="agent-company-coverage-smoke-") as name:
         directory = Path(name)
         child = directory / "child_only.py"
@@ -68,6 +78,7 @@ def probe(*, instrumented: bool = True, isolated_child: bool = False) -> dict[st
         environment.pop("COVERAGE_PROCESS_CONFIG", None)
         environment.pop("AGENT_COMPANY_PYTEST_EVIDENCE", None)
         environment["COVERAGE_FILE"] = str(data_file)
+        # Disable only the startup hook for the negative control.
         if not instrumented:
             # A disposable alternate configuration is the negative control.
             config = directory / "disabled.toml"
@@ -108,10 +119,16 @@ def probe(*, instrumented: bool = True, isolated_child: bool = False) -> dict[st
 
 
 def main() -> int:
-    """Write a machine-readable instrumentation receipt for a native suite."""
+    """Write a machine-readable instrumentation receipt for a native suite.
+
+    Returns:
+        Process exit status for the selected command.
+    """
+    # Select the receipt destination for the native check.
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
+    # Write the observed child instrumentation result and return its status.
     receipt = probe()
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")

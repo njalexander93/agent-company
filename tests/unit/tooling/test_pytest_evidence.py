@@ -15,7 +15,13 @@ pytestmark = pytest.mark.unit
 def test_receipt_keeps_collection_errors_and_subtest_outcomes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A partial run retains exact nodes, markers, subtests, and failure causes."""
+    """A partial run retains exact nodes, markers, subtests, and failure causes.
+
+    Args:
+        tmp_path: Disposable directory supplied by pytest for this case.
+        monkeypatch: Pytest fixture that restores patched dependencies after this case.
+    """
+    # Feed the pytest hooks a collection error and indexed subtests.
     destination = tmp_path / "receipt.json"
     monkeypatch.setenv("AGENT_COMPANY_PYTEST_EVIDENCE", str(destination))
     # Exercise a separate module instance. Reloading the active pytest plugin
@@ -24,16 +30,24 @@ def test_receipt_keeps_collection_errors_and_subtest_outcomes(
     active_reports = {node: list(phases) for node, phases in evidence._reports.items()}
     active_errors = list(evidence._collection_errors)
     spec = importlib.util.spec_from_file_location("isolated_pytest_evidence", evidence.__file__)
+    # Load a separate plugin instance so this pytest run keeps its own hook state.
     assert spec is not None and spec.loader is not None
     isolated = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(isolated)
     isolated.pytest_sessionstart(SimpleNamespace())
 
     class Item:
+        """Provide the exact collected pytest node and markers."""
+
         nodeid = "tests/unit/tooling/test_sample.py::test_case"
         path = Path("tests/unit/tooling/test_sample.py")
 
         def iter_markers(self) -> list[SimpleNamespace]:
+            """Provide the suite and skip markers collected by the hook.
+
+            Returns:
+                The fixture records consumed by the test.
+            """
             return [
                 SimpleNamespace(name="unit", kwargs={}),
                 SimpleNamespace(name="skipif", kwargs={"reason": "native only"}),

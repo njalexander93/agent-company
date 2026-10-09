@@ -17,7 +17,12 @@ pytestmark = pytest.mark.unit
 
 
 def test_source_functions_finds_methods_and_nested_calls(tmp_path: Path) -> None:
-    """Keep nested function ownership distinct from its caller."""
+    """Keep nested function ownership distinct from its caller.
+
+    Args:
+        tmp_path: Disposable directory supplied by pytest for this case.
+    """
+    # Write Python source with methods and nested functions.
     source = tmp_path / "sample.py"
     source.write_text(
         "class Store:\n"
@@ -26,6 +31,7 @@ def test_source_functions_finds_methods_and_nested_calls(tmp_path: Path) -> None
         "            return 1\n"
         "        return inner()\n"
     )
+    # Require qualified spans for both enclosing and nested names.
     assert quality.source_functions(source) == [
         ("Store.run", 2, 5),
         ("Store.run.inner", 3, 4),
@@ -34,7 +40,9 @@ def test_source_functions_finds_methods_and_nested_calls(tmp_path: Path) -> None
 
 def test_native_applicability_is_exact() -> None:
     """Treat native-only modules as applicable on their real hosts."""
+    # Provide platform-specific and portable module paths.
     assert quality.applicable("src/agent_company/lifecycle/_filesystem_windows.py") == {"Windows"}
+    # Compare each path with its exact native system set.
     assert quality.applicable("src/agent_company/lifecycle/_filesystem_posix.py") == {
         "Linux",
         "Darwin",
@@ -49,7 +57,13 @@ def test_native_applicability_is_exact() -> None:
 def test_function_gap_repair_is_measured_by_unit_report(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """An omitted line and arc fail until unit execution reaches both."""
+    """An omitted line and arc fail until unit execution reaches both.
+
+    Args:
+        tmp_path: Disposable directory supplied by pytest for this case.
+        monkeypatch: Pytest fixture that restores patched dependencies after this case.
+    """
+    # Create per-function unit rows with a controlled missing path.
     monkeypatch.setattr(quality, "ROOT", tmp_path)
     source = tmp_path / "src/agent_company/logic.py"
     source.parent.mkdir(parents=True)
@@ -57,6 +71,7 @@ def test_function_gap_repair_is_measured_by_unit_report(
     (source.parent / "__init__.py").write_text("")
     (tmp_path / "scripts").mkdir()
     records: dict[tuple[str, str], Path] = {}
+    # Populate each native system's report with the controlled function fixture.
     for system in quality.SYSTEMS:
         directory = tmp_path / "evidence" / system / "unit"
         directory.mkdir(parents=True)
@@ -79,6 +94,7 @@ def test_function_gap_repair_is_measured_by_unit_report(
         )
         records[(system, "unit")] = directory / ".coverage"
     gaps = quality.function_gaps(records, {system: {} for system in quality.SYSTEMS}, [])
+    # Establish the three-system gap before repairing one native row.
     assert len(gaps) == 3
     assert {gap["systems"][0] for gap in gaps} == set(quality.SYSTEMS)
     assert all(gap["missing_lines"] == [4] and gap["missing_arcs"] == [[2, 4]] for gap in gaps)
@@ -93,6 +109,7 @@ def test_function_gap_repair_is_measured_by_unit_report(
     # A repair on one native OS cannot erase the other two gaps.
     gaps = quality.function_gaps(records, {system: {} for system in quality.SYSTEMS}, [])
     assert {gap["systems"][0] for gap in gaps} == {"Windows", "Darwin"}
+    # Remove the platform-specific gap from the two unaffected native reports.
     for system in ("Windows", "Darwin"):
         path = records[(system, "unit")].parent / "coverage.json"
         path.write_text(json.dumps(report))
@@ -102,24 +119,33 @@ def test_function_gap_repair_is_measured_by_unit_report(
 def test_function_gap_flags_unmeasured_and_unmapped_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A source function cannot disappear from the unit denominator."""
+    """A source function cannot disappear from the unit denominator.
+
+    Args:
+        tmp_path: Disposable directory supplied by pytest for this case.
+        monkeypatch: Pytest fixture that restores patched dependencies after this case.
+    """
+    # Prepare source functions missing from native coverage rows.
     monkeypatch.setattr(quality, "ROOT", tmp_path)
     source = tmp_path / "src/agent_company/logic.py"
     source.parent.mkdir(parents=True)
     source.write_text("def choose():\n    return 1\n")
     (tmp_path / "scripts").mkdir()
     records: dict[tuple[str, str], Path] = {}
+    # Generate measured rows for every applicable native system.
     for system in quality.SYSTEMS:
         directory = tmp_path / "evidence" / system / "unit"
         directory.mkdir(parents=True)
         (directory / "coverage.json").write_text(json.dumps({"files": {}}))
         records[(system, "unit")] = directory / ".coverage"
     gaps = quality.function_gaps(records, {system: {} for system in quality.SYSTEMS}, [])
+    # Confirm missing source rows are reported before testing unmapped execution.
     assert len(gaps) == 3
     assert {gap["systems"][0] for gap in gaps} == set(quality.SYSTEMS)
     assert all(gap["error"] == "missing source report" for gap in gaps)
     assert all(gap["missing_on"] == gap["systems"] for gap in gaps)
 
+    # Inspect each system's independent gap result instead of using a cross-platform union.
     for system in quality.SYSTEMS:
         path = records[(system, "unit")].parent / "coverage.json"
         path.write_text(
@@ -144,7 +170,13 @@ def test_function_gap_flags_unmeasured_and_unmapped_source(
 def test_function_exception_requires_exact_executed_case_and_missing_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A review record cannot cite a nonexistent node or a covered source line."""
+    """A review record cannot cite a nonexistent node or a covered source line.
+
+    Args:
+        tmp_path: Disposable directory supplied by pytest for this case.
+        monkeypatch: Pytest fixture that restores patched dependencies after this case.
+    """
+    # Create a reviewed exception and its cited exact test outcome.
     monkeypatch.setattr(quality, "ROOT", tmp_path)
     source = tmp_path / "src/agent_company/logic.py"
     source.parent.mkdir(parents=True)
@@ -152,7 +184,9 @@ def test_function_exception_requires_exact_executed_case_and_missing_path(
     (tmp_path / "scripts").mkdir()
     case = "tests/integration/test_logic.py::test_choose"
     records: dict[tuple[str, str], Path] = {}
+    # Build a complete split native matrix for compensating-case validation.
     for system in quality.SYSTEMS:
+        # Create both unit and integration records for this platform.
         for suite in ("unit", "integration"):
             directory = tmp_path / "evidence" / system / suite
             directory.mkdir(parents=True)
@@ -196,29 +230,38 @@ def test_function_exception_requires_exact_executed_case_and_missing_path(
     }
     tooling = {system: {} for system in quality.SYSTEMS}
     gaps = quality.function_gaps(records, tooling, [])
+    # Confirm the reviewed Linux exception leaves only the unapproved gap.
     assert len(gaps) == 1 and gaps[0]["systems"] == ["Linux"]
     assert quality.function_gaps(records, tooling, [exception]) == []
     invalid_case = {**exception, "compensating_case_ids": [case + "_missing"]}
+    # Reject an exception whose compensating case did not execute.
     with pytest.raises(ValueError, match="did not execute"):
         quality.function_gaps(records, tooling, [invalid_case])
     invalid_line = {**exception, "missing_lines": [3]}
+    # Reject an exception claiming a line that is already covered.
     with pytest.raises(ValueError, match="nonmissing path"):
         quality.function_gaps(records, tooling, [invalid_line])
     wrong_platform = {**exception, "platforms": ["Windows"]}
+    # Reject an exception claiming a branch that is already covered.
     with pytest.raises(ValueError, match="nonmissing path"):
         quality.function_gaps(records, tooling, [wrong_platform])
+    # Temporarily alter platform applicability to test exception-platform validation.
     with monkeypatch.context() as scoped:
         scoped.setattr(quality, "applicable", lambda _path: {"Linux"})
         inapplicable_platform = {**exception, "platforms": ["Linux", "Windows"]}
+        # Reject an exception naming an operating system where the source cannot execute.
         with pytest.raises(ValueError, match="inapplicable platform"):
             quality.function_gaps(records, tooling, [inapplicable_platform])
     stale_source = {**exception, "source_sha256": "0" * 64}
+    # Reject an exception assigned to a source or function that does not match.
     with pytest.raises(ValueError, match="unused or mismatched"):
         quality.function_gaps(records, tooling, [stale_source])
     invalid_symbol = {**exception, "symbol": "agent_company.logic:other"}
+    # Reject an exception bound to a stale source digest.
     with pytest.raises(ValueError, match="unused or mismatched"):
         quality.function_gaps(records, tooling, [invalid_symbol])
     empty = {**exception, "missing_lines": [], "missing_arcs": [], "exception_paths": []}
+    # Reject an exception with no missing path or justified exception obligation.
     with pytest.raises(ValueError, match="empty exception"):
         quality.function_gaps(records, tooling, [empty])
     unit = records[("Linux", "unit")].parent / "coverage.json"
@@ -227,6 +270,7 @@ def test_function_exception_requires_exact_executed_case_and_missing_path(
     row["executed_lines"].append(2)
     row["missing_lines"] = []
     unit.write_text(json.dumps(report))
+    # Reject a platform-specific exception after its claimed gap disappears.
     with pytest.raises(ValueError, match="nonmissing path"):
         quality.function_gaps(records, tooling, [exception])
 
@@ -234,7 +278,13 @@ def test_function_exception_requires_exact_executed_case_and_missing_path(
 def test_exception_ledger_rejects_stale_or_unreviewed_record(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """An exception needs attributable review and the exact current source."""
+    """An exception needs attributable review and the exact current source.
+
+    Args:
+        tmp_path: Disposable directory supplied by pytest for this case.
+        monkeypatch: Pytest fixture that restores patched dependencies after this case.
+    """
+    # Write a reviewed exception ledger with controlled provenance fields.
     monkeypatch.setattr(quality, "ROOT", tmp_path)
     source = tmp_path / "src/agent_company/logic.py"
     source.parent.mkdir(parents=True)
@@ -259,38 +309,47 @@ def test_exception_ledger_rejects_stale_or_unreviewed_record(
     }
     ledger = tmp_path / "ledger.json"
     ledger.write_text(json.dumps([record]))
+    # Establish a valid reviewed ledger before corrupting provenance fields.
     assert quality.exception_records(ledger) == [record]
     ledger.write_text(json.dumps([record, record]))
+    # Reject duplicate or blank exception identities.
     with pytest.raises(ValueError, match="duplicate or blank exception ID"):
         quality.exception_records(ledger)
     ledger.write_text(json.dumps({"exceptions": [record]}))
+    # Reject a ledger that is not a list of records.
     with pytest.raises(ValueError, match="must be a list"):
         quality.exception_records(ledger)
     ledger.write_text(json.dumps([{**record, "unreviewed_extra": True}]))
+    # Reject a record whose fields differ from the documented exception schema.
     with pytest.raises(ValueError, match="missing or unexpected fields"):
         quality.exception_records(ledger)
     record["reviewed_at"] = "2999-01-01"
     ledger.write_text(json.dumps([record]))
+    # Reject a malformed review date.
     with pytest.raises(ValueError, match="invalid exception review date"):
         quality.exception_records(ledger)
     record["reviewed_at"] = "2026-10-08"
     record["expires_at"] = "2020-01-01"
     ledger.write_text(json.dumps([record]))
+    # Reject an expiration date that precedes valid review applicability.
     with pytest.raises(ValueError, match="invalid exception review date"):
         quality.exception_records(ledger)
     record["expires_at"] = None
     record["source_path"] = 123
     ledger.write_text(json.dumps([record]))
+    # Reject a traversal or unsupported source locator in an exception.
     with pytest.raises(ValueError, match="invalid exception source path"):
         quality.exception_records(ledger)
     record["source_path"] = "src/agent_company/logic.py"
     record["compensating_case_ids"] = ["not-a-node"]
     ledger.write_text(json.dumps([record]))
+    # Reject an exception with no compensating test case.
     with pytest.raises(ValueError, match="missing compensating case"):
         quality.exception_records(ledger)
     record["compensating_case_ids"] = ["tests/integration/test_logic.py::test_choose"]
     record["reviewer"] = ""
     ledger.write_text(json.dumps([record]))
+    # Reject an incomplete justification or reviewer identity.
     with pytest.raises(ValueError, match="incomplete exception"):
         quality.exception_records(ledger)
     record["reviewer"] = "independent reviewer"
@@ -298,11 +357,13 @@ def test_exception_ledger_rejects_stale_or_unreviewed_record(
     outside.write_text("def test_outside(): pass\n")
     record["compensating_case_ids"] = ["../outside_case.py::test_outside"]
     ledger.write_text(json.dumps([record]))
+    # Reject a compensating case that cannot be found in the retained execution evidence.
     with pytest.raises(ValueError, match="missing compensating case"):
         quality.exception_records(ledger)
     record["compensating_case_ids"] = ["tests/integration/test_logic.py::test_choose"]
     source.write_text("def choose():\n    return 2\n")
     ledger.write_text(json.dumps([record]))
+    # Reject stale or unsafe exception metadata rather than carrying it forward.
     with pytest.raises(ValueError, match="stale or unsafe"):
         quality.exception_records(ledger)
 
@@ -310,7 +371,13 @@ def test_exception_ledger_rejects_stale_or_unreviewed_record(
 def test_tooling_receipt_detects_a_changed_report(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Changed tooling report bytes invalidate the native receipt."""
+    """Changed tooling report bytes invalidate the native receipt.
+
+    Args:
+        tmp_path: Disposable directory supplied by pytest for this case.
+        monkeypatch: Pytest fixture that restores patched dependencies after this case.
+    """
+    # Build all native tooling unit records from genuine coverage artifacts.
     root = tmp_path / "records"
     monkeypatch.setattr(quality, "ROOT", tmp_path)
     (tmp_path / "pyproject.toml").write_text("[tool.coverage.run]\nbranch = true\n")
@@ -322,6 +389,7 @@ def test_tooling_receipt_detects_a_changed_report(
         name: importlib.metadata.version(name) for name in ("coverage", "pytest", "pytest-cov")
     }
     identity = {"sha": "candidate", "tracked_digest": "tracked"}
+    # Create native reports for the per-platform function-gap fixture.
     for system in quality.SYSTEMS:
         directory = root / system / "tooling-unit"
         directory.mkdir(parents=True)
@@ -401,6 +469,7 @@ def test_tooling_receipt_detects_a_changed_report(
             },
         }
         (directory / "manifest.json").write_text(json.dumps(manifest))
+    # Establish that every genuine tooling record passes before changing a report.
     assert set(quality.valid_tooling(root, identity)) == set(quality.SYSTEMS)
     windows = root / "Windows/tooling-unit"
     report_path = windows / "coverage.json"
@@ -416,6 +485,7 @@ def test_tooling_receipt_detects_a_changed_report(
     manifest_path.write_text(json.dumps(manifest))
     assert set(quality.valid_tooling(root, identity)["Windows"]) == {"scripts/sample.py"}
     report_path.write_text("{}")
+    # Reject an artifact whose bytes no longer match the recorded digest.
     with pytest.raises(ValueError, match="missing or changed artifact"):
         quality.valid_tooling(root, identity)
 
@@ -433,6 +503,7 @@ def test_tooling_receipt_detects_a_changed_report(
         outcomes_path.read_bytes()
     ).hexdigest()
     manifest_path.write_text(json.dumps(manifest))
+    # Reject a tooling case lacking the required unit classification.
     with pytest.raises(ValueError, match="unmarked or misclassified test"):
         quality.valid_tooling(root, identity)
 
@@ -443,10 +514,12 @@ def test_tooling_receipt_detects_a_changed_report(
         outcomes_path.read_bytes()
     ).hexdigest()
     manifest_path.write_text(json.dumps(manifest))
+    # Reject a tooling skip without an approved native reason.
     with pytest.raises(ValueError, match="unapproved skip"):
         quality.valid_tooling(root, identity)
     (root / "extra").mkdir()
     (root / "extra/manifest.json").write_text("{}")
+    # Reject a duplicate or unexpected tooling record in the matrix.
     with pytest.raises(ValueError, match="unexpected tooling unit record"):
         quality.valid_tooling(root, identity)
     (root / "extra/manifest.json").unlink()
@@ -455,6 +528,7 @@ def test_tooling_receipt_detects_a_changed_report(
         "valid_suite",
         lambda directory, **_kwargs: ("Wrong", "tooling-unit", directory / ".coverage"),
     )
+    # Reject a tooling receipt stored beneath the wrong native directory.
     with pytest.raises(ValueError, match="misplaced tooling unit record"):
         quality.valid_tooling(root, identity)
 
@@ -462,7 +536,13 @@ def test_tooling_receipt_detects_a_changed_report(
 def test_native_inspection_collects_all_defects_before_repair(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """One failed native receipt cannot hide a later failed native receipt."""
+    """One failed native receipt cannot hide a later failed native receipt.
+
+    Args:
+        tmp_path: Disposable directory supplied by pytest for this case.
+        monkeypatch: Pytest fixture that restores patched dependencies after this case.
+    """
+    # Populate all native slots and inject independent bad receipts.
     monkeypatch.setattr(quality, "ROOT", tmp_path)
     (tmp_path / "pyproject.toml").write_text("[tool.coverage.run]\nbranch = true\n")
     native = tmp_path / "native"
@@ -471,13 +551,24 @@ def test_native_inspection_collects_all_defects_before_repair(
     defects = {"Darwin/unit", "Windows/integration"}
 
     def validate(directory: Path, **_kwargs: object) -> tuple[str, str, Path]:
+        """Return the native suite identity expected by this matrix case.
+
+        Args:
+            directory: Directory containing the candidate evidence or test output.
+            _kwargs: Keyword inputs ignored by this test fake.
+
+        Returns:
+            Native system, suite name, and database path.
+        """
         key = directory.relative_to(native).as_posix()
         visited.append(key)
+        # Inject the selected native-record diagnostic at its exact platform/suite key.
         if key in defects:
             raise ValueError("invalid receipt")
         return directory.parent.name, directory.name, directory / ".coverage"
 
     monkeypatch.setattr(quality, "valid_suite", validate)
+    # Require combined diagnostics, then repair them and revalidate.
     with pytest.raises(ValueError, match="invalid receipt") as error:
         quality.inspect_native(native, identity)
     assert len(visited) == 6
@@ -490,21 +581,37 @@ def test_native_inspection_collects_all_defects_before_repair(
     extra = native / "extra"
     extra.mkdir(parents=True)
     (extra / "manifest.json").write_text("{}")
+    # Reject a native record outside the expected matrix shape.
     with pytest.raises(ValueError, match="unexpected native record"):
         quality.inspect_native(native, identity)
     (extra / "manifest.json").unlink()
 
     def misplaced(directory: Path, **_kwargs: object) -> tuple[str, str, Path]:
+        """Move one otherwise valid suite record to the wrong platform.
+
+        Args:
+            directory: Directory containing the candidate evidence or test output.
+            _kwargs: Keyword inputs ignored by this test fake.
+
+        Returns:
+            Native system, suite name, and database path.
+        """
         system, suite, database = validate(directory)
         return ("Wrong" if system == "Linux" and suite == "unit" else system), suite, database
 
     monkeypatch.setattr(quality, "valid_suite", misplaced)
+    # Reject a suite receipt placed under the wrong platform or suite directory.
     with pytest.raises(ValueError, match="wrong platform or suite location"):
         quality.inspect_native(native, identity)
 
 
 def test_probe_receipt_requires_selected_call_assertion(tmp_path: Path) -> None:
-    """A selected failure passes; unrelated or collection failures do not."""
+    """A selected failure passes; unrelated or collection failures do not.
+
+    Args:
+        tmp_path: Disposable directory supplied by pytest for this case.
+    """
+    # Write selected pytest and JUnit receipts with controlled call outcomes.
     node = "tests/unit/test_contract.py::test_result"
     receipt = tmp_path / "outcomes.json"
     junit = tmp_path / "tests.xml"
@@ -524,6 +631,7 @@ def test_probe_receipt_requires_selected_call_assertion(tmp_path: Path) -> None:
     junit.write_text(
         '<testsuites><testsuite tests="1"><testcase name="test_result"/></testsuite></testsuites>'
     )
+    # Distinguish intended assertion failures from setup or collection failures.
     assert quality.probe_receipt(receipt, junit, [node], failure=None)[0]
     data["exit_code"] = 1
     data["reports"][node][1]["outcome"] = "failed"
@@ -581,7 +689,13 @@ def test_probe_receipt_requires_selected_call_assertion(tmp_path: Path) -> None:
 def test_probe_rejects_test_selector_outside_candidate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A curated probe cannot execute a selector through path traversal."""
+    """A curated probe cannot execute a selector through path traversal.
+
+    Args:
+        tmp_path: Disposable directory supplied by pytest for this case.
+        monkeypatch: Pytest fixture that restores patched dependencies after this case.
+    """
+    # Point a selected probe at a test outside the disposable candidate.
     root = tmp_path / "candidate"
     source = root / "src/module.py"
     source.parent.mkdir(parents=True)
@@ -606,10 +720,12 @@ def test_probe_rejects_test_selector_outside_candidate(
     output = tmp_path / "out"
     output.mkdir()
     result = quality.run_probes(spec, output)
+    # Require the probe specification boundary to reject that selector.
     assert result["status"] == "failed"
     assert all(item["error"] == "stale or malformed target" for item in result["detail"])
     assert list(output.iterdir()) == []
     spec.write_text("[]")
+    # Reject a probe specification that omits a required fault category.
     with pytest.raises(ValueError, match="exactly three named fault kinds"):
         quality.run_probes(spec, output)
 
@@ -617,6 +733,7 @@ def test_probe_rejects_test_selector_outside_candidate(
     test_source.parent.mkdir(parents=True)
     test_source.write_text("def test_contract(): pass\n")
     source.write_text("def result():\n    return 1\n    return 1\n")
+    # Write each configured controlled-fault case into the disposable probe fixture.
     for case in cases:
         case["source_sha256"] = hashlib.sha256(source.read_bytes()).hexdigest()
         case["test_nodeids"] = ["tests/unit/test_contract.py::test_contract"]
@@ -629,7 +746,13 @@ def test_probe_rejects_test_selector_outside_candidate(
 def test_probe_runner_requires_intended_assertions_after_baselines(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Run three isolated baseline/mutant receipts through the probe controller."""
+    """Run three isolated baseline/mutant receipts through the probe controller.
+
+    Args:
+        tmp_path: Disposable directory supplied by pytest for this case.
+        monkeypatch: Pytest fixture that restores patched dependencies after this case.
+    """
+    # Build a probe candidate with three selected fault kinds.
     root = tmp_path / "candidate"
     source = root / "src/module.py"
     source.parent.mkdir(parents=True)
@@ -663,18 +786,35 @@ def test_probe_runner_requires_intended_assertions_after_baselines(
     fault_mode = [False]
 
     class Completed:
+        """Represent the controlled subprocess result for this case."""
+
         def __init__(self, code: int) -> None:
+            """Carry the controlled baseline or mutant exit code and output.
+
+            Args:
+                code: Exit status returned by the fake subprocess.
+            """
             self.returncode = code
             self.stdout = "pytest output\n"
             self.stderr = ""
 
     def run(command: list[str], **kwargs: object) -> Completed:
+        """Write exact pytest receipts for the baseline and selected mutant.
+
+        Args:
+            command: Exact command arguments supplied to the child or fake runner.
+            kwargs: Extra library options accepted by the test fake.
+
+        Returns:
+            Controlled subprocess result with output and exit status.
+        """
         attempt = len(calls)
         environment = kwargs["env"]
         assert isinstance(environment, dict)
         receipt = Path(environment["AGENT_COMPANY_PYTEST_EVIDENCE"])
         mutant = receipt.name == "mutant.json"
         calls.append(receipt.name)
+        # Make selected baseline or mutation invocations time out without changing other runs.
         if fault_mode[0] and attempt in {0, 3}:
             raise subprocess.TimeoutExpired("pytest", 30)
         checkout = kwargs["cwd"]
@@ -710,6 +850,7 @@ def test_probe_runner_requires_intended_assertions_after_baselines(
     output = tmp_path / "out"
     output.mkdir()
     result = quality.run_probes(spec, output)
+    # Require each passing baseline and intended mutant assertion.
     assert result["status"] == "passed"
     assert calls == ["baseline.json", "mutant.json"] * 3
     assert all((output / f"{case['kind']}-mutant.log").is_file() for case in cases)
@@ -728,9 +869,17 @@ def test_probe_runner_requires_intended_assertions_after_baselines(
 def test_aggregate_timeout_clears_stale_result_and_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A prior passing combined report cannot rescue a timed-out current run."""
+    """A prior passing combined report cannot rescue a timed-out current run.
+
+    Args:
+        tmp_path: Disposable directory supplied by pytest for this case.
+        monkeypatch: Pytest fixture that restores patched dependencies after this case.
+    """
+    # Seed an old combined report and make the new combiner time out.
     records: dict[tuple[str, str], Path] = {}
+    # Create the two native inputs used by the historical aggregate subprocess.
     for system in ("Linux", "Windows"):
+        # Write each independent suite manifest and database beneath its platform directory.
         for suite in ("unit", "integration"):
             directory = tmp_path / "inputs" / system / suite
             directory.mkdir(parents=True)
@@ -741,20 +890,38 @@ def test_aggregate_timeout_clears_stale_result_and_fails(
     (output / "combined/combined.json").write_text('{"passed": true}')
 
     def timeout(*_args: object, **_kwargs: object) -> None:
+        """Simulate a subprocess exceeding its bounded runtime.
+
+        Args:
+            _args: Positional inputs ignored by this failure fake.
+            _kwargs: Keyword inputs ignored by this test fake.
+        """
         raise subprocess.TimeoutExpired("combine_coverage.py", 60)
 
     monkeypatch.setattr(quality.subprocess, "run", timeout)
     result = quality.run_aggregate(records, output)
+    # Require a failed result that cannot reuse the stale report.
     assert result["status"] == "failed"
     assert not (output / "combined/combined.json").exists()
     assert "timed out" in (output / "aggregate.log").read_text()
 
     class Completed:
+        """Represent the controlled subprocess result for this case."""
+
         returncode = 0
         stdout = "combined\n"
         stderr = ""
 
     def combine(command: list[str], **_kwargs: object) -> Completed:
+        """Write a successful combined-coverage receipt for this case.
+
+        Args:
+            command: Exact command arguments supplied to the child or fake runner.
+            _kwargs: Keyword inputs ignored by this test fake.
+
+        Returns:
+            Controlled subprocess result with output and exit status.
+        """
         destination = Path(command[command.index("--output-dir") + 1])
         destination.mkdir(parents=True)
         (destination / "combined.json").write_text('{"passed": true}')
@@ -768,10 +935,24 @@ def test_aggregate_timeout_clears_stale_result_and_fails(
 def test_focused_lint_reports_findings_and_repairs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Ruff findings remain named failures; clean JSON clears that same check."""
+    """Ruff findings remain named failures; clean JSON clears that same check.
 
+    Args:
+        tmp_path: Disposable directory supplied by pytest for this case.
+        monkeypatch: Pytest fixture that restores patched dependencies after this case.
+    """
+
+    # Return a focused Ruff finding from a controlled subprocess.
     class Completed:
+        """Represent the controlled subprocess result for this case."""
+
         def __init__(self, code: int, output: str) -> None:
+            """Carry the controlled Ruff status and diagnostic JSON.
+
+            Args:
+                code: Exit status returned by the fake subprocess.
+                output: Directory or path where diagnostic artifacts are written.
+            """
             self.returncode = code
             self.stdout = output
             self.stderr = ""
@@ -779,11 +960,21 @@ def test_focused_lint_reports_findings_and_repairs(
     calls: list[list[str]] = []
 
     def finding(command: list[str], **_kwargs: object) -> Completed:
+        """Return a focused lint diagnostic from the fake subprocess.
+
+        Args:
+            command: Exact command arguments supplied to the child or fake runner.
+            _kwargs: Keyword inputs ignored by this test fake.
+
+        Returns:
+            Controlled subprocess result with output and exit status.
+        """
         calls.append(command)
         return Completed(1, '[{"code":"PT011","message":"broad exception"}]')
 
     monkeypatch.setattr(quality.subprocess, "run", finding)
     failed = quality.run_lint(tmp_path)
+    # Check retained diagnostics and the repaired pass result.
     assert failed["status"] == "failed"
     assert failed["detail"]["findings"][0]["code"] == "PT011"
     assert calls[0][calls[0].index("--select") + 1] == quality.LINT_RULES
@@ -791,6 +982,12 @@ def test_focused_lint_reports_findings_and_repairs(
     assert quality.run_lint(tmp_path)["status"] == "passed"
 
     def timeout(*_args: object, **_kwargs: object) -> None:
+        """Simulate a subprocess exceeding its bounded runtime.
+
+        Args:
+            _args: Positional inputs ignored by this failure fake.
+            _kwargs: Keyword inputs ignored by this test fake.
+        """
         raise subprocess.TimeoutExpired("ruff", 20)
 
     monkeypatch.setattr(quality.subprocess, "run", timeout)
@@ -806,8 +1003,15 @@ def test_focused_lint_reports_findings_and_repairs(
 def test_advisory_reports_show_native_totals_and_diff_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """An unavailable diff does not erase verified native suite totals."""
+    """An unavailable diff does not erase verified native suite totals.
+
+    Args:
+        tmp_path: Disposable directory supplied by pytest for this case.
+        monkeypatch: Pytest fixture that restores patched dependencies after this case.
+    """
+    # Prepare validated native totals and a failing Git diff.
     unavailable = quality.advisory_reports(None, None)
+    # Check the no-record advisory before adding native totals and a failing diff.
     assert unavailable["suite_trends"]["status"] == "unavailable"
     assert unavailable["changed_code"]["status"] == "unavailable"
 
@@ -816,6 +1020,8 @@ def test_advisory_reports_show_native_totals_and_diff_failure(
     (directory / "coverage.json").write_text(json.dumps({"totals": {"covered_lines": 42}}))
 
     class Completed:
+        """Represent the controlled subprocess result for this case."""
+
         returncode = 1
         stderr = "bad base"
         stdout = ""
@@ -826,6 +1032,8 @@ def test_advisory_reports_show_native_totals_and_diff_failure(
     assert advisory["changed_code"] == {"status": "unavailable", "reason": "bad base"}
 
     class Success:
+        """Represent a successful changed-code diff subprocess."""
+
         returncode = 0
         stderr = ""
         stdout = "diff --git a/src/agent_company/a.py b/src/agent_company/a.py\n"
@@ -837,6 +1045,12 @@ def test_advisory_reports_show_native_totals_and_diff_failure(
     assert "diff --git" in advisory["changed_code"]["diff"]
 
     def timeout(*_args: object, **_kwargs: object) -> None:
+        """Simulate a subprocess exceeding its bounded runtime.
+
+        Args:
+            _args: Positional inputs ignored by this failure fake.
+            _kwargs: Keyword inputs ignored by this test fake.
+        """
         raise subprocess.TimeoutExpired("git diff", 10)
 
     monkeypatch.setattr(quality.subprocess, "run", timeout)
@@ -848,7 +1062,13 @@ def test_advisory_reports_show_native_totals_and_diff_failure(
 def test_main_continues_independent_checks_after_evidence_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Missing native records cannot suppress lint, probes, or the final summary."""
+    """Missing native records cannot suppress lint, probes, or the final summary.
+
+    Args:
+        tmp_path: Disposable directory supplied by pytest for this case.
+        monkeypatch: Pytest fixture that restores patched dependencies after this case.
+    """
+    # Force native, tooling, and later optional inputs to fail independently.
     output = tmp_path / "quality"
     monkeypatch.setattr(
         sys,
@@ -869,9 +1089,19 @@ def test_main_continues_independent_checks_after_evidence_failure(
     )
 
     def missing_native(*_args: object) -> None:
+        """Report an invalid native input without terminating independent checks.
+
+        Args:
+            _args: Positional inputs ignored by this failure fake.
+        """
         raise ValueError("native missing")
 
     def missing_tooling(*_args: object) -> None:
+        """Report an invalid tooling receipt without terminating independent checks.
+
+        Args:
+            _args: Positional inputs ignored by this failure fake.
+        """
         raise ValueError("tooling missing")
 
     monkeypatch.setattr(quality, "inspect_native", missing_native)
@@ -879,16 +1109,34 @@ def test_main_continues_independent_checks_after_evidence_failure(
     calls: list[str] = []
 
     def lint(_output: Path) -> dict[str, object]:
+        """Record that the independent lint control still ran.
+
+        Args:
+            _output: Requested output path, unused by this fake.
+
+        Returns:
+            Evidence or decision record examined by this test.
+        """
         calls.append("lint")
         return {"name": "focused_lint", "status": "passed", "seconds": 0.0, "detail": []}
 
     def probes(_spec: Path, _output: Path) -> dict[str, object]:
+        """Record that assertion probes still ran after input failures.
+
+        Args:
+            _spec: Requested probe specification, unused by this fake.
+            _output: Requested output path, unused by this fake.
+
+        Returns:
+            Evidence or decision record examined by this test.
+        """
         calls.append("probes")
         return {"name": "assertion_probes", "status": "passed", "seconds": 0.0, "detail": []}
 
     monkeypatch.setattr(quality, "run_lint", lint)
     monkeypatch.setattr(quality, "run_probes", probes)
     monkeypatch.setattr(quality, "advisory_reports", lambda *_args: {})
+    # Require lint, probes, advisory output, and final named failures.
     assert quality.main() == 1
     report = json.loads((output / "quality.json").read_text())
     status = {row["name"]: row["status"] for row in report["results"]}
@@ -942,12 +1190,27 @@ def test_main_continues_independent_checks_after_evidence_failure(
     monkeypatch.setattr(quality, "valid_tooling", lambda *_args: {"Linux": {}})
 
     def invalid_ledger(*_args: object) -> None:
+        """Reject a stale coverage-exception ledger.
+
+        Args:
+            _args: Positional inputs ignored by this failure fake.
+        """
         raise ValueError("ledger stale")
 
     def invalid_probe(*_args: object) -> None:
+        """Reject a stale controlled-fault probe.
+
+        Args:
+            _args: Positional inputs ignored by this failure fake.
+        """
         raise ValueError("probe stale")
 
     def invalid_advisory(*_args: object) -> None:
+        """Report an unavailable changed-code advisory.
+
+        Args:
+            _args: Positional inputs ignored by this failure fake.
+        """
         raise ValueError("base unavailable")
 
     monkeypatch.setattr(quality, "exception_records", invalid_ledger)
@@ -967,7 +1230,13 @@ def test_main_continues_independent_checks_after_evidence_failure(
 def test_main_rejects_output_inside_candidate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A quality run cannot overwrite source or test files in its checkout."""
+    """A quality run cannot overwrite source or test files in its checkout.
+
+    Args:
+        tmp_path: Disposable directory supplied by pytest for this case.
+        monkeypatch: Pytest fixture that restores patched dependencies after this case.
+    """
+    # Choose a quality report destination inside the source checkout.
     monkeypatch.setattr(quality, "ROOT", tmp_path)
     monkeypatch.setattr(
         sys,
@@ -981,6 +1250,7 @@ def test_main_rejects_output_inside_candidate(
             str(tmp_path / "source/output"),
         ],
     )
+    # Require argument validation to stop before modifying source files.
     with pytest.raises(SystemExit, match="2"):
         quality.main()
     assert not (tmp_path / "source/output").exists()

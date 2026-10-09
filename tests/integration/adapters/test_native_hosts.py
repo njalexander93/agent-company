@@ -15,7 +15,7 @@ from typing import Literal, cast
 
 import pytest
 
-from agent_company.adapters import claude, codex, common, cursor
+from agent_company.adapters import claude, codex, common, cursor, startup
 from agent_company.lifecycle import task_workspace as core
 from tests.platform_support import link_directory, shell_command, unlink_directory
 from tests.support import ROOT, Fixture
@@ -51,6 +51,7 @@ def native(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> I
     try:
         yield host, case
     finally:
+        # Release the disposable repository even when an assertion fails.
         case.doCleanups()
 
 
@@ -83,6 +84,7 @@ def native_event(host: NativeHost, case: Fixture, name: str, **fields: JsonValue
         event["session_id"] = "coordinator"
     # Use Cursor's conversation identity and workspace roots.
     else:
+        # Cursor supplies conversation identity and one workspace root.
         event.update(
             hook_event_name=(
                 "beforeSubmitPrompt" if name == "UserPromptSubmit" else name[0].lower() + name[1:]
@@ -129,7 +131,209 @@ def assert_decision(host: NativeHost, response: JsonObject, allowed: bool) -> No
         assert response.get("hookSpecificOutput", {}).get("permissionDecision") is None
     # Claude expresses blocked tool use through its event-specific permission decision.
     else:
+        # Claude denies through its hook-specific permission decision.
         assert response["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def ticket_callbacks(
+    host: NativeHost, case: Fixture, response: JsonObject, tool_id: str = "ticket-read"
+) -> tuple[list[JsonObject], JsonObject]:
+    """Build the documented native Linear callback pair for one exact issue read.
+
+    Args:
+        host: Native callback protocol.
+        case: Disposable repository and session fixture.
+        response: Explicit result fixture; its provider provenance remains unverified.
+        tool_id: Claude's native call ID for correlation.
+
+    Returns:
+        The pre-call envelopes and correlated completed-call envelope.
+    """
+    # Select Claude's MCP-qualified name and object arguments.
+    if host == "claude":
+        fields: JsonObject = {
+            "tool_name": "mcp__linear-server__get_issue",
+            "tool_input": {"id": "TEST-1"},
+            "tool_use_id": tool_id,
+            "mcp_server": {"name": "linear-server", "source": "user"},
+        }
+        return [native_event(host, case, "PreToolUse", **fields)], native_event(
+            host, case, "PostToolUse", tool_response=response, **fields
+        )
+    # Select Cursor's MCP-specific callback with server identity and JSON strings.
+    fields = {
+        "tool_name": "get_issue",
+        "tool_input": json.dumps({"id": "TEST-1"}),
+        "mcp_server_name": "linear",
+        "mcp_server_url": "https://mcp.linear.app/mcp",
+    }
+    generic = {
+        "tool_name": "MCP:get_issue",
+        "tool_input": {"id": "TEST-1"},
+        "tool_use_id": tool_id,
+    }
+    return [
+        native_event(host, case, "preToolUse", **generic),
+        native_event(host, case, "beforeMCPExecution", **fields),
+    ], native_event(host, case, "postToolUse", tool_output=json.dumps(response), **generic)
+
+
+def test_native_ticket_first_start_uses_host_specific_provider_callbacks(
+    native: NativeCase,
+) -> None:
+    """Start a fresh issue from each documented native callback shape.
+
+    Args:
+        native: Host-specific disposable repository fixture.
+
+    Raises:
+        AssertionError: Ticket ordering or host-bound readiness fails.
+    """
+    # Record one Task line without creating the issue workspace first.
+    host, case = native
+    prompt = dispatch(host, native_event(host, case, "UserPromptSubmit", prompt="Task: TEST-1"))
+    assert "block" not in str(prompt)
+    assert not (case.root / ".task/TEST-1").exists()
+    # Deny ordinary tools before the requested provider read.
+    assert_decision(host, dispatch(host, native_event(host, case, "PreToolUse")), False)
+    issue = {
+        "id": "c0a8f3be-1c13-4f2b-9a1e-b2e61f11f977",
+        "identifier": "TEST-1",
+        "title": "Test issue",
+    }
+    # Invoke the host-specific pre/post pair with separate response fields.
+    before, after = ticket_callbacks(host, case, issue)
+    # Deliver both Cursor prehook facts before the generic completion.
+    for callback in before:
+        assert_decision(host, dispatch(host, callback), True)
+    assert not (case.root / ".task/TEST-1").exists()
+    completed = dispatch(host, after)
+    assert "TASK_WORKSPACE_READY" in str(completed)
+    # The real lifecycle must verify readiness for this exact host and session.
+    observed = common.native_identity(native_event(host, case, "SessionStart"), case.base["host"])
+    base = common.request_for(observed, "ready", case.base["host"])
+    assert core.execute(base)["ok"] is True
+
+
+@pytest.mark.parametrize(
+    "error_code,expected",
+    [("NOT_FOUND", "ISSUE_NOT_FOUND"), ("NETWORK_ERROR", "PROVIDER_NETWORK_ERROR")],
+)
+def test_native_ticket_failure_retains_task_and_allows_exact_retry(
+    native: NativeCase, error_code: str, expected: str
+) -> None:
+    """Distinguish confirmed absence from provider outage without creating state.
+
+    Args:
+        native: Host-specific disposable repository fixture.
+        error_code: Typed provider result fixture.
+        expected: Required adapter diagnostic.
+
+    Raises:
+        AssertionError: Failure is misclassified or retry state is lost.
+    """
+    # Submit the Task and complete one typed provider failure.
+    host, case = native
+    dispatch(host, native_event(host, case, "UserPromptSubmit", prompt="Task: TEST-1"))
+    before, after = ticket_callbacks(host, case, {"isError": True, "code": error_code})
+    # Exercise the initial callback order for this read attempt.
+    for callback in before:
+        assert_decision(host, dispatch(host, callback), True)
+    assert expected in str(dispatch(host, after))
+    assert not (case.root / ".task/TEST-1").exists()
+    # Retry the same issue with a fresh Claude ID or Cursor's exact MCP callback.
+    retry_before, _ = ticket_callbacks(
+        host, case, {"isError": True, "code": error_code}, "retry-read"
+    )
+    # A fresh retry must collect both prehook facts again.
+    for callback in retry_before:
+        assert_decision(host, dispatch(host, callback), True)
+
+
+def test_cursor_ticket_callbacks_require_both_pre_events_and_native_call_id(
+    native: NativeCase,
+) -> None:
+    """Reject unmatched and stale Cursor completion despite reordered pre-hooks.
+
+    Args:
+        native: Host-specific disposable repository fixture.
+
+    Raises:
+        AssertionError: Missing server validation or call correlation reaches readiness.
+    """
+    # The Cursor-specific state machine does not apply to Claude's single pre-hook.
+    host, case = native
+    # Claude has one prehook; Cursor requires a server-specific prehook too.
+    if host != "cursor":
+        return
+    dispatch(host, native_event(host, case, "UserPromptSubmit", prompt="Task: TEST-1"))
+    issue = {"id": "c0a8f3be-1c13-4f2b-9a1e-b2e61f11f977", "identifier": "TEST-1"}
+    before, after = ticket_callbacks(host, case, issue)
+    # Admit the server-specific callback first, then reject completion without call ID.
+    assert_decision(host, dispatch(host, before[1]), True)
+    assert "BINDING_CONFLICT" in str(dispatch(host, after))
+    assert not (case.root / ".task/TEST-1").exists()
+    # Correlate generic pre with the same single call and reject overlapping calls.
+    assert_decision(host, dispatch(host, before[0]), True)
+    competing = {**before[0], "tool_use_id": "other-read"}
+    assert_decision(host, dispatch(host, competing), False)
+    assert "TASK_WORKSPACE_READY" in str(dispatch(host, after))
+
+
+def test_cursor_failed_local_setup_retries_with_new_call_id(
+    native: NativeCase, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Keep Task identity and reject stale completion after local setup failure.
+
+    Args:
+        native: Host-specific disposable repository fixture.
+        monkeypatch: Pytest fixture isolating one lifecycle failure.
+
+    Raises:
+        AssertionError: A stale callback completes or fresh retry cannot become ready.
+    """
+    # Select the Cursor case and inject one scope failure after provider verification.
+    host, case = native
+    # Claude has one prehook; Cursor requires both native prehook facts.
+    if host != "cursor":
+        return
+    dispatch(host, native_event(host, case, "UserPromptSubmit", prompt="Task: TEST-1"))
+    issue = {"id": "c0a8f3be-1c13-4f2b-9a1e-b2e61f11f977", "identifier": "TEST-1"}
+    original = startup._call
+    failed_once = False
+
+    def fail_once(request: JsonObject) -> JsonObject:
+        """Fail the first scope operation after the ticket result is verified.
+
+        Args:
+            request: Lifecycle request dispatched by startup.
+
+        Returns:
+            The real lifecycle response after the injected failure.
+
+        Raises:
+            core.WorkspaceError: Once at the scope boundary.
+        """
+        nonlocal failed_once
+        # Simulate a bounded local failure and let later calls use the real core.
+        if request["operation"] == "scope" and not failed_once:
+            failed_once = True
+            raise core.WorkspaceError("BUSY")
+        return original(request)
+
+    monkeypatch.setattr(startup, "_call", fail_once)
+    # Complete the first provider call and observe the local failure.
+    before, after = ticket_callbacks(host, case, issue, "first-read")
+    # Deliver each required prehook before the provider failure.
+    for callback in before:
+        assert_decision(host, dispatch(host, callback), True)
+    assert "BUSY" in str(dispatch(host, after))
+    # Begin a fresh call with server-specific callback first; old completion is stale.
+    retry_before, retry_after = ticket_callbacks(host, case, issue, "second-read")
+    assert_decision(host, dispatch(host, retry_before[1]), True)
+    assert "BINDING_CONFLICT" in str(dispatch(host, after))
+    assert_decision(host, dispatch(host, retry_before[0]), True)
+    assert "TASK_WORKSPACE_READY" in str(dispatch(host, retry_after))
 
 
 def test_native_admission_records_actual_tool_before_continuation(native: NativeCase) -> None:
@@ -179,6 +383,7 @@ def test_claude_compaction_preserves_authority_and_pending_work(
     case.create()
     case.ready()
     assert_decision(host, dispatch(host, native_event(host, case, "PreToolUse")), True)
+    # Only acknowledged packets grant ordinary tool readiness.
     if not acknowledged:
         case.call(
             "scope",
@@ -196,9 +401,11 @@ def test_claude_compaction_preserves_authority_and_pending_work(
         "cwd": str(case.root),
         "trigger": "manual",
     }
+    # Compaction cannot itself establish readiness.
     if event_name == "PreCompact":
         event["custom_instructions"] = "Retain the task's outstanding work."
     else:
+        # Other compaction hooks receive only advisory context.
         event["compact_summary"] = "The task still has outstanding work."
     assert dispatch(host, event) == {}
     # An observation must preserve both pending evidence and existing authority.
@@ -211,9 +418,11 @@ def test_claude_compaction_preserves_authority_and_pending_work(
     output = context["hookSpecificOutput"]
     assert output["hookEventName"] == "SessionStart"
     assert "permissionDecision" not in output
+    # Acknowledged sessions can admit supported work.
     if acknowledged:
         assert "Task binding checked" in output["additionalContext"]
     else:
+        # Unacknowledged sessions must receive a recovery diagnostic.
         assert "TASK_WORKSPACE_NOT_READY" in output["additionalContext"]
         assert "acknowledge" in output["additionalContext"]
     # Later tool admission must still enforce the actual acknowledgment state.
@@ -237,6 +446,7 @@ def test_native_denies_unusable_binding(native: NativeCase, binding: str) -> Non
     """
     # Leave the native participant unbound, or create a corrupt binding at its exact key.
     host, case = native
+    # Malformed binding variants must fail before native tool use.
     if binding == "malformed":
         case.create()
         case.ready()
@@ -252,14 +462,14 @@ def test_native_denies_unusable_binding(native: NativeCase, binding: str) -> Non
     assert_decision(host, dispatch(host, native_event(host, case, "PreToolUse")), False)
 
 
-def test_native_bootstrap_uses_exact_command_and_matching_identity(native: NativeCase) -> None:
-    """Allow bounded recovery without accepting changed authority or shell wrappers.
+def test_native_bootstrap_waits_for_ticket_even_with_exact_command(native: NativeCase) -> None:
+    """Keep an exact lifecycle command behind the pending ticket-first gate.
 
     Args:
         native: Host-specific disposable repository fixture.
 
     Raises:
-        AssertionError: A valid bootstrap is refused or an altered request is admitted.
+        AssertionError: A pre-ticket command or altered request is admitted.
     """
     # Create an unready participant and construct the exact four-argument recovery command.
     host, case = native
@@ -277,7 +487,7 @@ def test_native_bootstrap_uses_exact_command_and_matching_identity(native: Nativ
         tool_name="Bash" if host == "claude" else "Shell",
         tool_input={"command": command},
     )
-    assert_decision(host, dispatch(host, event), True)
+    assert_decision(host, dispatch(host, event), False)
     # Reject shell composition and alternative executable spellings before readiness.
     for altered in (
         "env " + command,
@@ -360,6 +570,7 @@ def test_native_wrong_tool_completion_cannot_settle_original(native: NativeCase)
     )
     # Use each host's documented failure-description field.
     failure["error" if host == "claude" else "error_message"] = "fixture failure"
+    # Cursor success uses a serialized generic tool output.
     if host == "cursor":
         failure["failure_type"] = "error"
     dispatch(host, failure)
@@ -416,6 +627,7 @@ def test_cursor_ambiguous_result_strings_retain_work(response: str) -> None:
     case.setUp()
     case.base["host"] = "cursor"
     case.base["coordinator"] = core.participant_key(case.base)
+    # Contain a late provider exception as a native denial.
     try:
         # Admit the actual native Shell operation before delivering ambiguous result data.
         case.create()
@@ -425,6 +637,7 @@ def test_cursor_ambiguous_result_strings_retain_work(response: str) -> None:
         assert "actual-tool" in case.state()["participants"][case.base["coordinator"]]["pending"]
     # Release all disposable repositories after the uncertainty assertion.
     finally:
+        # Release the disposable repository even when an assertion fails.
         case.doCleanups()
 
 
@@ -457,6 +670,7 @@ def test_cursor_ambiguous_workspace_roots_deny() -> None:
     case.setUp()
     case.base["host"] = "cursor"
     case.base["coordinator"] = core.participant_key(case.base)
+    # Contain an unexpected bootstrap failure as a native denial.
     try:
         case.create()
         case.ready()
@@ -467,6 +681,7 @@ def test_cursor_ambiguous_workspace_roots_deny() -> None:
         assert_decision("cursor", dispatch("cursor", event), False)
     # Remove all fixture state regardless of the decision result.
     finally:
+        # Release the disposable repository even when an assertion fails.
         case.doCleanups()
 
 
@@ -486,6 +701,7 @@ def test_native_synchronous_completion_settles_only_admitted_work(native: Native
     assert_decision(host, dispatch(host, native_event(host, case, "PreToolUse")), True)
     # Use the documented native result representation for each host.
     fields: JsonObject = {"tool_response": {"content": "fixture file content"}}
+    # Cursor needs both generic and MCP-specific admission.
     if host == "cursor":
         fields = {"tool_output": json.dumps({"exitCode": 0, "stdout": "finished"})}
     dispatch(host, native_event(host, case, "PostToolUse", **fields))
@@ -535,6 +751,7 @@ def test_claude_ordinary_shell_requires_foreground_configuration(
     case.setUp()
     case.base["host"] = claude.HOST
     case.base["coordinator"] = core.participant_key(case.base)
+    # A malformed callback must not crash the hook process.
     try:
         case.create()
         case.ready()
@@ -548,6 +765,7 @@ def test_claude_ordinary_shell_requires_foreground_configuration(
         assert case.state()["participants"][case.base["coordinator"]]["pending"] == {}
     # Release the temporary repository after either success or assertion failure.
     finally:
+        # Release the disposable repository even when an assertion fails.
         case.doCleanups()
 
 
@@ -567,6 +785,7 @@ def test_cursor_imported_claude_hook_does_not_duplicate_writes(
     case.setUp()
     case.base["host"] = cursor.HOST
     case.base["coordinator"] = core.participant_key(case.base)
+    # A second malformed callback must remain bounded.
     try:
         case.create()
         case.ready()
@@ -583,6 +802,7 @@ def test_cursor_imported_claude_hook_does_not_duplicate_writes(
         assert state["seq"] == before["seq"] + 1
     # Restore the environment through pytest and remove only disposable fixture state.
     finally:
+        # Release the disposable repository even when an assertion fails.
         case.doCleanups()
 
 
@@ -637,12 +857,14 @@ def test_native_config_quotes_checkout_and_reports_missing_environment(
     """
     # Select the checked-in pre-tool command without translating or rewriting its shell text.
     assert shutil.which(shell) is not None, f"Required native shell missing: {shell}"
+    # Claude and Codex use Bash-style lifecycle commands.
     if host in {"claude", "codex"}:
         config_path = ".claude/settings.json" if host == "claude" else ".codex/hooks.json"
         config = json.loads((ROOT / config_path).read_text())
         command = config["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
     # Cursor additionally requires fail-closed configuration at the permission boundary.
     else:
+        # Cursor reads its native hook registration from hooks.json.
         config = json.loads((ROOT / ".cursor/hooks.json").read_text())
         entry = config["hooks"]["preToolUse"][0]
         command = entry["command"]
@@ -694,6 +916,7 @@ def test_native_config_quotes_checkout_and_reports_missing_environment(
     )
     assert extra.returncode == 2
     assert extra.stdout == ""
+    # PowerShell command spellings require Windows parsing.
     if shell in {"powershell.exe", "pwsh.exe"}:
         # Document the unmodified -Command wrapper separately from actual launcher exit 2.
         bare = subprocess.run(
@@ -722,6 +945,7 @@ def test_native_config_quotes_checkout_and_reports_missing_environment(
     assert "TASK_WORKSPACE_SETUP_REQUIRED" in missing.stderr
     assert "Poetry" in missing.stderr
     assert missing.stdout == ""
+    # PowerShell failures use Cursor’s native recovery fields.
     if shell in {"powershell.exe", "pwsh.exe"}:
         bare_missing = subprocess.run(
             shell_command(shell, command),
@@ -735,6 +959,7 @@ def test_native_config_quotes_checkout_and_reports_missing_environment(
         assert bare_missing.returncode == 1
         assert "TASK_WORKSPACE_SETUP_REQUIRED" in bare_missing.stderr
         assert bare_missing.stdout == ""
+    # Claude’s native failure shape differs from Cursor’s.
     if host == "claude":
         imported = subprocess.run(
             shell_command(shell, command),
@@ -783,6 +1008,7 @@ def test_claude_foreground_shell_retains_ambiguous_results_then_settles(
     case.setUp()
     case.base["host"] = claude.HOST
     case.base["coordinator"] = core.participant_key(case.base)
+    # A failed native process must be killed within the test deadline.
     try:
         # Admit foreground Bash with only its native command arguments.
         case.create()
@@ -813,6 +1039,7 @@ def test_claude_foreground_shell_retains_ambiguous_results_then_settles(
         assert case.state()["disposition"] == "active"
     # Remove only the disposable fixture; pytest restores host environment variables.
     finally:
+        # Release the disposable repository even when an assertion fails.
         case.doCleanups()
 
 
