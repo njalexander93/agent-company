@@ -34,7 +34,7 @@ class LifecycleTests(Fixture):
             "session_id": "coordinator",
             "prompt": "Task: TEST-1",
         }
-        hook.handle(event)
+        common.prompt(event, "codex", attempt_attach=True)
         request = self.req(
             "diagnose", repo_id=None, issue_id=None, issue_uuid=None, coordinator=None
         )

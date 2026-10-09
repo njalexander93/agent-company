@@ -21,7 +21,9 @@ def test_combination_normalizes_windows_paths_and_preserves_contexts(tmp_path: P
     Raises:
         AssertionError: Windows filenames remain separate or context labels are lost.
     """
+    # Build synthetic Windows paths and contexts in separate databases.
     files = []
+    # Create one native artifact directory for each requested operating system.
     for system, name in (
         ("synthetic-posix", "src/agent_company/lifecycle/task_workspace.py"),
         ("synthetic-windows", "src\\agent_company\\lifecycle\\task_workspace.py"),
@@ -31,80 +33,24 @@ def test_combination_normalizes_windows_paths_and_preserves_contexts(tmp_path: P
         data.set_context(system)
         data.add_arcs({name: [(-1, 1), (1, -1)]})
         data.write()
+        data.close()
         files.append(str(path))
     coverage = Coverage(
         data_file=str(tmp_path / "combined"), config_file=str(ROOT / "pyproject.toml")
     )
     coverage.combine(files, strict=True, keep=True)
     data = coverage.get_data()
+    # Check normalized combined paths without discarding contexts.
     assert data.measured_files() == {str(Path("src/agent_company/lifecycle/task_workspace.py"))}
     assert data.measured_contexts() == {"synthetic-posix", "synthetic-windows"}
     assert all(Path(path).exists() for path in files)
 
 
-@pytest.mark.parametrize(
-    "defect",
-    [
-        "missing-platform",
-        "wrong-sha",
-        "failed-tests",
-        "dirty",
-        "changed-source",
-        "changed-commit",
-        "different-bytes",
-    ],
-)
-def test_native_evidence_rejects_incomplete_or_mismatched_inputs(
-    tmp_path: Path, defect: str
-) -> None:
-    """Refuse aggregate acceptance when a native result is absent or belongs to other code.
-
-    Args:
-        tmp_path: Disposable synthetic artifact directory.
-        defect: Invalid provenance or test result to introduce.
-
-    Raises:
-        AssertionError: The combined gate accepts invalid platform input metadata.
-    """
-    for system in ("Windows", "Linux"):
-        if defect == "missing-platform" and system == "Linux":
-            continue
-        root = tmp_path / system
-        root.mkdir()
-        manifest = {
-            "sha": "candidate",
-            "system": system,
-            "end_sha": "candidate",
-            "end_status": "",
-            "candidate_unchanged": True,
-            "tracked_digest": "before",
-            "end_tracked_digest": "before",
-            "status": "",
-            "commands": [
-                {"task": "test", "exit_code": 0},
-            ],
-        }
-        if system == "Windows":
-            if defect == "wrong-sha":
-                manifest["sha"] = "another-candidate"
-            elif defect == "failed-tests":
-                manifest["commands"][0]["exit_code"] = 1
-            elif defect == "changed-source":
-                manifest["end_tracked_digest"] = "after"
-            elif defect == "changed-commit":
-                manifest["end_sha"] = "another-candidate"
-            elif defect == "different-bytes":
-                manifest["tracked_digest"] = manifest["end_tracked_digest"] = "other"
-            elif defect == "dirty":
-                manifest["status"] = " M source.py"
-        (root / "manifest.json").write_text(json.dumps(manifest))
-        (root / ".coverage").write_bytes(b"not used: provenance must fail first")
-    with pytest.raises(ValueError):
-        verified_inputs(tmp_path, "candidate", "before")
-
-
 @pytest.mark.parametrize("split", [False, True])
-@pytest.mark.parametrize("mutation", ["none", "dirty-policy", "dirty-source", "during-report"])
+@pytest.mark.parametrize(
+    "mutation",
+    ["none", "dirty-policy", "dirty-source", "during-report", "below-floor", "floor-repaired"],
+)
 def test_collector_to_combiner_fences_checkout_bytes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str, split: bool
 ) -> None:
@@ -119,6 +65,7 @@ def test_collector_to_combiner_fences_checkout_bytes(
     Raises:
         AssertionError: Collection requires a sidecar or changed bytes receive acceptance.
     """
+    # Create disposable candidate and native artifact directories.
     import os
     import subprocess
     import sys
@@ -134,6 +81,7 @@ def test_collector_to_combiner_fences_checkout_bytes(
     (root / ".gitattributes").write_text("* text=auto eol=lf\n", encoding="utf-8")
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    # Commit the disposable coverage project before generating candidate evidence.
     for command in (
         ["init", "-q"],
         ["add", "."],
@@ -166,6 +114,7 @@ def test_collector_to_combiner_fences_checkout_bytes(
                 "system": system,
             },
         )
+        # Generate either split unit/integration receipts or one full-suite receipt.
         for task in ("test-unit", "test-integration") if split else ("test",):
             evidence = artifacts / system / task
             monkeypatch.setattr(
@@ -177,10 +126,18 @@ def test_collector_to_combiner_fences_checkout_bytes(
             data = CoverageData(basename=str(evidence / ".coverage"))
             data.add_lines({str(source): {1}})
             data.write()
+            data.close()
             assert not (evidence / "host.json").exists()
     initial = dev.checkout_state()
-    assert len(verified_inputs(artifacts, initial["sha"], initial["tracked_digest"])) == (
-        4 if split else 2
+    input_files = verified_inputs(artifacts, initial["sha"], initial["tracked_digest"])
+    # Confirm the collector produced the expected split or full input count.
+    assert len(input_files) == (4 if split else 2)
+    # This fixture tests combination and checkout fencing. The dedicated native
+    # evidence tests exercise strict receipt/database validation separately.
+    monkeypatch.setattr(
+        combine_coverage,
+        "valid_matrix",
+        lambda *args, **kwargs: {str(index): Path(path) for index, path in enumerate(input_files)},
     )
     output = tmp_path / "combined"
     monkeypatch.setattr(
@@ -193,102 +150,49 @@ def test_collector_to_combiner_fences_checkout_bytes(
             str(output),
         ],
     )
+    # Change the coverage policy after measurement to invalidate the candidate fingerprint.
     if mutation == "dirty-policy":
         policy.write_text("[tool.coverage.report]\nfail_under = 0\n", encoding="utf-8")
+    # Change tracked source after measurement to invalidate the retained evidence.
     elif mutation == "dirty-source":
         source.write_text("value = 2\n", encoding="utf-8")
+    # Mutate source during reporting to prove the end-of-run fingerprint check.
     elif mutation == "during-report":
         original = Coverage.report
 
         def changing_report(self: Coverage, *args: object, **kwargs: object) -> float:
-            """Mutate tracked policy after the real report reads its configuration."""
+            """Mutate tracked policy after the real report reads its configuration.
+
+            Args:
+                self: Coverage reporter being patched for this mutation case.
+                args: Positional coverage report options forwarded to the original method.
+                kwargs: Extra library options accepted by the test fake.
+
+            Returns:
+                The original coverage report result after this case mutates its artifact.
+            """
             result = original(self, *args, **kwargs)
             policy.write_text("[tool.coverage.report]\nfail_under = 0\n", encoding="utf-8")
             return result
 
         monkeypatch.setattr(Coverage, "report", changing_report)
+    # Select the below-floor or repaired report without changing the configured threshold.
+    elif mutation in {"below-floor", "floor-repaired"}:
+        reported = 79.999 if mutation == "below-floor" else 80.0
+        monkeypatch.setattr(Coverage, "report", lambda self: reported)
+    # Require a dirty-input candidate to fail before combination begins.
     if mutation.startswith("dirty"):
+        # Verify the combiner refuses the dirty checkout rather than issuing a percentage.
         with pytest.raises(ValueError, match="must be clean"):
             combine_coverage.main()
         assert not (output / "combined.json").exists()
     else:
-        assert combine_coverage.main() == (1 if mutation == "during-report" else 0)
+        # Check the combined result for clean, mutated-during-report and floor-boundary cases.
+        assert combine_coverage.main() == (1 if mutation in {"during-report", "below-floor"} else 0)
         result = json.loads((output / "combined.json").read_text())
         assert result["required_percent"] == 80
-        assert result["passed"] is (mutation == "none")
-        assert result["candidate_unchanged"] is (mutation == "none")
-
-
-@pytest.mark.parametrize(
-    "defect",
-    [
-        "none",
-        "missing-unit",
-        "missing-integration",
-        "failed-unit",
-        "failed-integration",
-        "duplicate-suite",
-        "repeated-command",
-        "mixed-full-suite",
-        "wrong-sha",
-        "wrong-digest",
-        "dirty",
-        "missing-database",
-        "malformed-command",
-    ],
-)
-def test_split_suite_evidence_requires_each_successful_native_suite(
-    tmp_path: Path, defect: str
-) -> None:
-    """Reject incomplete, repeated or conflicting split coverage before opening databases.
-
-    Args:
-        tmp_path: Disposable synthetic evidence, never native acceptance evidence.
-        defect: One invalid property to inject into the Windows evidence.
-
-    Raises:
-        AssertionError: Missing or invalid suite evidence receives combined acceptance.
-    """
-    for system in ("Windows", "Linux"):
-        for suite in ("unit", "integration"):
-            if system == "Windows" and defect == f"missing-{suite}":
-                continue
-            root = tmp_path / system / suite
-            root.mkdir(parents=True)
-            manifest = {
-                "sha": "candidate",
-                "end_sha": "candidate",
-                "system": system,
-                "status": "",
-                "end_status": "",
-                "tracked_digest": "bytes",
-                "end_tracked_digest": "bytes",
-                "candidate_unchanged": True,
-                "commands": [{"task": f"test-{suite}", "exit_code": 0}],
-            }
-            if system == "Windows":
-                if defect == f"failed-{suite}":
-                    manifest["commands"][0]["exit_code"] = 1
-                if suite == "integration":
-                    if defect == "wrong-sha":
-                        manifest["sha"] = "other"
-                    elif defect == "wrong-digest":
-                        manifest["tracked_digest"] = "other"
-                    elif defect == "dirty":
-                        manifest["end_status"] = " M sample.py"
-                    elif defect == "duplicate-suite":
-                        manifest["commands"][0]["task"] = "test-unit"
-                    elif defect == "mixed-full-suite":
-                        manifest["commands"][0]["task"] = "test"
-                    elif defect == "repeated-command":
-                        manifest["commands"] *= 2
-                    elif defect == "malformed-command":
-                        manifest["commands"] = [None]
-            (root / "manifest.json").write_text(json.dumps(manifest))
-            if not (system == "Windows" and suite == "unit" and defect == "missing-database"):
-                (root / ".coverage").touch()
-    if defect == "none":
-        assert len(verified_inputs(tmp_path, "candidate", "bytes")) == 4
-    else:
-        with pytest.raises(ValueError):
-            verified_inputs(tmp_path, "candidate", "bytes")
+        # Inspect the unrounded value when exercising the percentage boundary.
+        if mutation in {"below-floor", "floor-repaired"}:
+            assert result["coverage_percent"] == reported
+        assert result["passed"] is (mutation in {"none", "floor-repaired"})
+        assert result["candidate_unchanged"] is (mutation != "during-report")

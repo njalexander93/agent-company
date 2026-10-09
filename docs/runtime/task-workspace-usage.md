@@ -70,15 +70,30 @@ or manually rewrite quoting. The Windows entry decodes one bounded canonical
 URL-safe base64 JSON request and calls the same lifecycle implementation; encoding
 does not confer permission or change the recovery allowlist.
 
-The startup prompt accepts exactly one standalone `Task: <issue-id>` line, for example `Task: ISSUE-1`. It
-records only that identity. A packet/coordinator assignment is still explicit;
-no startup callback infers one from a chat title or grants coordinator ownership.
-One-time registration can include an explicit `startup` assignment with exactly
-`issue_id`, `issue_uuid`, `coordinator` and `packet`. The next matching Task prompt
-automatically creates the workspace and installs that preassigned packet. A new
-session joining an existing issue automatically attaches only when the coordinator
-already assigned it a packet. No hidden packet or coordinator role is inferred.
-Native adapters use explicit bindings and packets; installed-host callback delivery must be verified separately. No full launcher is shipped. See the [host guide](host-hooks.md) for child/spawn restrictions; no unverified child identity may inherit readiness.
+The startup prompt accepts exactly one standalone `Task: <issue-id>` line, for example
+`Task: ISSUE-1`. Each supported runtime adapter records that identifier before
+requiring local registration. Its exact Linear issue read is admitted before
+readiness through the [host-specific ticket-read protocol](host-hooks.md#ticket-read-protocols).
+The adapter verifies the response's identifier and immutable issue UUID, then
+invokes the shared startup orchestrator with the actual runtime/session identity.
+
+Startup derives the Git main worktree, registers or resumes, and creates a missing
+issue under the initiating session's coordinator key. It installs an initial packet
+from the selected checkout's governing files and the main worktree's canonical task
+bytes, reads the source bytes, acknowledges their exact digest and verifies `ready`.
+Repeated starts preserve roadmap, approval, coordinator and packet. A committed
+coordinator-owned roadmap update refreshes only its roadmap packet digest;
+unexpected file edits still fail integrity checks. A different session can join
+with a core-selected roadmap-only reader packet after the verified ticket read.
+Reader readiness does not transfer ownership; coordinator handoff remains explicit.
+
+Confirmed missing-ticket responses create no issue workspace. Other invalid
+requests and provider failures retain their own diagnostics. An explicit `startup`
+assignment remains a recovery route when the normal provider callback path is
+unavailable. Native callback delivery and real provider responses require separate
+installed-host evidence for each runtime. Protocol tests do not establish a live
+round trip. See the [host guide](host-hooks.md) for current adapter contracts and
+child/spawn restrictions; unverified child identities do not inherit readiness.
 
 The pre-readiness command allowlist is operation-specific. It includes the
 original `diagnose/register/bind/adopt/resume/restore` routes plus scoped `read` and

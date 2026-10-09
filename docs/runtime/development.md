@@ -29,6 +29,46 @@ reproduction; change and review the lock deliberately when updating dependencies
 after switching to this layout or creating a new worktree. Source edits then use
 the same package import without copying files into the environment.
 
+## Source documentation and logic comments
+
+These rules apply to every Python module in production code, scripts and tests.
+Authors apply them while writing or changing code. Reviewers inspect every changed
+Python file for compliance before the PR is ready for human review.
+
+- Give every module a docstring describing its responsibility and boundary.
+- Give every named function, method and class a meaningful Google-style docstring.
+  Include `Args`, `Returns` and `Raises` sections whenever the corresponding
+  contract exists. Describe actual inputs, results and failure conditions.
+- Organize every multi-step function into commented logical blocks. Put a concise
+  one- or two-line comment before each distinct phase, even when an experienced
+  developer could infer that phase from the code. Read together, the comments
+  should describe the function as pseudocode.
+- A logical block includes selecting an input source, validating a boundary,
+  applying defaults, choosing a branch, transforming data, performing I/O,
+  updating state, handling an error, constructing output and cleanup. A branch,
+  loop, `try`/`except`, asynchronous step, transaction boundary or lifecycle
+  transition begins a new commented block.
+- Group related statements under one block comment. Keep the comments synchronized
+  with behavior. Describe the phase's purpose rather than repeating assignments.
+- A single-expression helper needs only its docstring when it performs one
+  operation without a branch, side effect or second phase. Do not add a comment
+  that merely repeats that docstring.
+
+Ruff checks the configured docstring rules. Passing lint does not establish that
+contracts are complete or that logical-block comments explain the code. Authors
+and reviewers must inspect those qualities explicitly. For a documentation-only
+Python change, verify that executable behavior remains unchanged; comments and
+docstrings must not conceal a logic change.
+
+## Supported development environments
+
+Linux, Windows and macOS are equal supported development environments. Run local
+checks on the developer's actual OS and record that OS in the evidence. CI must
+supply the required native evidence from all three operating systems for the same
+candidate. A local pass on any one OS does not replace the other two native runs.
+See [testing standards](testing.md) for platform applicability and
+[PR checks](pr-checks.md) for the independent native checks and aggregate gate.
+
 ## Local commit checks
 
 Humans and agents use the same setup. After selecting the worktree interpreter,
@@ -124,6 +164,9 @@ two shared settings/recommendation files.
 
 ## Checks
 
+Use the [testing standards](testing.md) for classification, assertion quality,
+native scenarios, per-function obligations, and coverage exceptions.
+
 | Command | Checks |
 | --- | --- |
 | `make` or `make help` | List development commands without changing files. |
@@ -134,6 +177,7 @@ two shared settings/recommendation files.
 | `make type-check` | Mypy on production code under `src/agent_company/`. |
 | `make test-unit` | Run `tests/unit` without imposing aggregate coverage on the subset. |
 | `make test-integration` | Run `tests/integration` without a subset coverage gate. |
+| `poetry run python scripts/dev.py test-tooling --evidence-dir OUT` | Collect validation-tool coverage separately from production coverage. |
 | `make test` | Pytest, branch-aware coverage and the configured 80% coverage floor. |
 | `make check-local` | Configuration, formatting, lint, types and all tests on this OS; save coverage for combination. |
 | `make check` or `make ci` | Strict single-run checks, including the whole-package 80% coverage floor. |
@@ -155,11 +199,15 @@ test or changed checkout still fails the command.
 POSIX cannot execute the Windows backend, so its single-run whole-package
 coverage can fall below 80% even when every applicable test passes. The strict
 `check`, `ci` and `test` commands retain that floor; they do not silently omit the
-other platform's code. Acceptance requires successful native Windows and Linux
-runs from the same unchanged commit, then
+other platform's code. Acceptance requires successful native Linux, Windows and
+macOS runs from the same unchanged candidate. The historical aggregate additionally combines the Linux and
+Windows production reports with
 `poetry run python scripts/combine_coverage.py <artifact-directory> --output-dir <output>`.
-The combination verifies the source revision, clean start/end state and successful
-test results. The combining checkout must also remain clean and unchanged while
+The combination requires separate unit and integration records from each of those
+two operating systems. It
+verifies the source revision, clean start/end state, pinned tools, configuration,
+child instrumentation, real branch databases, successful collection/outcomes and
+artifact hashes. The combining checkout must also remain clean and unchanged while
 applying the configured 80% floor to the complete package.
 It preserves each platform's original data and coverage context.
 

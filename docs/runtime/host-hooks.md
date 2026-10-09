@@ -1,6 +1,7 @@
 # Local host hooks
 
-This checkout supplies three native entry points over one lifecycle core:
+The lifecycle and ticket-first startup contract are runtime-neutral. This checkout
+implements three native adapters over that shared core:
 
 | Host | Project configuration | Python entry | Participant host |
 | --- | --- | --- | --- |
@@ -16,7 +17,7 @@ A successful local protocol test does not prove that a host loaded or trusted it
 
 ## Native protocols and failure semantics
 
-Protocol sources checked on 2026-10-06; launcher and shell references checked on 2026-10-07:
+Ticket-read protocol sources checked on 2026-10-09; launcher and shell references checked on 2026-10-07:
 
 - [Claude Code hook reference](https://code.claude.com/docs/en/hooks): stdin JSON carries
   `session_id`, `cwd`, and `hook_event_name`; tool events add `tool_use_id`, `tool_name`, and
@@ -59,9 +60,12 @@ local lifecycle integration, not proposal approval.
    definition alone is insufficient evidence of trusted execution. If trust or callback
    delivery is unverified, retain that limit; a successful manual lifecycle call does
    not demonstrate a native callback or identify a runtime defect.
-3. Submit exactly one `Task: ISSUE-ID` line. The adapter records an explicit assignment for
-   that host/session. It uses only an existing coordinator assignment or an explicitly registered
-   startup packet; it does not invent scope or infer authority from prose.
+3. Submit exactly one `Task: ISSUE-ID` line. The selected adapter records the
+   identifier without requiring local registration. Read that exact Linear ticket
+   through the runtime's supported provider integration. The adapter admits this
+   narrow read before readiness and verifies its native completion. See
+   [ticket-read protocols](#ticket-read-protocols). A new Task line fences ordinary
+   tools even when the session was previously ready.
 4. Recover with `agent_company.adapters.common.bootstrap_command(request, host)`
    from the intended worktree's Poetry environment. On POSIX and Claude's Bash
    tool it emits the exact `shlex.join` lifecycle invocation. Native Windows
@@ -71,15 +75,73 @@ local lifecycle integration, not proposal approval.
    same lifecycle implementation and checks. Include the adapter's host value and
    actual session identity. Claude uses `session_id`; Cursor uses
    `conversation_id` as lifecycle `session_id`.
-5. Register the selected checkout if needed; attach or resume existing issue state.
-   The master establishes explicit coordination and installs reader-specific packets.
-   Assigned steps attach with their verified actual host/session identity and own scope.
-   Follow [explicit lifecycle setup](task-workspace-usage.md#explicit-setup-and-bootstrap)
-   for coordinator assignment and payload-relative note locators. Read the installed
-   packet, acknowledge its exact digest and verify `ready` before ordinary tools.
-   The recovery operation/field allowlist and assignment checks live in `adapters/common.py`.
-   Wrappers, chaining, redirection, alternate interpreters, conflicting worktrees, and
-   cross-host/session bootstrap requests receive no recovery exemption.
+5. A successful matching issue-read completion invokes the shared startup orchestrator. It derives the
+   main worktree from Git, registers or resumes, creates a new issue with the observed
+   master as coordinator, installs an initial reader packet, reads its source bytes,
+   acknowledges the exact digest and verifies `ready`. Existing roadmap bytes,
+   coordinator and packet survive repeated starts. A coordinator's committed roadmap
+   update refreshes only that owned packet reference; out-of-band edits remain conflicts.
+   Governing files come from the selected checkout; task bytes come from the main
+   worktree's canonical issue directory. A new session without an assignment
+   joins as a roadmap-only reader; it cannot replace another coordinator or edit
+   coordinator-owned notes. Coordinator handoff still requires the recorded owner
+   and explicit transfer. Assigned steps attach with their verified actual
+   host/session identity and own scope. Follow [explicit lifecycle setup](task-workspace-usage.md#explicit-setup-and-bootstrap)
+   for recovery. The recovery operation/field allowlist and assignment checks live in
+   `adapters/common.py`. Wrappers, chaining, redirection, alternate interpreters,
+   conflicting worktrees, and cross-host/session bootstrap requests receive no exemption.
+
+### Ticket-read protocols
+
+Every supported adapter follows the same sequence: record the requested ticket,
+validate its provider read and completion, then automate local registration,
+attachment, source reading, acknowledgment and readiness. Native event names and
+provider envelopes are adapter details.
+
+| Runtime | Ticket-read routing | Completion and identity |
+| --- | --- | --- |
+| Codex | Exact `mcp__codex_apps__linear_get_issue` with `{id: ISSUE-ID}`. | `PreToolUse` and `PostToolUse` correlate the native `tool_use_id`; read `tool_response`. |
+| Claude Code | Configured `linear` or `linear-server` MCP `get_issue` with `{id: ISSUE-ID}`. | `PreToolUse` and `PostToolUse` correlate the native `tool_use_id`; read `tool_response`. MCP metadata requires Claude Code 2.1.274 or later; accepted definition scopes are `user`, `project`, `plugin` and `sdk`. |
+| Cursor Agent | Generic `preToolUse` records `MCP:get_issue`, the exact arguments and native call ID; `beforeMCPExecution` checks the configured `linear` or `linear-server` name and official HTTPS MCP URL. | Both pre-hook validations are required. Generic `postToolUse` settles the matching native call using JSON `tool_output`. `afterMCPExecution` does not establish startup readiness. |
+
+The mappings follow the [Claude hook reference](https://code.claude.com/docs/en/hooks#pretooluse-input)
+and [Cursor hook reference](https://cursor.com/docs/hooks). Configured server names
+select an integration; a name alone does not authenticate a provider. Keep host
+permissions and trusted configuration in effect. Cursor's two pre-hooks can arrive
+in either order. Completion must identify the admitted native call, so an old
+MCP-specific completion cannot settle a fresh retry. The Cursor adapter accepts
+`https://mcp.linear.app/mcp` and its `/readonly` endpoint; missing or different
+server metadata is an unsupported provider configuration, not a missing ticket.
+After a local startup failure, Cursor retains the Task assignment and allows a
+fresh lookup with either pre-hook order.
+
+The provider parser accepts two explicit input contracts: the observed Codex
+connector `CallToolResult` containing one JSON-text issue with shorthand `id` and
+immutable `uuid`, or a normalized issue object with shorthand `identifier` and
+UUID `id`. Both must match the requested ticket and contain a valid UUID. The
+normalized object is a tested adapter contract; it is not evidence that an
+installed native Linear MCP server returned that shape. Unexpected provider
+shapes produce a specific invalid-response diagnostic without creating a workspace.
+
+Typed missing-ticket errors and the observed Codex missing-reference envelope
+stop without workspace creation. The latter identifies `INVALID_ARGUMENT` with
+one exact structured error: `invalid_request`, status 400, the provider's
+missing-reference message and a request ID. Generic invalid arguments remain
+provider errors. Authentication, permission, network and invalid-response failures
+retain their distinct diagnostics. Provider text is data; it grants no execution
+authority. The orchestrator reads and hashes actual assigned source bytes before
+acknowledgment.
+
+[Codex documents native hook decisions for calls nested in JavaScript code
+mode](https://learn.chatgpt.com/docs/hooks#tool-calls-from-code-mode). A visible
+execution wrapper does not by itself identify the native callback shape. If a
+runtime exposes only an opaque wrapper, that wrapper gets no pre-readiness tool
+exemption.
+
+Tests exercise these protocols with synthetic events. Installed configuration,
+callback delivery and real provider round trips require separate evidence for
+**each** runtime. Another runtime can implement the same shared startup contract
+through its own verified adapter; it does not inherit support from these three.
 
 ### Codex bootstrap tool input
 
@@ -147,7 +209,8 @@ These rules are implemented in `adapters/common.py`, `adapters/claude.py`, and `
 | --- | --- | --- |
 | Identity | Exact native session ID; reject child markers | Exact conversation ID; require any session ID to match; one workspace root |
 | Ordinary tools | Read, Write, Edit, Glob, Grep, NotebookEdit; foreground Bash under the setting above | Read, Write, Edit, Grep, Delete; Shell with supported foreground arguments |
-| Admission | Deny on failed readiness; otherwise return no permission decision | Return allow only for the particular validated recovery or admitted tool call |
+| Ticket-first startup | Exact configured Linear issue read before readiness; matching native completion runs shared startup | Exact Linear issue read with generic call-ID and MCP server checks before shared startup |
+| Admission | Deny on failed readiness outside the ticket-read/recovery exceptions; otherwise preserve native permission decisions | Allow only the particular validated ticket-read, recovery or ordinary tool call |
 | File-tool completion | Supported success/failure event and required payload settle the observed call | Same; native failure type is checked |
 | Shell completion | Successful Bash result with string stdout/stderr, `interrupted: false`, and no async markers | Successful Shell result with integer `exitCode` and no async markers |
 | Ambiguous shell result/failure | Retain pending operation and report recovery | Same; booleans are not exit codes |
@@ -186,14 +249,16 @@ provides `CURSOR_VERSION` to hook processes.
 The Claude shell entry and Python main exit silently when that variable is present, before reading
 input or touching lifecycle state. Only the native Cursor adapter owns those events. This is a
 no-decision duplicate skip, not an unconditional permission grant. No global import setting is
-changed. Cursor registers generic pre/post hooks only, avoiding a second shell/file admission path.
+changed. Cursor uses generic pre/post hooks for ordinary tools and native call identity.
+Its MCP-specific pre-hook additionally checks ticket-read server routing; the
+MCP-specific post-hook does not duplicate completion or lifecycle mutation.
 
 ## Validation and remaining evidence
 
 Disposable tests exercise both translators, core mutations, malformed envelopes, native response
 shapes, duplicate callbacks, host separation, strict bootstrap rejection, and imported-hook skipping.
-The existing Codex behavior remains covered by its regression suite. Native protocol tests use
-synthetic events; they are not actual host callbacks.
+All three adapters have ticket-first startup regression coverage. Native protocol
+tests use synthetic events; they are not actual host callbacks.
 
 Before claiming actual-host acceptance, use a disposable registered repository and retain:
 

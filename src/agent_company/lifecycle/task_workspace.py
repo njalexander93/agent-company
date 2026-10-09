@@ -165,7 +165,7 @@ def canonical(value: object) -> bytes:
     """Serialize a value into the deterministic UTF-8 form used by digests.
 
     Args:
-        value: Value to validate or encode under this helper's contract.
+        value: JSON-serializable value whose deterministic representation is required.
 
     Returns:
         Canonical JSON bytes.
@@ -217,7 +217,7 @@ def token(value: str) -> str:
     """Validate a bounded printable ASCII identity token.
 
     Args:
-        value: Value to validate or encode under this helper's contract.
+        value: Identity token received from a request or persisted record.
 
     Returns:
         The validated token.
@@ -225,6 +225,7 @@ def token(value: str) -> str:
     Raises:
         WorkspaceError: If the token is empty, oversized or contains unsafe characters.
     """
+    # Reject empty, oversized or non-printable identity tokens before returning them.
     require(
         isinstance(value, str) and 0 < len(value) <= 160 and all(32 < ord(c) < 127 for c in value)
     )
@@ -235,7 +236,7 @@ def issue_id(value: str) -> str:
     """Validate the strict issue identifier used as a directory component.
 
     Args:
-        value: Value to validate or encode under this helper's contract.
+        value: Human issue identifier, such as AGENT-30.
 
     Returns:
         The validated issue identifier.
@@ -243,6 +244,7 @@ def issue_id(value: str) -> str:
     Raises:
         WorkspaceError: If the identifier violates the issue grammar.
     """
+    # Validate the identifier before it can become an issue-directory component.
     require(isinstance(value, str) and ISSUE.fullmatch(value), "INVALID_ISSUE")
     return value
 
@@ -251,7 +253,7 @@ def payload_path(value: str, events: bool = False) -> str:
     """Allow only supported issue payload paths and optional event files.
 
     Args:
-        value: Value to validate or encode under this helper's contract.
+        value: Relative roadmap, context-note or event-stream locator.
         events: Whether the event stream and immutable segment paths are permitted.
 
     Returns:
@@ -260,6 +262,7 @@ def payload_path(value: str, events: bool = False) -> str:
     Raises:
         WorkspaceError: If the path is outside the payload grammar.
     """
+    # Restrict payload access to the documented relative-path grammar.
     require(
         isinstance(value, str)
         and ".." not in value
@@ -286,12 +289,16 @@ def decode(value: str, limit: int = MAX_FILE) -> bytes:
     Raises:
         WorkspaceError: If encoding or size validation fails.
     """
+    # Bound encoded input before allocating decoded bytes.
     require(isinstance(value, str) and len(value) <= (limit + 2) // 3 * 4, "SIZE_LIMIT")
+    # Decode only strict base64 and translate malformed input to an integrity failure.
     try:
         # Reject invalid base64 before checking the decoded byte budget.
         result = base64.b64decode(value, validate=True)
+    # Report malformed base64 without exposing decoder details.
     except ValueError:
         raise WorkspaceError("INTEGRITY_ERROR") from None
+    # Enforce the decoded budget independently of the encoded-length bound.
     require(len(result) <= limit, "SIZE_LIMIT")
     return result
 
@@ -333,6 +340,7 @@ def strict_json(data: bytes | str) -> Any:
         Raises:
             WorkspaceError: If any key occurs more than once.
         """
+        # Allocate one object for the parser-supplied key/value sequence.
         result = {}
         # Reject duplicate keys instead of silently accepting the last value.
         for key, value in items:
@@ -340,12 +348,14 @@ def strict_json(data: bytes | str) -> Any:
             result[key] = value
         return result
 
+    # Parse with duplicate-key and non-finite-number rejection enabled.
     try:
         return json.loads(
             data,
             object_pairs_hook=pairs,
             parse_constant=lambda _: (_ for _ in ()).throw(WorkspaceError("INVALID_REQUEST")),
         )
+    # Translate syntax and encoding failures into the public request diagnostic.
     except (ValueError, UnicodeError):
         raise WorkspaceError("INVALID_REQUEST") from None
 
@@ -354,11 +364,35 @@ class Directory(NativeDirectory):
     """Add canonical lifecycle JSON to the platform filesystem boundary."""
 
     def json(self, name: str) -> Any:
-        """Read a bounded safe file and decode strict JSON."""
+        """Read a bounded safe file and decode strict JSON.
+
+        Args:
+            name: Direct file name under this opened directory.
+
+        Returns:
+            The decoded JSON value, with duplicate keys and non-finite values rejected.
+
+        Raises:
+            WorkspaceError: If the file is unsafe, oversized or contains invalid JSON.
+            OSError: If the file cannot be read.
+        """
+        # Read through the filesystem boundary before parsing untrusted JSON.
         return strict_json(self.read(name))
 
     def put(self, name: str, value: object) -> None:
-        """Publish canonical JSON through the platform atomic file writer."""
+        """Publish canonical JSON through the platform atomic file writer.
+
+        Args:
+            name: Direct destination file name under this opened directory.
+            value: JSON-serializable value to publish atomically.
+
+        Raises:
+            WorkspaceError: If the destination violates the filesystem boundary.
+            ValueError: If the value contains non-finite numbers.
+            TypeError: If the value cannot be serialized as JSON.
+            OSError: If atomic publication fails.
+        """
+        # Canonicalize the value and atomically replace the validated destination.
         self.write(name, canonical(value))
 
 
@@ -366,14 +400,16 @@ def git(path: str | Path, *args: str) -> str:
     """Run a bounded Git query without an interactive prompt.
 
     Args:
-        path: Path to validate or access within the stated filesystem boundary.
+        path: Directory in the checkout whose Git metadata is queried.
         args: Git argument words passed without shell interpolation.
 
     Returns:
         Stripped UTF-8 command output.
 
     Raises:
-        subprocess.SubprocessError: If Git fails or exceeds the timeout.
+        WorkspaceError: If Git returns a nonzero status.
+        subprocess.SubprocessError: If Git exceeds the timeout.
+        OSError: If Git cannot be launched.
     """
     # Query Git with separate arguments and a bounded runtime.
     result = subprocess.run(
@@ -392,7 +428,7 @@ def repository(path: str | Path) -> tuple[Path, Path, list[Path]]:
     """Resolve a non-bare worktree to its common Git directory and member roots.
 
     Args:
-        path: Path to validate or access within the stated filesystem boundary.
+        path: Directory inside the requested Git worktree.
 
     Returns:
         A tuple of worktree root, common Git directory and worktree paths.
@@ -418,7 +454,7 @@ def fs_identity(path: str | Path) -> list[int]:
     """Read an absolute directory device/inode identity through safe traversal.
 
     Args:
-        path: Path to validate or access within the stated filesystem boundary.
+        path: Absolute directory path to traverse without following links.
 
     Returns:
         The directory device and inode pair.
@@ -427,6 +463,7 @@ def fs_identity(path: str | Path) -> list[int]:
         WorkspaceError: If directory validation fails.
         OSError: If the path cannot be opened.
     """
+    # Open the directory through the platform no-follow traversal boundary.
     with Directory.absolute(path) as directory:
         return directory.identity
 
@@ -444,6 +481,7 @@ def register(request: JSONObject) -> JSONObject:
         WorkspaceError: If repository identities or startup scope conflict.
         OSError: If store creation or persistence fails.
     """
+    # Verify that the requested main directory belongs to this worktree family.
     root, common, trees = repository(request["worktree"])
     main = Path(request["main_worktree"])
     require(main == trees[0] and main in trees, "REPOSITORY_MISMATCH")
@@ -456,6 +494,7 @@ def register(request: JSONObject) -> JSONObject:
         "common_identity": fs_identity(common),
         "main_identity": fs_identity(main),
     }
+    # Serialize shared registration before publishing either registration copy.
     with (
         Directory.absolute(main) as directory,
         directory.child(".task", True) as task,
@@ -468,8 +507,10 @@ def register(request: JSONObject) -> JSONObject:
             require(all(existing[k] == v for k, v in identity.items()), "REPOSITORY_MISMATCH")
             identity = existing
         else:
+            # Allocate a repository identity only when no canonical registration exists.
             identity["repo_id"] = str(uuid.uuid4())
             control.put("repository.json", identity)
+        # Publish the matching registration in the selected worktree.
         with Directory.absolute(root) as worktree, worktree.child(".task", True) as local:
             # Validate any existing entry before reusing or replacing it.
             if local.exists(".repository.json"):
@@ -488,6 +529,7 @@ def register(request: JSONObject) -> JSONObject:
                 require(setup["coordinator"] == key, "NOT_OWNER")
                 validate_packet(setup["packet"])
                 require(all(ref["reader"] == key for ref in setup["packet"]), "SCOPE_MISSING")
+                # Open the local session-binding directory for the explicit startup assignment.
                 with local.child(".bindings", True) as bindings:
                     name = key + ".startup.json"
                     # Validate any existing entry before reusing or replacing it.
@@ -515,6 +557,7 @@ class Store:
         self.request = request
         self.root, common, trees = repository(request["worktree"])
         self.handles: list[Directory] = []
+        # Open and validate store descriptors within a cleanup-protected lifetime.
         try:
             self.local_root = self.keep(Directory.absolute(self.root))
             self.local = self.keep(self.local_root.child(".task"))
@@ -535,6 +578,7 @@ class Store:
             require(self.control.json("repository.json") == reg, "REPOSITORY_MISMATCH")
             self.issues = self.keep(self.control.child("issues", True))
             self.bindings = self.keep(self.local.child(".bindings", True))
+        # Release partially opened descriptors before propagating initialization failure.
         except BaseException:
             self.close()
             raise
@@ -548,6 +592,7 @@ class Store:
         Returns:
             The supplied directory handle.
         """
+        # Retain ownership of the opened descriptor until store cleanup.
         self.handles.append(directory)
         return directory
 
@@ -560,6 +605,7 @@ class Store:
         # Close child descriptors before their parents, including partial initialization.
         for directory in reversed(self.handles):
             directory.close()
+        # Clear descriptor ownership after reverse-order cleanup completes.
         self.handles = []
 
     def __enter__(self) -> Store:
@@ -579,6 +625,7 @@ class Store:
         Raises:
             OSError: If descriptor cleanup fails.
         """
+        # Release the store handles when the context manager exits.
         self.close()
 
     def binding(self) -> JSONObject | None:
@@ -591,6 +638,7 @@ class Store:
             WorkspaceError: If stored binding data is unsafe or malformed.
             OSError: If binding access fails.
         """
+        # Select only the binding file for this explicit host/session identity.
         name = participant_key(self.request) + ".json"
         return self.bindings.json(name) if self.bindings.exists(name) else None
 
@@ -605,6 +653,7 @@ class Store:
             WorkspaceError: If binding publication violates file safety checks.
             OSError: If the binding cannot be persisted.
         """
+        # Persist the issue and committed participant generation together.
         self.bindings.put(
             participant + ".json",
             {
@@ -628,8 +677,10 @@ class Store:
         # The main worktree already exposes the canonical payload.
         if str(self.root) == self.registration["main"]:
             return
+        # Resolve this linked worktree view to the canonical issue directory.
         target = str(Path(self.registration["main"]) / ".task" / issue)
         self.local.issue_view(issue, target)
+        # Verify that the canonical issue directory can be opened safely.
         with self.task.child(issue):
             pass
 
@@ -675,6 +726,7 @@ def inventory(directory: Directory, require_roadmap: bool = True) -> PayloadFile
         WorkspaceError: If a payload path, metadata file or required roadmap is unsafe.
         OSError: If enumeration or file access fails.
     """
+    # Collect only validated task payload bytes from this issue directory.
     result = {}
     # Inspect only direct issue entries under the opened directory descriptor.
     for name in directory.names():
@@ -694,8 +746,10 @@ def inventory(directory: Directory, require_roadmap: bool = True) -> PayloadFile
                     path = payload_path("context/" + note)
                     result[path] = context.read(note, MAX_FILE)
         else:
+            # Validate and read an allowed issue-root payload or event file.
             payload_path(name, events=True)
             result[name] = directory.read(name, MAX_FILE)
+    # Require the roadmap unless the caller is inspecting an incomplete transaction.
     require(not require_roadmap or "roadmap.md" in result, "RECOVERY_REQUIRED")
     return result
 
@@ -717,19 +771,22 @@ def write_payload(directory: Directory, path: str, data: bytes) -> None:
 
     Args:
         directory: Opened Directory handle for the relevant payload or store.
-        path: Path to validate or access within the stated filesystem boundary.
-        data: Exact input bytes to inspect or transform.
+        path: Validated relative roadmap, context-note or event-stream destination.
+        data: Complete replacement bytes for the selected payload file.
 
     Raises:
         WorkspaceError: If the payload path or destination is unsafe.
         OSError: If directory creation or file publication fails.
     """
+    # Validate the complete relative destination before choosing a parent directory.
     payload_path(path, events=True)
     # Route context writes through the opened context directory, not arbitrary traversal.
     if path.startswith("context/"):
+        # Open the context parent before publishing its direct child file.
         with directory.child("context", True, private=False) as context:
             context.write(path[8:], data)
     else:
+        # Publish a validated issue-root file without traversing arbitrary paths.
         directory.write(path, data)
 
 
@@ -737,7 +794,7 @@ def validate_events(data: bytes, seq: int = 0, prior: str | None = None) -> tupl
     """Validate complete event lines against sequence and digest-chain anchors.
 
     Args:
-        data: Exact input bytes to inspect or transform.
+        data: Newline-delimited event records extending the supplied chain anchors.
         seq: Sequence immediately before these lines, or zero for initial history.
         prior: Digest immediately before these lines, or None at history start.
 
@@ -747,6 +804,7 @@ def validate_events(data: bytes, seq: int = 0, prior: str | None = None) -> tupl
     Raises:
         WorkspaceError: If a line, sequence or chain digest is invalid.
     """
+    # Reject an incomplete event tail before validating individual records.
     require(not data or data.endswith(b"\n"), "INTEGRITY_ERROR")
     # Validate every complete event against the expected sequence and prior digest.
     for line in data.splitlines():
@@ -775,6 +833,7 @@ def validate_history(files: PayloadFiles) -> tuple[int, str | None]:
     Raises:
         WorkspaceError: If segment ranges or event-chain integrity fail.
     """
+    # Start retained-history validation from the initial chain anchor.
     seq, head = 0, None
     # Validate retained segment ranges before continuing into the active stream.
     for path in sorted(p for p in files if SEGMENT.fullmatch(p)):
@@ -784,6 +843,7 @@ def validate_history(files: PayloadFiles) -> tuple[int, str | None]:
         require(first == seq + 1 and last >= first, "INTEGRITY_ERROR")
         seq, head = validate_events(files[path], seq, head)
         require(seq == last, "INTEGRITY_ERROR")
+    # Continue the validated segment chain through the active event stream.
     return validate_events(files.get("events.jsonl", b""), seq, head)
 
 
@@ -802,7 +862,9 @@ class Issue:
             WorkspaceError: If existing state is unsafe or invalid JSON.
             OSError: If state access fails.
         """
+        # Retain the validated handles and identity for this issue lifetime.
         self.store, self.control, self.id = store, control, identifier
+        # Load existing control state only when its state file is present.
         self.state: WorkspaceState | None = (
             control.json("state.json") if control.exists("state.json") else None
         )
@@ -816,6 +878,7 @@ class Issue:
         Raises:
             AssertionError: If an internal caller violates the established-state contract.
         """
+        # Enforce the internal recovery/commit precondition before exposing state.
         assert self.state is not None
         return self.state
 
@@ -829,8 +892,10 @@ class Issue:
             WorkspaceError: If identity, manifest or event integrity fails.
             OSError: If payload access or tail quarantine fails.
         """
+        # Require a retained payload before inspecting its committed inventory.
         require(self.state and self.state["storage"] != "cleaned", "RECOVERY_REQUIRED")
         assert self.state is not None  # Established by the recovery guard above.
+        # Open and validate the canonical payload under its retained directory handle.
         with self.store.task.child(self.id, private=False) as payload:
             require(payload.identity == self.state["directory_identity"], "UNSAFE_PATH")
             result = inventory(payload)
@@ -843,6 +908,7 @@ class Issue:
             # Quarantine only uncommitted tail bytes; never truncate an altered committed prefix.
             if tail and manifest(corrected) == self.state["files"]:
                 self.control.write("interrupted-tail-" + sha(tail), tail)
+                # Replace only the interrupted event tail after its prefix was verified.
                 with self.store.task.child(self.id, private=False) as payload:
                     payload.write("events.jsonl", prefix)
                 result = corrected
@@ -850,7 +916,9 @@ class Issue:
                     "diagnostic-loss.json", {"discarded_tail_bytes": len(tail), "at": now()}
                 )
             else:
+                # Retain altered payloads that cannot be explained by an interrupted tail.
                 raise WorkspaceError("UNTRACKED_CHANGE")
+        # Verify the recovered payload reproduces the committed event-chain head.
         seq, head = validate_history(result)
         require(seq == self.state["seq"] and head == self.state["head"], "INTEGRITY_ERROR")
         return result
@@ -865,16 +933,21 @@ class Issue:
         # Skip recovery when no durable transaction intent exists.
         if not self.control.exists("transaction.json"):
             return
+        # Load the durable recovery intent and its intended state.
         tx = self.control.json("transaction.json")
         state = tx["state"]
         # Before any publication, prove every file is either its old or staged version.
         if not self.store.task.exists(self.id):
             require(tx["base"] is None, "RECOVERY_REQUIRED")
+            # Create a missing payload directory only for an initialization transaction.
             with self.store.task.child(self.id, True, private=False):
                 pass
+        # Open and validate the canonical payload under its retained directory handle.
         with self.store.task.child(self.id, private=False) as payload:
+            # For an existing payload, require the original directory identity.
             if tx["base"] is not None:
                 require(payload.identity == tx["directory_identity"], "UNSAFE_PATH")
+            # Inventory partial payload bytes before applying staged writes.
             present = inventory(payload, require_roadmap=False)
             require(set(present) <= set(state["files"]), "UNTRACKED_CHANGE")
             # Prove each present file matches either the old or intended transaction digest.
@@ -885,6 +958,7 @@ class Issue:
             for path, data in tx["writes"].items():
                 write_payload(payload, path, decode(data))
                 fault("payload:" + path)
+            # Ensure the context directory exists and flush the complete intended payload.
             payload.child("context", True, private=False).close()
             require(manifest(inventory(payload)) == state["files"], "RECOVERY_REQUIRED")
             state["directory_identity"] = payload.identity
@@ -924,6 +998,7 @@ class Issue:
         """
         # Validate the old committed inventory before staging any replacement bytes.
         old_files = self.files() if self.state else {}
+        # Append a lifecycle fact only when this operation changes recorded history.
         if event_type:
             require(
                 request.get("event") is None or request["operation"] == "event", "INVALID_REQUEST"
@@ -1026,6 +1101,7 @@ def authorize(
     Raises:
         WorkspaceError: If binding, generation, status or ownership is invalid.
     """
+    # Resolve the participant and enforce its current binding generation.
     key = participant_key(request)
     participant = state["participants"].get(key)
     require(participant is not None, "BINDING_MISSING")
@@ -1036,6 +1112,7 @@ def authorize(
         in ({"attached", "ready", "maintenance"} if maintenance else {"attached", "ready"}),
         "STALE_BINDING",
     )
+    # Enforce coordinator ownership only for operations that request it.
     require(not coordinator or state["coordinator"] == key, "NOT_OWNER")
     return key, participant
 
@@ -1057,7 +1134,7 @@ def evidence(value: list[EvidenceRef] | None) -> list[EvidenceRef]:
     """Validate a bounded list of attributable evidence references.
 
     Args:
-        value: Value to validate or encode under this helper's contract.
+        value: Required evidence records, each naming a locator and exact SHA-256 digest.
 
     Returns:
         The validated reference list.
@@ -1065,6 +1142,7 @@ def evidence(value: list[EvidenceRef] | None) -> list[EvidenceRef]:
     Raises:
         WorkspaceError: If evidence fields, locators or digests are invalid.
     """
+    # Require a nonempty bounded evidence list before inspecting references.
     require(isinstance(value, list) and 0 < len(value) <= 16, "EVIDENCE_REQUIRED")
     assert value is not None  # Established by the evidence shape guard above.
     # Require attributable evidence with bounded locators and content digests.
@@ -1093,6 +1171,7 @@ def validate_packet(packet: list[SourceRef]) -> list[SourceRef]:
     Raises:
         WorkspaceError: If packet shape, reference uniqueness or path rules fail.
     """
+    # Validate the packet container before checking reader-scoped references.
     require(isinstance(packet, list) and len(packet) <= 64, "SCOPE_MISSING")
     identifiers = set()
     # Require unique reference IDs and explicit reader, authority, and lifecycle scope.
@@ -1107,9 +1186,11 @@ def validate_packet(packet: list[SourceRef]) -> list[SourceRef]:
         require(ref["id"] not in identifiers and DIGEST.fullmatch(ref["sha256"]), "SCOPE_MISSING")
         identifiers.add(ref["id"])
         require(type(ref["required"]) is bool, "SCOPE_MISSING")
+        # Validate every field used to attribute authority and reader scope.
         for field in ("authority", "reason", "stage", "reader"):
             token(ref[field])
         locator = ref["locator"]
+        # Restrict relative locators to managed task payload paths.
         if not Path(locator).is_absolute():
             payload_path(locator, events=True)
     return packet
@@ -1131,25 +1212,30 @@ def packet_reads(
     Raises:
         WorkspaceError: If the packet is missing or a required source is stale.
     """
+    # Require an assigned source packet before resolving any source bytes.
     require(participant.get("packet") is not None, "SCOPE_MISSING")
     assert participant["packet"] is not None  # Established by the scope guard above.
     refs: list[SourceAvailability] = []
     # Read only assigned references and compare their exact content digests.
     for ref in participant["packet"]:
         data = None
+        # Resolve each reference through the appropriate filesystem boundary.
         try:
             # Open external references safely; resolve relative references from
             # validated payload bytes.
             if Path(ref["locator"]).is_absolute():
                 path = Path(ref["locator"])
+                # Read the assigned external source beneath a validated parent handle.
                 with Directory.absolute(path.parent) as parent:
                     data = parent.read(path.name, MAX_FILE)
             else:
+                # Resolve managed references from the already validated issue payload bytes.
                 data = files.get(ref["locator"])
         except (OSError, WorkspaceError):
             # Missing optional sources remain unavailable; required sources block readiness.
             if ref["required"]:
                 raise WorkspaceError("SOURCE_STALE") from None
+        # Compare exact source bytes and retain availability for optional references.
         valid = data is not None and sha(data) == ref["sha256"]
         require(valid or not ref["required"], "SOURCE_STALE")
         refs.append({**ref, "available": valid})
@@ -1169,8 +1255,10 @@ def new_state(store: Store, request: JSONObject) -> WorkspaceState:
     Raises:
         WorkspaceError: If coordinator or issue identity is invalid.
     """
+    # Verify that the explicitly named coordinator is the initiating participant.
     key = participant_key(request)
     require(request.get("coordinator") == key, "NOT_OWNER")
+    # Construct initial state without importing ownership or history from another issue.
     return {
         "schema_version": 1,
         "repo_id": store.registration["repo_id"],
@@ -1204,6 +1292,7 @@ def attach(state: WorkspaceState, request: JSONObject) -> JSONObject:
     Raises:
         WorkspaceError: If disposition, storage, assignment or generation forbids attachment.
     """
+    # Require active retained state before attaching or resuming this participant.
     key = participant_key(request)
     require(
         state["disposition"] not in TERMINAL and state["storage"] == "present", "RECOVERY_REQUIRED"
@@ -1228,6 +1317,7 @@ def attach(state: WorkspaceState, request: JSONObject) -> JSONObject:
             participant["status"] = "attached"
             participant["ack"] = None
     else:
+        # Create a participant only for the coordinator or an explicit prior assignment.
         require(key == state["coordinator"] or key in state.get("assignments", {}), "SCOPE_MISSING")
         assignment: Assignment | dict[str, list[SourceRef]] = state.get("assignments", {}).get(
             key, {}
@@ -1253,6 +1343,7 @@ def archive_payload(state: WorkspaceState, files: PayloadFiles) -> JSONObject:
     Returns:
         The versioned snapshot, including segment lineage when present.
     """
+    # Capture exact task bytes, lineage and outcome evidence for reconstruction.
     result = {
         "schema_version": 1,
         "repo_id": state["repo_id"],
@@ -1310,7 +1401,9 @@ def parse_document(content: str) -> JSONObject:
     Raises:
         WorkspaceError: If size, fenced-block count or JSON validation fails.
     """
+    # Bound provider text before locating its structured archive block.
     require(isinstance(content, str) and len(content.encode()) <= DOCUMENT_LIMIT, "SIZE_LIMIT")
+    # Select exactly one fenced JSON value, rejecting ambiguous provider content.
     matches = re.findall(r"^```json[ \t]*\n(.*?)\n```[ \t]*$", content, re.S | re.M)
     require(len(matches) == 1, "INTEGRITY_ERROR")
     parsed: JSONObject = strict_json(matches[0])
@@ -1383,6 +1476,7 @@ def provider_observation(item: JSONObject, issue_uuid: str) -> JSONObject:
     Raises:
         WorkspaceError: If observation identity, shape or content is invalid.
     """
+    # Require the complete provider-observation shape before reading its identity fields.
     require(
         isinstance(item, dict)
         and set(item) == {"id", "url", "issue", "updatedAt", "content", "origin", "request_id"},
@@ -1391,6 +1485,7 @@ def provider_observation(item: JSONObject, issue_uuid: str) -> JSONObject:
     require(
         item["issue"] == issue_uuid and item["origin"] == "linear_get_document", "ARCHIVE_PENDING"
     )
+    # Validate the provider identity, version and read-back request tokens.
     for field in ("id", "updatedAt", "request_id"):
         token(item[field])
     require(
@@ -1415,6 +1510,7 @@ def verify_provider(
     Raises:
         WorkspaceError: If parent, snapshot, parts, versions, digests or event history disagree.
     """
+    # Bound the supplied read-back set before reconstructing archive content.
     require(isinstance(observations, list) and 2 <= len(observations) <= 514, "ARCHIVE_PENDING")
     assert observations is not None  # Established by the observation shape guard above.
     # Check read-back origins and parent identities before selecting the single root index.
@@ -1491,6 +1587,7 @@ def eligible(state: WorkspaceState) -> None:
     Raises:
         WorkspaceError: If participation, disposition or archive evidence requires retention.
     """
+    # Require a recorded terminal outcome before considering destructive cleanup.
     require(state["disposition"] in TERMINAL and state.get("outcome"), "RETAINED")
     require(
         all(
@@ -1499,6 +1596,7 @@ def eligible(state: WorkspaceState) -> None:
         ),
         "RETAINED",
     )
+    # Require both the frozen export and its independently verified receipt.
     require(state.get("export") and state.get("archive"), "ARCHIVE_PENDING")
 
 
@@ -1506,12 +1604,13 @@ def finish_cleanup(issue: Issue) -> None:
     """Finish only the recorded issue quarantine after validating its remaining tree.
 
     Args:
-        issue: The issue handle or identifier to operate on.
+        issue: Locked issue whose durable cleanup intent may be resumed.
 
     Raises:
         WorkspaceError: If identity, metadata safety or remaining payload digests differ.
         OSError: If quarantine, deletion or tombstone publication fails.
     """
+    # Select the issue control and payload handles that own cleanup state.
     control, task = issue.control, issue.store.task
     # Leave payloads untouched unless a durable cleanup intent names them.
     if not control.exists("cleanup.json"):
@@ -1521,6 +1620,7 @@ def finish_cleanup(issue: Issue) -> None:
     # Move only the identity- and manifest-matching issue into its recorded quarantine.
     if task.exists(issue.id):
         require(not control.exists(name), "RECOVERY_REQUIRED")
+        # Verify the live payload identity and manifest before quarantine.
         with task.child(issue.id, private=False) as payload:
             require(
                 payload.identity == intent["directory_identity"]
@@ -1531,6 +1631,7 @@ def finish_cleanup(issue: Issue) -> None:
         fault("quarantine")
     # Resume deletion only inside the recorded quarantine with the original directory identity.
     if control.exists(name):
+        # Reopen only the recorded quarantine directory for bounded deletion.
         with control.child(name, private=False) as payload:
             require(payload.identity == intent["directory_identity"], "UNSAFE_PATH")
             names = payload.names()
@@ -1546,6 +1647,7 @@ def finish_cleanup(issue: Issue) -> None:
             remaining = {}
             # Read every remaining quarantine entry before deleting any payload bytes.
             for entry in names:
+                # Read context entries beneath their validated parent directory.
                 if entry == "context":
                     with payload.child("context", private=False) as context:
                         # Validate each direct context entry without
@@ -1553,6 +1655,7 @@ def finish_cleanup(issue: Issue) -> None:
                         for note in context.names():
                             remaining["context/" + note] = context.read(note, MAX_FILE)
                 else:
+                    # Read root quarantine entries before considering any deletion.
                     remaining[entry] = payload.read(entry, MAX_FILE)
             require(
                 all(
@@ -1565,9 +1668,11 @@ def finish_cleanup(issue: Issue) -> None:
             for path in sorted(remaining):
                 # Delete context entries relative to their validated parent descriptor.
                 if path.startswith("context/"):
+                    # Open the validated context parent before unlinking one child.
                     with payload.child("context", private=False) as context:
                         context.unlink(path[8:])
                 else:
+                    # Unlink a validated root entry relative to the quarantine descriptor.
                     payload.unlink(path)
                 fault("delete:" + path)
             # Remove the context directory only after all validated entries have been unlinked.
@@ -1588,6 +1693,7 @@ def finish_cleanup(issue: Issue) -> None:
     state.pop("provenance", None)
     # Discard local export copies after the independent provider archive has been verified.
     for name in control.names():
+        # Select only immutable export-copy filenames for local pruning.
         if re.fullmatch(r"export-[0-9a-f]{64}\.json", name):
             control.read(name)  # Refuse substituted links/special files before pruning.
             control.unlink(name)
@@ -1608,7 +1714,7 @@ def operate(store: Store, issue: Issue, request: JSONObject) -> JSONObject:
 
     Args:
         store: Validated shared repository Store.
-        issue: The issue handle or identifier to operate on.
+        issue: Issue opened under the caller-held control-directory lock.
         request: Versioned lifecycle request with explicit repository, issue and session identities.
 
     Returns:
@@ -1618,12 +1724,14 @@ def operate(store: Store, issue: Issue, request: JSONObject) -> JSONObject:
         WorkspaceError: If authorization, state, evidence or lifecycle constraints fail.
         OSError: If durable store operations fail.
     """
+    # Resolve the operation and explicit participant identity before state recovery.
     operation = request["operation"]
     key = participant_key(request)
     # Finish durable transaction recovery before evaluating this issue request.
     issue.recover()
     finish_cleanup(issue)
     state = copy.deepcopy(issue.state)
+    # Check existing issue identity and exact-request idempotency before dispatch.
     if state:
         require(
             not request.get("issue_uuid") or request["issue_uuid"] == state["issue_uuid"],
@@ -1633,6 +1741,7 @@ def operate(store: Store, issue: Issue, request: JSONObject) -> JSONObject:
         # Replay only an identical request; a reused ID with different content is a conflict.
         if previous:
             require(previous["digest"] == sha(canonical(request)), "REQUEST_CONFLICT")
+            # Restore worktree visibility and binding for retried attachment operations.
             if (
                 operation in {"create", "adopt", "attach", "resume", "bind", "restore"}
                 and state["storage"] != "cleaned"
@@ -1642,9 +1751,11 @@ def operate(store: Store, issue: Issue, request: JSONObject) -> JSONObject:
                 store.save_binding(state, key)
             result: JSONObject = previous["result"].copy()
             reference = result.pop("result_ref", None)
+            # Load a retained immutable export result for an archive-preparation retry.
             if reference:
                 result.update(issue.control.json(reference))
             return result
+    # Return issue presence and storage state without changing participation.
     if operation == "diagnose":
         return {
             "ok": True,
@@ -1656,7 +1767,8 @@ def operate(store: Store, issue: Issue, request: JSONObject) -> JSONObject:
         }
     # Read the existing session binding; never infer it from the prompt.
     binding = store.binding()
-    if operation in {"create", "adopt", "attach", "resume", "bind"}:
+    # Prevent attachment operations from reusing another issue binding.
+    if operation in {"create", "adopt", "attach", "resume", "bind", "join"}:
         require(not binding or binding["issue_id"] == issue.id, "BINDING_CONFLICT")
     # Require explicit adoption for existing payloads and explicit creation for absent ones.
     if not state:
@@ -1666,8 +1778,10 @@ def operate(store: Store, issue: Issue, request: JSONObject) -> JSONObject:
             exists == (operation == "adopt"), "ADOPTION_REQUIRED" if exists else "RECOVERY_REQUIRED"
         )
         state = new_state(store, request)
+        # Import inspected existing payloads only with evidence and complete ownership.
         if operation == "adopt":
             evidence(request.get("evidence"))
+            # Inventory the adopted directory before comparing the caller-supplied manifest.
             with store.task.child(issue.id, private=False) as payload:
                 files = inventory(payload)
             require(request.get("inventory") == manifest(files), "UNTRACKED_CHANGE")
@@ -1718,6 +1832,7 @@ def operate(store: Store, issue: Issue, request: JSONObject) -> JSONObject:
         state["checkpoint_history"] = snapshot.get("checkpoint_history", [])
         state["outcome_history"] = snapshot.get("outcome_history", [])
         state["generation"] += 1
+        # Fence every old participant generation before exposing restored state.
         for participant in state["participants"].values():
             participant.update(
                 {"status": "detached", "ack": None, "generation": participant["generation"] + 1}
@@ -1727,6 +1842,7 @@ def operate(store: Store, issue: Issue, request: JSONObject) -> JSONObject:
         # A durable initialization transaction restores the exact history before the reopen event.
         old = issue.state
         issue.state = None
+        # Publish restored bytes and the reopen event through normal transaction recovery.
         try:
             result = issue.commit(
                 state,
@@ -1735,6 +1851,7 @@ def operate(store: Store, issue: Issue, request: JSONObject) -> JSONObject:
                 {"binding_generation": state["participants"][key]["generation"]},
                 "restore",
             )
+        # Restore the in-memory state reference when restoration publication fails.
         except BaseException:
             issue.state = old
             raise
@@ -1754,6 +1871,7 @@ def operate(store: Store, issue: Issue, request: JSONObject) -> JSONObject:
         authorize(state, request, coordinator=True)
         expected(state, request)
         evidence(request.get("evidence"))
+        # Read the current payload through its original directory identity.
         with store.task.child(issue.id, private=False) as payload:
             require(payload.identity == state["directory_identity"], "UNSAFE_PATH")
             observed = inventory(payload)
@@ -1772,8 +1890,79 @@ def operate(store: Store, issue: Issue, request: JSONObject) -> JSONObject:
         issue.state["files"] = manifest(observed)
         state["reconciliation"] = {"previous": state["files"], "evidence": request["evidence"]}
         return issue.commit(state, observed, request, {}, "reconciliation")
+    # Load the validated committed payload before operating on participants or notes.
     files = issue.files()
     store.view(issue.id)
+    # Attach an independently identified reader without transferring coordinator authority.
+    if operation == "join":
+        # A verified-ticket startup may attach a new runtime session as a reader.
+        # The core chooses the complete packet; callers cannot provide source
+        # locators, ownership, or a replacement coordinator through this route.
+        require(
+            set(request)
+            <= {
+                "schema_version",
+                "request_id",
+                "operation",
+                "worktree",
+                "host",
+                "session_id",
+                "repo_id",
+                "issue_id",
+                "issue_uuid",
+                "expected_revision",
+                "binding_generation",
+            },
+            "INVALID_REQUEST",
+        )
+        require(request.get("issue_uuid") == state["issue_uuid"], "ISSUE_MISMATCH")
+        require(key != state["coordinator"], "NOT_OWNER")
+        expected(state, request)
+        require(
+            state["disposition"] not in TERMINAL and state["storage"] == "present",
+            "RECOVERY_REQUIRED",
+        )
+        # Build the reader packet from the committed roadmap digest, never caller locators.
+        join_packet: list[SourceRef] = [
+            {
+                "id": "roadmap",
+                "locator": "roadmap.md",
+                "sha256": state["files"]["roadmap.md"],
+                "required": True,
+                "authority": "task-workspace",
+                "reason": "issue-resume",
+                "stage": "planning",
+                "reader": key,
+            }
+        ]
+        join_existing = state["participants"].get(key)
+        # Refresh only an existing roadmap-only reader with a matching binding generation.
+        if join_existing:
+            join_previous = join_existing["packet"]
+            require(
+                binding and binding["binding_generation"] == request.get("binding_generation"),
+                "BINDING_MISSING",
+            )
+            require(
+                join_previous is not None
+                and len(join_previous) == 1
+                and join_previous[0] == {**join_packet[0], "sha256": join_previous[0]["sha256"]}
+                and state.get("assignments", {}).get(key) == {"packet": join_previous}
+                and key not in state["owners"].values(),
+                "SCOPE_MISSING",
+            )
+            join_existing.update({"packet": join_packet, "ack": None})
+        else:
+            # Reject a new reader that already has a different assigned scope.
+            require(key not in state.get("assignments", {}), "SCOPE_MISSING")
+        # Persist the bounded reader assignment before attachment and binding publication.
+        state.setdefault("assignments", {})[key] = {"packet": join_packet}
+        result = attach(state, request)
+        result = issue.commit(state, files, request, result, "attach")
+        store.view(issue.id)
+        store.save_binding(issue.committed_state(), key)
+        return result
+    # Resume an assigned participant through the shared attachment contract.
     if operation in {"create", "attach", "resume", "bind"}:
         result = attach(state, request)
         # Publish this lifecycle result through the recoverable transaction.
@@ -1788,6 +1977,7 @@ def operate(store: Store, issue: Issue, request: JSONObject) -> JSONObject:
         and binding["binding_generation"] == request.get("binding_generation"),
         "BINDING_MISSING",
     )
+    # Permit maintenance participation only for the enumerated archive and recovery routes.
     maintenance = operation in {
         "archive-prepare",
         "archive-index",
@@ -1801,6 +1991,7 @@ def operate(store: Store, issue: Issue, request: JSONObject) -> JSONObject:
     key, participant = authorize(state, request, maintenance=maintenance)
     result = {}
     event_type = operation
+    # Require current revision for state-changing operations, allowing exact preparation retries.
     if operation in {
         "scope",
         "update",
@@ -1816,8 +2007,10 @@ def operate(store: Store, issue: Issue, request: JSONObject) -> JSONObject:
             operation == "archive-prepare"
             and sha((request["request_id"] + ":prepare").encode()) in state["requests"]
         )
+        # Check the caller revision unless preparation already committed under this request.
         if not prepared:
             expected(state, request)
+    # Fence ordinary writes after terminal disposition while retaining recovery access.
     if operation not in {
         "read",
         "ready",
@@ -1833,6 +2026,7 @@ def operate(store: Store, issue: Issue, request: JSONObject) -> JSONObject:
         "archive-observe-save",
     }:
         require(state["disposition"] not in TERMINAL, "TERMINAL")
+    # Require coordinator authority for shared ownership, outcomes and archive operations.
     if operation in {
         "scope",
         "checkpoint",
@@ -1861,8 +2055,10 @@ def operate(store: Store, issue: Issue, request: JSONObject) -> JSONObject:
         if target in state["participants"]:
             target_state = state["participants"][target]
             target_state.update({"packet": packet, "ack": None})
+            # Invalidate readiness without reviving a detached participant generation.
             if target_state["status"] != "detached":
                 target_state["status"] = "attached"
+        # Assign only managed notes whose existing ownership agrees with the target reader.
         for path in request.get("owned_paths", []):
             payload_path(path)
             require(
@@ -1870,12 +2066,15 @@ def operate(store: Store, issue: Issue, request: JSONObject) -> JSONObject:
             )
             state["owners"][path] = target
         result["packet_digest"] = sha(canonical(packet))
+    # Validate the assigned bytes and establish or inspect exact-digest readiness.
     elif operation in {"read", "acknowledge", "ready"}:
         refs = packet_reads(state, participant, files)
         digest = sha(canonical(participant["packet"]))
+        # Record acknowledgment only for the current assigned packet digest.
         if operation == "acknowledge":
             require(request.get("packet_digest") == digest, "SOURCE_STALE")
             participant.update({"ack": digest, "status": "ready"})
+        # Require active disposition and a current acknowledged packet.
         elif operation == "ready":
             require(
                 state["disposition"] not in TERMINAL
@@ -1883,6 +2082,7 @@ def operate(store: Store, issue: Issue, request: JSONObject) -> JSONObject:
                 and participant["status"] == "ready",
                 "NOT_READY",
             )
+        # Return read-only packet evidence without creating a lifecycle event.
         if operation != "acknowledge":
             return {
                 "ok": True,
@@ -1919,6 +2119,7 @@ def operate(store: Store, issue: Issue, request: JSONObject) -> JSONObject:
         evidence(checkpoint["sources"])
         state.setdefault("checkpoint_history", []).append(checkpoint)
         state["checkpoint"] = checkpoint
+        # Move to review only when the checkpoint names a submitted PR URL.
         if request.get("submitted_pr"):
             require(str(request["submitted_pr"]).startswith("https://"), "EVIDENCE_REQUIRED")
             state["disposition"] = "in_review"
@@ -1939,11 +2140,14 @@ def operate(store: Store, issue: Issue, request: JSONObject) -> JSONObject:
                 set(request.get("completion", {})) == {"human_acceptance", "merge", "obligations"},
                 "EVIDENCE_REQUIRED",
             )
+            # Validate each category of human acceptance, merge and obligation evidence.
             for refs in request["completion"].values():
                 evidence(refs)
+                # Read and hash every completion source from its explicit absolute locator.
                 for ref in refs:
                     path = Path(ref["locator"])
                     require(path.is_absolute(), "EVIDENCE_REQUIRED")
+                    # Verify completion evidence bytes through safe parent-directory traversal.
                     with Directory.absolute(path.parent) as source:
                         require(
                             sha(source.read(path.name, MAX_FILE)) == ref["sha256"], "SOURCE_STALE"
@@ -1963,6 +2167,7 @@ def operate(store: Store, issue: Issue, request: JSONObject) -> JSONObject:
             )
             token(provider["request_id"])
             state["provider_completion"] = provider
+        # Require explicit abandonment evidence before recording failed disposition.
         if disposition == "failed":
             require(request.get("abandoned") is True, "EVIDENCE_REQUIRED")
         state["disposition"] = disposition
@@ -1995,6 +2200,7 @@ def operate(store: Store, issue: Issue, request: JSONObject) -> JSONObject:
         require(tool not in participant["pending"], "REQUEST_CONFLICT")
         # Associate an observed polling transport without borrowing another participant's work.
         pending: PendingOperation = {"status": "pending"}
+        # Bind a polling transport only to a unique pending process handle.
         if request.get("poll_handle") is not None:
             handle: str | None = token(request["poll_handle"])
             matches = [
@@ -2014,6 +2220,7 @@ def operate(store: Store, issue: Issue, request: JSONObject) -> JSONObject:
         tool = observed_tool
         handle = token(request["async_handle"]) if request.get("async_handle") is not None else None
         transport = None
+        # Resolve polling completion against its recorded original process.
         if request.get("poll"):
             # A poll must identify one original process, or its recorded completed parent.
             require(handle is not None, "UNKNOWN_OPERATION")
@@ -2023,6 +2230,7 @@ def operate(store: Store, issue: Issue, request: JSONObject) -> JSONObject:
                 if entry.get("handle") == handle
             ]
             transport = participant["pending"].get(observed_tool)
+            # Verify the transport-to-process relationship before settling either operation.
             if transport is not None:
                 # Validate the pre-hook's explicit relationship, including concurrent final polls.
                 require(
@@ -2039,19 +2247,23 @@ def operate(store: Store, issue: Issue, request: JSONObject) -> JSONObject:
                 tool = matches[0]
         # An already settled parent is allowed only through its still-recorded poll transport.
         require(tool in participant["pending"] or transport is not None, "UNKNOWN_OPERATION")
+        # Update or settle the original process only while its pending record exists.
         if tool in participant["pending"]:
             pending = participant["pending"][tool]
+            # Reject a completion that changes an already observed process handle.
             if handle is not None and pending.get("handle") is not None:
                 require(pending["handle"] == handle, "REQUEST_CONFLICT")
             # Explicit process completion wins only after the handle and relationship checks.
             if request.get("completed") is True:
                 del participant["pending"][tool]
+            # Retain asynchronous process uncertainty until typed completion is observed.
             elif handle is not None:
                 # A repeated process observation is event-free only when no transport is retiring.
                 if pending["status"] == "unknown" and transport is None:
                     event_type = None
                 participant["pending"][tool] = {"status": "unknown", "handle": handle}
             else:
+                # Keep the operation pending when completion carries no usable evidence.
                 raise WorkspaceError("UNKNOWN_OPERATION")
         # The returned polling call is finished even when its original process is still running.
         if transport is not None:
@@ -2116,6 +2328,7 @@ def operate(store: Store, issue: Issue, request: JSONObject) -> JSONObject:
     # Commit preparation before freezing the immutable reconstructable snapshot.
     elif operation == "archive-prepare":
         require(not any(p["pending"] for p in state["participants"].values()), "PENDING_OPERATION")
+        # Seal terminal work only after every other participant has detached.
         if request.get("seal"):
             require(
                 state["disposition"] in TERMINAL
@@ -2128,6 +2341,7 @@ def operate(store: Store, issue: Issue, request: JSONObject) -> JSONObject:
         # Commit seal/preparation event BEFORE the frozen snapshot.
         prepare_request = {**request, "request_id": request["request_id"] + ":prepare"}
         prior = state["requests"].get(sha(prepare_request["request_id"].encode()))
+        # Verify an exact preparation retry before reusing its frozen-state boundary.
         if prior:
             require(prior["digest"] == sha(canonical(prepare_request)), "REQUEST_CONFLICT")
         else:
@@ -2152,6 +2366,7 @@ def operate(store: Store, issue: Issue, request: JSONObject) -> JSONObject:
         observations = request["observations"]
         require(len(observations) == len(export["parts"]), "ARCHIVE_PENDING")
         descriptors = []
+        # Match every independent part read-back to the immutable requested content.
         for observed, wanted in zip(observations, export["parts"]):
             part = provider_observation(observed, state["issue_uuid"])
             require(part == parse_document(wanted["content"]), "ARCHIVE_PENDING")
@@ -2192,6 +2407,7 @@ def operate(store: Store, issue: Issue, request: JSONObject) -> JSONObject:
         digest = request["content_digest"]
         require(digest in {sha(doc["content"].encode()) for doc in documents}, "ARCHIVE_PENDING")
         saves = state.setdefault("provider_saves", {})
+        # Reserve a content digest before an uncertain external save can be retried.
         if operation == "archive-save-start":
             require(
                 digest not in saves,
@@ -2200,6 +2416,7 @@ def operate(store: Store, issue: Issue, request: JSONObject) -> JSONObject:
             )
             saves[digest] = {"status": "uncertain"}
         else:
+            # Record the observed provider document without allowing identity replacement.
             document_id = token(request["document_id"])
             existing = saves.get(digest, {})
             require(not existing.get("id") or existing["id"] == document_id, "ARCHIVE_PENDING")
@@ -2213,11 +2430,13 @@ def operate(store: Store, issue: Issue, request: JSONObject) -> JSONObject:
             and snapshot["revision"] == state["revision"] == state["export"]["revision"],
             "ARCHIVE_PENDING",
         )
+        # Retain the verified archive receipt without authorizing payload deletion.
         if operation == "archive-verify":
             state["archive"] = receipt
             result = {"receipt": receipt}
             event_type = None
         else:
+            # Recheck cleanup eligibility before preparing deletion intent.
             eligible(state)
             require(
                 receipt["root"]["id"] == state["archive"]["root"]["id"]
@@ -2267,6 +2486,7 @@ def operate(store: Store, issue: Issue, request: JSONObject) -> JSONObject:
         }
         event_type = None
     else:
+        # Reject operations outside the explicit lifecycle dispatch vocabulary.
         raise WorkspaceError("UNSUPPORTED_OPERATION")
     return issue.commit(state, files, request, result, event_type)
 
@@ -2285,10 +2505,12 @@ def rebind(store: Store, request: JSONObject) -> JSONObject:
         WorkspaceError: If target assignment, generations, pending work or retry identity conflicts.
         OSError: If either issue or binding cannot be persisted.
     """
+    # Validate distinct old and target issue identities before rebinding.
     old_id, new_id = issue_id(request["issue_id"]), issue_id(request["new_issue_id"])
     require(old_id != new_id, "BINDING_CONFLICT")
     key = participant_key(request)
     evidence(request.get("evidence"))
+    # Manage both issue-lock lifetimes as one ordered rebinding operation.
     with ExitStack() as stack:
         controls = {}
         # Lock both issues in stable order before retiring the old binding or attaching the new one.
@@ -2331,12 +2553,17 @@ def rebind(store: Store, request: JSONObject) -> JSONObject:
             store.view(new_id)
             # Persist the committed participant generation for this worktree.
             store.save_binding(new.committed_state(), key)
+            assignment = key + ".assignment.json"
+            # Refresh the explicit Task assignment after replaying the committed rebind.
+            if store.bindings.exists(assignment):
+                store.bindings.put(assignment, {"issue_id": new_id})
             previous_result: JSONObject = previous["result"]
             return previous_result
         result = attach(new_state_value, target_request)
         # Retire the old participant before publishing the new binding; retries can finish
         # publication.
         member.update({"status": "detached", "ack": None})
+        # Commit retirement only when the old participant still requires a state change.
         if member != old.committed_state()["participants"][key]:
             old.commit(
                 old_state,
@@ -2370,6 +2597,7 @@ def collect_candidates(store: Store, request: JSONObject) -> list[JSONObject]:
     Raises:
         WorkspaceError: If the candidate list or session separation is invalid.
     """
+    # Validate the bounded candidate list before attempting independent cleanups.
     candidates = request["cleanup_candidates"]
     require(isinstance(candidates, list) and len(candidates) <= 16)
     results = []
@@ -2400,25 +2628,36 @@ def permission_paths(request: JSONObject) -> list[str]:
     Returns:
         The paths relevant to registration or the requested issue.
     """
+    # Start with the requested worktree as the fallback permission boundary.
     root = Path(request.get("worktree", "/"))
+    # Resolve the canonical worktree when Git metadata remains accessible.
     try:
         root = repository(root)[0]
+    # Retain the supplied path when repository discovery is unavailable.
     except (OSError, WorkspaceError, subprocess.SubprocessError):
         pass
     main = request.get("main_worktree")
+    # Recover the canonical main worktree from local registration when not supplied.
     if main is None:
+        # Read registration through validated directory handles when permission permits.
         try:
+            # Read the local registration without following substituted filesystem links.
             with Directory.absolute(root) as directory, directory.child(".task") as local:
                 main = local.json(".repository.json")["main"]
+        # Keep recovery paths local when registration cannot be read safely.
         except (OSError, WorkspaceError, KeyError):
             pass
+    # Build the narrow worktree registration and binding permission requests.
     paths = [str(root / ".task/.repository.json"), str(root / ".task/.bindings")]
+    # Include canonical store paths only when its main-worktree location is known.
     if main:
         store = Path(main) / ".task"
         paths.append(str(store / ".control/repository.json"))
         identifier = request.get("issue_id")
+        # Name only the selected issue payload and control directory.
         if isinstance(identifier, str) and ISSUE.fullmatch(identifier):
             paths.extend([str(store / identifier), str(store / ".control/issues" / identifier)])
+        # Request store creation paths only for explicit registration.
         elif request.get("operation") == "register":
             paths.extend([str(store), str(store / ".control")])
     return paths
@@ -2433,11 +2672,13 @@ def execute(request: JSONObject) -> JSONObject:
     Returns:
         A success result or a structured failure with a public code and recovery action.
     """
+    # Validate the bounded versioned request before dispatching any operation.
     try:
         require(isinstance(request, dict) and len(canonical(request)) <= MAX_REQUEST)
         require(request.get("schema_version") == 1)
         token(request["request_id"])
         operation = request["operation"]
+        # Create registration without accepting a caller-selected repository identity.
         if operation == "register":
             require("repo_id" not in request, "INVALID_REQUEST")
             return register(request)
@@ -2460,13 +2701,17 @@ def execute(request: JSONObject) -> JSONObject:
         participant_key(request)
         # Serialize session-binding changes before acquiring the target issue lock.
         with Store(request) as store, store.bindings.lock(participant_key(request) + ".lock"):
+            # Route cross-issue binding changes through the ordered two-issue lock path.
             if operation == "rebind":
                 return rebind(store, request)
+            # Serialize target-issue recovery and mutation under its control lock.
             with store.issues.child(identifier, True) as control, control.lock():
                 result = operate(store, Issue(store, control, identifier), request)
+            # Attempt explicitly supplied maintenance cleanups only after successful creation.
             if result["ok"] and operation == "create" and request.get("cleanup_candidates"):
                 result["collection"] = collect_candidates(store, request)
             return result
+    # Return the bounded lifecycle diagnostic without exposing exception contents.
     except WorkspaceError as error:
         return {"ok": False, "code": error.code, "action": error.action}
     # Return only the narrow paths needed to retry the denied filesystem operation.
@@ -2509,6 +2754,7 @@ def main() -> int:
         "--request-json", help="One bounded JSON object; bootstrap-safe argument route"
     )
     args = parser.parse_args()
+    # Read and validate one request within the CLI error boundary.
     try:
         # Select the explicit argument or bounded standard input, then parse one request.
         raw = (
@@ -2518,8 +2764,10 @@ def main() -> int:
         )
         require(len(raw) <= MAX_REQUEST, "SIZE_LIMIT")
         result = execute(strict_json(raw))
+    # Return the bounded lifecycle diagnostic without exposing exception contents.
     except WorkspaceError as error:
         result = {"ok": False, "code": error.code}
+    # Emit one canonical result and translate its status into the process exit code.
     print(canonical(result).decode())
     return 0 if result["ok"] else 3
 

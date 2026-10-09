@@ -104,6 +104,7 @@ class PRReviewRegressions(Fixture):
         )
         # Check that each lifecycle hook preserves recovery access and the precise diagnostic.
         for name in ("SessionStart", "PreCompact", "PostCompact"):
+            # Check each rejected native callback without sharing fixture state.
             with self.subTest(name=name):
                 result = hook.handle(self.event(name))
                 self.assertNotEqual(result.get("continue"), False, result)
@@ -187,7 +188,9 @@ class PRReviewRegressions(Fixture):
         self.ready()
         # Exercise metadata rules in both the issue root and its context directory.
         payload = self.root / ".task/TEST-1"
+        # Inspect both task root and context for ignored metadata.
         for directory in (payload, payload / "context"):
+            # Reject every Finder metadata spelling in each directory.
             for name in (".DS_Store", "._roadmap.md"):
                 (directory / name).write_bytes(b"fixture metadata")
         self.call("ready")
@@ -238,6 +241,7 @@ class PRReviewRegressions(Fixture):
         self.create()
         self.ready()
         self.start_tool()
+        # Test each malformed provider result against exact issue identity.
         for response in (
             {},
             {"session_id": None, "exit_code": None, "isError": None},
@@ -336,7 +340,9 @@ class PRReviewRegressions(Fixture):
         sentinel.write_bytes(b"outside unchanged")
         # Exercise metadata rules in both the issue root and its context directory.
         payload = self.root / ".task/TEST-1"
+        # Inspect both source directories for ignored metadata.
         for directory in (payload, payload / "context"):
+            # Each Finder metadata file must stay outside the packet.
             for name in (".DS_Store", "._roadmap.md"):
                 path = directory / name
                 # A recognized metadata name must still reject symlinks, hardlinks, and directories.
@@ -457,6 +463,7 @@ class PRReviewRegressions(Fixture):
         before = self.state()
         # Exercise invalid JSON types and empty tokens at both correlation boundaries.
         for malformed in ([], {}, True, False, "", " ", 1.5):
+            # Check each malformed async handle independently.
             with self.subTest(handle=malformed):
                 self.post_tool({"session_id": malformed, "exit_code": 0})
                 self.assertEqual(self.state(), before)
@@ -493,6 +500,7 @@ class PRReviewRegressions(Fixture):
         self.ready()
         self.start_tool()
         self.post_tool({"session_id": 123})
+        # Repeat polling for both pending native call IDs.
         for identifier in ("poll-a", "poll-b"):
             self.assertEqual(
                 hook.handle(
@@ -544,6 +552,7 @@ class PRReviewRegressions(Fixture):
         self.post_tool({"session_id": 123})
         # Capture the complete state so rejected observations must preserve every field.
         before = self.state()
+        # Reject each unsupported serialized lifecycle value.
         for malformed in ([], True, "", None):
             result = hook.handle(
                 self.event(
@@ -557,6 +566,7 @@ class PRReviewRegressions(Fixture):
             self.assertEqual(self.state(), before)
         # Admit a valid polling transport with enough space for both settlement records.
         active = self.root / ".task/TEST-1/events.jsonl"
+        # Apply a bounded event cap during rollover recovery.
         with mock.patch.object(w, "MAX_EVENTS", active.stat().st_size + 4 * 8192 + 2000):
             self.assertEqual(
                 hook.handle(
@@ -572,10 +582,12 @@ class PRReviewRegressions(Fixture):
             # Exhaust ordinary capacity without consuming the reserved completion space.
             for _ in range(100):
                 result = w.execute(self.req("event", event_type="check", event={"code": "OK"}))
+                # A failed operation must retain its exact diagnostic.
                 if not result["ok"]:
                     self.assertEqual(result["code"], "ARCHIVE_PENDING")
                     break
             else:
+                # Exhausting the event cap is required for this rollover case.
                 self.fail("The patched event capacity was not exhausted")
             # One explicit final response settles parent and transport, leaving an archivable issue.
             self.post_tool(

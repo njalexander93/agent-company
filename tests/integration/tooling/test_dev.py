@@ -29,6 +29,7 @@ def test_clean_preserves_environments_tasks_and_linked_directories(
     """
     root = tmp_path / "checkout"
     outside = tmp_path / "outside"
+    # Create protected directories and outside sentinels before cleanup.
     for path in (root / ".venv", root / ".task", outside / "__pycache__"):
         path.mkdir(parents=True)
         (path / "keep").write_bytes(b"retain exactly")
@@ -41,6 +42,7 @@ def test_clean_preserves_environments_tasks_and_linked_directories(
     dev.clean()
     dev.clean()
     assert not cache.exists()
+    # Verify cleanup preserved every protected and outside sentinel.
     for path in (root / ".venv", root / ".task", outside / "__pycache__"):
         assert (path / "keep").read_bytes() == b"retain exactly"
 
@@ -96,12 +98,14 @@ def test_validation_rejects_source_changes_during_a_successful_command(
     Raises:
         AssertionError: Changed source retains valid candidate evidence.
     """
+    # Create a checkout whose tracked bytes can change during one successful command.
     root = tmp_path / "checkout"
     root.mkdir()
     source = root / "source.py"
     source.write_text("original\n")
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    # Initialize and commit the disposable Git checkout used for evidence identity.
     for args in (
         ["init", "-q"],
         ["add", "source.py"],
@@ -134,6 +138,7 @@ def test_validation_rejects_source_changes_during_a_successful_command(
     )
     evidence = tmp_path / "evidence"
     monkeypatch.setattr(sys, "argv", ["dev.py", "check", "--evidence-dir", str(evidence)])
+    # Require the evidence manifest to fail despite the child exit code.
     assert dev.main() == 1
     manifest = json.loads((evidence / "manifest.json").read_text())
     assert manifest["commands"][0]["exit_code"] == 0
@@ -157,6 +162,7 @@ def test_local_collection_is_explicit_and_does_not_weaken_full_check(
     Raises:
         AssertionError: Default checking bypasses the floor or local collection claims acceptance.
     """
+    # Run the selected check with a disposable native evidence directory.
     state = {"sha": "fixture", "status": "", "tracked_digest": "fixture"}
     monkeypatch.setattr(dev, "ROOT", tmp_path)
     monkeypatch.setattr(dev, "identity", lambda: dict(state))
@@ -167,12 +173,69 @@ def test_local_collection_is_explicit_and_does_not_weaken_full_check(
     )
     evidence = tmp_path / "evidence"
     monkeypatch.setattr(sys, "argv", ["dev.py", task, "--evidence-dir", str(evidence)])
+    # Inspect the local pending label and preserve the full-check floor.
     assert dev.main() == 0
     manifest = json.loads((evidence / "manifest.json").read_text())
     command = manifest["commands"][0]["command"]
     assert ("--cov-fail-under=0" in command) is (task == "check-local")
     assert ("coverage_gate" in manifest) is (task == "check-local")
     assert manifest["candidate_unchanged"] is True
+
+
+def test_failed_instrumentation_still_runs_suite_for_diagnostics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Retain a suite result after the independent child-only smoke fails.
+
+    Args:
+        tmp_path: Disposable directory supplied by pytest for this case.
+        monkeypatch: Pytest fixture that restores patched dependencies after this case.
+    """
+    # Install a smoke failure while retaining a runnable test-suite command.
+    state = {"sha": "fixture", "status": "", "tracked_digest": "fixture"}
+    monkeypatch.setattr(dev, "ROOT", tmp_path)
+    monkeypatch.setattr(dev, "identity", lambda: dict(state))
+    monkeypatch.setattr(dev, "checkout_state", lambda: dict(state))
+    monkeypatch.setattr(
+        dev,
+        "COMMANDS",
+        {"test-unit": [[sys.executable, "-c", "print('suite executed')"]]},
+    )
+    real_run = dev.run_command
+
+    def smoke_fails(
+        command: list[str], environment: dict[str, str], log: Path | None = None
+    ) -> int:
+        """Fail the instrumentation probe while letting other runner commands succeed.
+
+        Args:
+            command: Exact command arguments supplied to the child or fake runner.
+            environment: Environment passed to the child process.
+            log: Optional path for persistent command output.
+
+        Returns:
+            Controlled process exit status for this test.
+        """
+        # Return controlled child-instrumentation evidence for the smoke command only.
+        if "coverage_smoke.py" in " ".join(command):
+            assert log is not None
+            log.write_text("smoke failed\n")
+            return 1
+        return real_run(command, environment, log)
+
+    monkeypatch.setattr(dev, "run_command", smoke_fails)
+    evidence = tmp_path / "unit"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["dev.py", "test-unit", "--platform-coverage", "--evidence-dir", str(evidence)],
+    )
+    # Check the suite log and the final failed native receipt together.
+    assert dev.main() == 1
+    manifest = json.loads((evidence / "manifest.json").read_text())
+    assert manifest["instrumentation_exit_code"] == 1
+    assert manifest["commands"][0]["exit_code"] == 0
+    assert "suite executed" in (evidence / "test-unit-0.log").read_text()
 
 
 def test_command_stream_retains_partial_output_before_child_exit(tmp_path: Path) -> None:
@@ -184,6 +247,7 @@ def test_command_stream_retains_partial_output_before_child_exit(tmp_path: Path)
     Raises:
         AssertionError: Console or evidence output waits for the entire child to finish.
     """
+    # Start a child that writes output before its final exit.
     log = tmp_path / "partial.log"
     release = tmp_path / "release"
     child = (
@@ -197,6 +261,7 @@ def test_command_stream_retains_partial_output_before_child_exit(tmp_path: Path)
         f"raise SystemExit(run_command({[sys.executable, '-c', child]!r}, "
         f"os.environ.copy(), Path({str(log)!r})))"
     )
+    # Observe the persistent partial log while the child is still running.
     with subprocess.Popen(
         [sys.executable, "-c", parent],
         cwd=dev.ROOT,
@@ -204,13 +269,16 @@ def test_command_stream_retains_partial_output_before_child_exit(tmp_path: Path)
         stderr=subprocess.PIPE,
         text=True,
     ) as process:
+        # Observe the running child inside a lifetime that guarantees process cleanup.
         try:
             deadline = time.monotonic() + 5
+            # Wait only until initial log bytes arrive or the bounded deadline expires.
             while (not log.exists() or not log.read_bytes()) and time.monotonic() < deadline:
                 time.sleep(0.01)
             assert log.read_bytes() == b"partial"
             assert process.poll() is None
         finally:
+            # Release waiting children even when an intermediate assertion fails.
             release.touch()
         output, error = process.communicate(timeout=10)
     assert process.returncode == 0, error
@@ -227,6 +295,7 @@ def test_command_stream_normalizes_split_crlf_and_preserves_raw_log(tmp_path: Pa
     Raises:
         AssertionError: Forwarding corrupts Unicode, adds newlines or changes logged bytes.
     """
+    # Emit carriage return and newline bytes across separate pipe reads.
     log = tmp_path / "crlf.log"
     release = tmp_path / "release"
     newline_release = tmp_path / "newline-release"
@@ -245,24 +314,29 @@ def test_command_stream_normalizes_split_crlf_and_preserves_raw_log(tmp_path: Pa
         f"raise SystemExit(run_command({[sys.executable, '-c', child]!r}, "
         f"os.environ.copy(), Path({str(log)!r})))"
     )
+    # Read the split output while the child runs, then compare console and log bytes.
     with subprocess.Popen(
         [sys.executable, "-c", parent],
         cwd=dev.ROOT,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     ) as process:
+        # Observe streamed child bytes inside a lifetime that guarantees process cleanup.
         try:
             deadline = time.monotonic() + 5
+            # Wait for the child's first raw output without requiring a complete line.
             while (not log.exists() or not log.read_bytes()) and time.monotonic() < deadline:
                 time.sleep(0.01)
             assert log.read_bytes() == b"caf\xc3"
             assert process.poll() is None
             release.touch()
             deadline = time.monotonic() + 5
+            # Wait for the carriage-return update while preserving its exact UTF-8 bytes.
             while log.read_bytes() != "café\r".encode("utf-8") and time.monotonic() < deadline:
                 time.sleep(0.01)
             assert log.read_bytes() == "café\r".encode("utf-8")
         finally:
+            # Release waiting children even when an intermediate assertion fails.
             release.touch()
             newline_release.touch()
         output, error = process.communicate(timeout=10)
