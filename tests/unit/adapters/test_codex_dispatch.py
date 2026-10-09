@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -78,7 +79,11 @@ def test_codex_bootstrap_passes_exact_eligible_shell_call(
     monkeypatch.setattr(codex.common, "canonical_bootstrap", canonical)
     event = {
         "tool_name": "exec_command",
-        "tool_input": {"cmd": "command", "login": False, "shell": "/bin/sh"},
+        "tool_input": {
+            "cmd": "command",
+            "login": False,
+            "shell": "powershell.exe" if os.name == "nt" else "/bin/sh",
+        },
     }
     assert codex.bootstrap(event, ready=True) is True
     assert captured == [(event, "command", "codex", True, codex.PYTHON, codex.LIFECYCLE)]

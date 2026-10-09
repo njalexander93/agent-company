@@ -168,6 +168,7 @@ def test_decode_request_preserves_exact_object() -> None:
         (base64.urlsafe_b64encode(b'{"a":1,"a":2}').decode(), "INVALID_REQUEST"),
         ("A" * 65537, "SIZE_LIMIT"),
     ],
+    ids=["invalid-base64", "invalid-padding", "nonobject", "duplicate-key", "oversized"],
 )
 def test_decode_request_rejects_invalid_or_ambiguous_input(value: str, code: str) -> None:
     """Decode request rejects invalid or ambiguous input."""

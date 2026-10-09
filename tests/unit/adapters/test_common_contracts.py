@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -106,11 +107,19 @@ def test_bootstrap_command_roundtrip_requires_exact_literal_spelling(tmp_path: P
     }
     command = common.bootstrap_command(request, "codex")
     assert common.bootstrap_request(command, "codex", common.PYTHON, common.LIFECYCLE) == request
-    for altered, diagnostic in (
-        (" " + command, "Noncanonical shell command"),
-        (command + "; true", "Unexpected bootstrap entry"),
-        (command.replace("--request-json", "--other"), "Unexpected bootstrap entry"),
-    ):
+    if os.name == "nt":
+        alterations = (
+            (" " + command, "Noncanonical PowerShell command"),
+            (command + "; true", "Noncanonical PowerShell command"),
+            (command.replace("--request-base64", "--other"), "Unexpected Windows bootstrap entry"),
+        )
+    else:
+        alterations = (
+            (" " + command, "Noncanonical shell command"),
+            (command + "; true", "Unexpected bootstrap entry"),
+            (command.replace("--request-json", "--other"), "Unexpected bootstrap entry"),
+        )
+    for altered, diagnostic in alterations:
         with pytest.raises(ValueError, match=diagnostic):
             common.bootstrap_request(altered, "codex", common.PYTHON, common.LIFECYCLE)
 
@@ -120,11 +129,14 @@ def test_bootstrap_parser_rejects_control_bytes_and_nonobject_request() -> None:
     for command in ("echo ok\n", "echo ok\0"):
         with pytest.raises(ValueError, match="Control character"):
             common.bootstrap_request(command, "codex", common.PYTHON, common.LIFECYCLE)
-    import shlex
-
-    scalar = shlex.join([common.PYTHON, str(common.LIFECYCLE), "--request-json", '"text"'])
-    with pytest.raises(ValueError, match="Invalid request object"):
-        common.bootstrap_request(scalar, "codex", common.PYTHON, common.LIFECYCLE)
+    scalar = common.bootstrap_command("text", "codex")
+    if os.name == "nt":
+        with pytest.raises(core.WorkspaceError) as captured:
+            common.bootstrap_request(scalar, "codex", common.PYTHON, common.LIFECYCLE)
+        assert captured.value.code == "INVALID_REQUEST"
+    else:
+        with pytest.raises(ValueError, match="Invalid request object"):
+            common.bootstrap_request(scalar, "codex", common.PYTHON, common.LIFECYCLE)
 
 
 def test_bootstrap_command_rejects_oversized_or_controlled_arguments() -> None:
