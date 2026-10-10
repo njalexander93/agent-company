@@ -78,11 +78,17 @@ unchanged digests is accepted but does not restore readiness, and the failed
 lifecycle operation changes the outcome and name the admitted alternative.
 `HOST_UNSUPPORTED_BACKGROUND` and `HOST_UNSUPPORTED_ASYNC` ask for a foreground,
 non-isolated re-issue. `REVISION_CONFLICT` asks for a reread and reapply.
-`BINDING_CONFLICT` names the bound issue or an explicit `rebind` to a target
-that already assigns the session. `REPOSITORY_MISMATCH` names the registered
-checkout or worktree. `PROVIDER_RESPONSE_INVALID` and `ISSUE_MISMATCH` ask for
-the exact selected-ticket `get_issue` under a new native call. `NOT_OWNER` and
-`SCOPE_MISSING` ask the coordinator to `scope` the path or participant. `BUSY`
+`BINDING_CONFLICT` names the bound issue, the Task-line switch, or an explicit
+`rebind` to a target that already assigns the session. `REPOSITORY_MISMATCH` names
+the registered checkout or worktree. `PROVIDER_RESPONSE_INVALID` and
+`ISSUE_MISMATCH` ask for the exact selected-ticket `get_issue` under a new native
+call; a repeated `ISSUE_MISMATCH` points to an issue-level `diagnose` of the local
+workspace recorded under another provider UUID. `NOT_OWNER` and `SCOPE_MISSING`
+ask the coordinator to `scope` the path or participant; `SCOPE_MISSING` also names
+the return route (`Task: <bound issue>` and its ticket read) after a refused switch.
+`PENDING_OPERATION` asks for pending tool work to complete or attached participants
+to detach before a retry. `ADOPTION_REQUIRED` names `adopt` with inventory, owners
+and evidence. `BUSY`
 asks for one retry, then `diagnose`. Every remaining code uses the general
 bootstrap route (`diagnose`, `register`, `resume`, `read`, `acknowledge`); this
 is an explicit boundary, not a per-code route.
@@ -180,7 +186,9 @@ attached. A supplied `issue_uuid` must match an existing target (`ISSUE_MISMATCH
 An absent target is created from the packaged template with the caller as
 coordinator; this requires `issue_uuid` and no unadopted payload directory.
 `rebind` locks both issues in lexical order, fences old work and preserves the old
-payload. Pending operations block it, and an old issue's coordinator moves only
+payload. The old issue must be the caller's live binding at the stated generation;
+leaving a detached participation is allowed only as this request's own retry or
+replay (`STALE_BINDING` otherwise). Pending operations block it, and an old issue's coordinator moves only
 after its other participants have detached. It never transfers coordinator
 ownership of the old issue, and a subagent identity cannot rebind.
 
@@ -190,7 +198,7 @@ the binding alone. The verified ticket read then runs `rebind` (create when the
 issue is absent) with the ticket identity as evidence, followed by the usual
 packet read, acknowledgment and readiness. A failed read or refused rebind keeps
 the old binding; a Task line for the bound issue returns to it. The hook admits a
-manual `rebind` only toward the recorded Task issue, or away from it toward an issue
+manual `rebind` only away from the live binding's issue (when one exists), and only toward the recorded Task issue, or away from it toward an issue
 that already has committed state.
 
 ### Transactions, events and collection

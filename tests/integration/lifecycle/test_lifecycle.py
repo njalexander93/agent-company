@@ -447,6 +447,40 @@ class LifecycleTests(Fixture):
         third = json.loads((self.root / ".task/.control/issues/TEST-3/state.json").read_text())
         self.assertEqual(third["participants"][key]["status"], "detached")
 
+    def test_T07d_rebind_leaves_only_the_live_binding(self) -> None:
+        """Refuse a rebind "from" a stale detached participation of another issue.
+
+        Raises:
+            AssertionError: An asserted lifecycle or boundary invariant does not hold.
+        """
+        # A session creates TEST-2, then moves to a new TEST-3 through rebind-create.
+        mover = {"session_id": "mover", "coordinator": None}
+        first = self.req(
+            "create", issue_id="TEST-2", issue_uuid="second", binding_generation=None, **mover
+        )
+        key = w.participant_key(first)
+        first["coordinator"] = key
+        self.require_ok(w.execute(first))
+        leave_second = {"issue_id": "TEST-2", "binding_generation": 1, "evidence": self.evidence()}
+        moved = self.req(
+            "rebind", new_issue_id="TEST-3", issue_uuid="third", **leave_second, **mover
+        )
+        self.require_ok(w.execute(moved))
+        # Leaving the detached TEST-2 participation again is refused.
+        stale = self.req(
+            "rebind", new_issue_id="TEST-4", issue_uuid="fourth", **leave_second, **mover
+        )
+        self.assertEqual(w.execute(stale)["code"], "STALE_BINDING")
+        # TEST-3 stays attached and bound; TEST-4 was never created.
+        third = json.loads((self.root / ".task/.control/issues/TEST-3/state.json").read_text())
+        self.assertEqual(third["participants"][key]["status"], "attached")
+        binding = json.loads((self.root / ".task/.bindings" / (key + ".json")).read_text())
+        self.assertEqual(binding["issue_id"], "TEST-3")
+        self.assertFalse((self.root / ".task/TEST-4").exists())
+        self.assertFalse((self.root / ".task/.control/issues/TEST-4/state.json").exists())
+        # The identical committed rebind still replays after the binding moved.
+        self.require_ok(w.execute(moved))
+
     def test_T08_active_in_review_pending_retained(self) -> None:
         """Retain active, pending-tool and in-review workspaces.
 

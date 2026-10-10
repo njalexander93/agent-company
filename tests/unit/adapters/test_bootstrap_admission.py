@@ -674,12 +674,15 @@ class TargetIssues:
         return IssueControl({})
 
 
-def install_targets(monkeypatch: pytest.MonkeyPatch, committed: set[str]) -> list[str]:
+def install_targets(
+    monkeypatch: pytest.MonkeyPatch, committed: set[str], bound: str | None = None
+) -> list[str]:
     """Bind the session's assignment to AGENT-30 and model committed target issues.
 
     Args:
         monkeypatch: Replaces repository, binding and store boundaries.
         committed: Issue IDs that already have committed state.
+        bound: Issue named by the session's live binding, or None when unbound.
 
     Returns:
         The log of issue IDs the hook inspected.
@@ -701,6 +704,14 @@ def install_targets(monkeypatch: pytest.MonkeyPatch, committed: set[str]) -> lis
             super().__init__({})
             self.issues = TargetIssues(committed, opened)
 
+        def binding(self) -> dict[str, object] | None:
+            """Return the modeled live session binding.
+
+            Returns:
+                The binding naming ``bound``, or None for an unbound session.
+            """
+            return None if bound is None else {"issue_id": bound, "binding_generation": 4}
+
     monkeypatch.setattr(common.core, "Store", TargetStore)
     return opened
 
@@ -709,7 +720,7 @@ def install_targets(monkeypatch: pytest.MonkeyPatch, committed: set[str]) -> lis
 def test_rebind_to_recorded_task_target_is_admitted_without_store_reads(
     monkeypatch: pytest.MonkeyPatch, ready: bool
 ) -> None:
-    """A rebind whose target is the recorded Task issue is admitted, including creation.
+    """A rebind toward the recorded Task issue is admitted without inspecting targets.
 
     Args:
         monkeypatch: Replaces repository, binding and store boundaries.
@@ -774,3 +785,18 @@ def test_rebind_from_assigned_issue_requires_existing_target(
     assert admitted_unready(rebind("AGENT-28", "AGENT-31")) is False
     assert admitted_unready(rebind("AGENT-30", "../AGENT-31")) is False
     assert opened == ["AGENT-31", "AGENT-32"]
+
+
+def test_rebind_must_leave_the_live_binding_issue(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With a live binding, a rebind is admitted only away from that bound issue.
+
+    Args:
+        monkeypatch: Replaces repository, binding and store boundaries.
+    """
+    # The session is bound to AGENT-29 and its Task line recorded AGENT-30.
+    opened = install_targets(monkeypatch, {"AGENT-31"}, bound="AGENT-29")
+    assert admitted_unready(rebind("AGENT-29", "AGENT-30")) is True
+    # A rebind "from" any other issue is refused before any target is inspected.
+    assert admitted_unready(rebind("AGENT-28", "AGENT-30")) is False
+    assert admitted_unready(rebind("AGENT-30", "AGENT-31")) is False
+    assert opened == []

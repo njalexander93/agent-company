@@ -513,9 +513,20 @@ def test_recovery_message_preserves_exact_diagnostic_without_task_content() -> N
                 ("BINDING_CONFLICT", ["Continue the bound issue", "rebind"]),
                 ("REPOSITORY_MISMATCH", ["registered checkout"]),
                 ("PROVIDER_RESPONSE_INVALID", ["exact selected-ticket get_issue", "new native"]),
-                ("ISSUE_MISMATCH", ["exact selected-ticket get_issue", "new native"]),
+                (
+                    "ISSUE_MISMATCH",
+                    ["exact selected-ticket get_issue", "new native", "issue-level diagnose"],
+                ),
                 ("NOT_OWNER", ["coordinator to scope"]),
-                ("SCOPE_MISSING", ["coordinator to scope"]),
+                (
+                    "SCOPE_MISSING",
+                    ["coordinator to scope", "old binding unchanged", "`Task: <bound issue>`"],
+                ),
+                (
+                    "PENDING_OPERATION",
+                    ["binding is unchanged", "complete", "detach", "then retry"],
+                ),
+                ("ADOPTION_REQUIRED", ["adopt request", "inventory", "owners and evidence"]),
             )
             for host in ("claude-code", "cursor")
         ],
@@ -561,6 +572,17 @@ def test_recovery_names_the_admitted_next_operation_per_code(
         assert "save_comment" not in message
         assert "Agent" not in message
         assert "Skill" not in message
+
+
+@pytest.mark.parametrize("host", ["claude-code", "cursor"])
+def test_shared_recovery_branches_keep_code_specific_sentences_apart(host: str) -> None:
+    """The switch and UUID sentences appear only for the codes they describe.
+
+    Args:
+        host: Native adapter identity selecting host-specific tool names.
+    """
+    assert "Task-line switch" not in common.recovery("NOT_OWNER", host)
+    assert "another provider issue UUID" not in common.recovery("PROVIDER_RESPONSE_INVALID", host)
 
 
 def test_native_post_does_not_settle_cursor_without_output(

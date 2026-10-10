@@ -107,7 +107,8 @@ local lifecycle integration, not proposal approval.
    An explicit `rebind` (`new_issue_id`, optional `new_binding_generation`,
    `evidence`, and `issue_uuid` naming the target) is admitted when its
    `new_issue_id` is the recorded Task issue, or when it leaves the recorded issue
-   for a target that already has committed state. A subagent never runs it.
+   for a target that already has committed state. When the session has a live
+   binding, the rebind's `issue_id` must name that bound issue. A subagent never runs it.
 5. A successful matching issue-read completion invokes the shared startup orchestrator. It derives the
    main worktree from Git, registers or resumes, creates a new issue with the observed
    master as coordinator, installs an initial reader packet, reads its source bytes,

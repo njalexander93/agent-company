@@ -2669,8 +2669,10 @@ def rebind(store: Store, request: JSONObject) -> JSONObject:
     the target's provider identity. An existing target keeps its assignment rule: it
     must already assign the caller or name it coordinator. An absent target is
     created from the packaged template with the caller as its coordinator, which
-    requires ``issue_uuid``. Either way the old participant is detached and the old
-    payload and coordinator ownership stay unchanged.
+    requires ``issue_uuid``. The old issue must be the session's live binding at the
+    stated generation, and a detached old member moves only as this request's own retry.
+    Either way the old participant is detached and the old payload and coordinator
+    ownership stay unchanged.
 
     Args:
         store: Validated shared repository Store.
@@ -2680,8 +2682,9 @@ def rebind(store: Store, request: JSONObject) -> JSONObject:
         The target participant binding result.
 
     Raises:
-        WorkspaceError: If target assignment or identity, generations, pending work,
-            caller kind or retry identity conflicts, or an unadopted target payload exists.
+        WorkspaceError: If target assignment or identity, the live binding, generations,
+            pending work, caller kind or retry identity conflicts, or an unadopted target
+            payload exists.
         OSError: If either issue or binding cannot be persisted.
     """
     # Validate distinct old and target issue identities before rebinding.
@@ -2744,6 +2747,30 @@ def rebind(store: Store, request: JSONObject) -> JSONObject:
                 "ISSUE_MISMATCH",
             )
             previous = new_state_value["requests"].get(sha(request["request_id"].encode()))
+        # The old issue must be this worktree's live session binding at the stated
+        # generation; only a replay of the committed target may find it already moved.
+        binding = store.binding()
+        require(
+            binding is not None
+            and (
+                (
+                    binding["issue_id"] == old_id
+                    and binding["binding_generation"] == request["binding_generation"]
+                )
+                or (previous is not None and binding["issue_id"] == new_id)
+            ),
+            "STALE_BINDING",
+        )
+        # A detached old member proceeds only as this request's own retry: a replay of the
+        # committed target, or a retry after this request already retired it.
+        retire_request = {**request, "request_id": request["request_id"] + ":retire"}
+        retired = old_state["requests"].get(sha(retire_request["request_id"].encode()))
+        require(
+            previous is not None
+            or member["status"] != "detached"
+            or (retired is not None and retired["digest"] == sha(canonical(retire_request))),
+            "STALE_BINDING",
+        )
         # Replay only an identical request; a reused ID with different content is a conflict.
         if previous:
             require(previous["digest"] == sha(canonical(target_request)), "REQUEST_CONFLICT")
@@ -2765,7 +2792,7 @@ def rebind(store: Store, request: JSONObject) -> JSONObject:
             old.commit(
                 old_state,
                 old_files,
-                {**request, "request_id": request["request_id"] + ":retire"},
+                retire_request,
                 {},
                 "rebind",
             )

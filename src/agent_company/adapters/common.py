@@ -941,7 +941,8 @@ def rebind_admitted(
     the binding still names the old one; that recorded target may be rebound to, and
     created if absent. A rebind from the assigned issue keeps the earlier rule and is
     admitted only toward a target that already exists, so it never creates an issue
-    the session was not explicitly given. A subagent never rebinds.
+    the session was not explicitly given. When the session has a live binding, the
+    rebind must leave exactly that issue. A subagent never rebinds.
 
     Args:
         request: Decoded rebind request whose session, host and worktree already match.
@@ -953,21 +954,27 @@ def rebind_admitted(
 
     Raises:
         core.WorkspaceError: If the target issue ID or registered store is invalid.
-        OSError: If the issue control directory cannot be inspected.
+        OSError: If the binding or issue control directory cannot be inspected.
         KeyError: If the request lacks its issue, repository or target fields.
     """
     # A subagent holds a coordinator-scoped assignment and cannot move a binding.
     if event.get("child") is True:
         return False
-    # Validate the target ID; the recorded Task identity authorizes it, even if absent.
+    # Validate the target ID before opening the store.
     target = core.issue_id(request["new_issue_id"])
-    if target == assignment["issue_id"]:
-        return True
-    # Otherwise only a rebind away from the assigned issue toward an existing target.
-    if request["issue_id"] != assignment["issue_id"]:
-        return False
-    # Inspect the target's control directory read-only: no lock and no recovery.
+    # Read the session binding and the target's control directory read-only: no lock
+    # and no recovery.
     with core.Store(request) as store:
+        # A rebind leaves only the issue this worktree's live binding names.
+        binding = store.binding()
+        if binding is not None and request["issue_id"] != binding["issue_id"]:
+            return False
+        # The recorded Task identity authorizes its target, even if absent.
+        if target == assignment["issue_id"]:
+            return True
+        # Otherwise only a rebind away from the assigned issue toward an existing target.
+        if request["issue_id"] != assignment["issue_id"]:
+            return False
         # An absent control directory or state file means the target does not exist.
         if not store.issues.exists(target):
             return False
@@ -1739,15 +1746,47 @@ def _recovery_route(code: str, host: str) -> str:
         )
     # A rejected ticket response needs a fresh exact read.
     if code in {"PROVIDER_RESPONSE_INVALID", "ISSUE_MISMATCH"}:
+        mismatch = (
+            " If ISSUE_MISMATCH repeats, the existing local workspace records another "
+            "provider issue UUID for this ID: inspect it with an issue-level diagnose "
+            "instead of rebinding into it."
+            if code == "ISSUE_MISMATCH"
+            else ""
+        )
         return (
             "The ticket response did not verify. Repeat the exact selected-ticket get_issue "
             "call under a new native tool call; no workspace was created from this response."
+            + mismatch
         )
-    # Ownership and scope come only from the coordinator.
+    # Ownership and scope come only from the coordinator; a refused switch can return.
     if code in {"NOT_OWNER", "SCOPE_MISSING"}:
+        switch = (
+            " A Task-line switch into an existing issue that does not assign this session "
+            "stops here with the old binding unchanged: ask that issue's coordinator to "
+            "scope you, or submit `Task: <bound issue>` and repeat its ticket read to return."
+            if code == "SCOPE_MISSING"
+            else ""
+        )
         return (
             "This participant does not own the path or lacks an assignment. Ask the "
             "coordinator to scope the path or participant, then read, acknowledge and ready."
+            + switch
+        )
+    # Unresolved work or attached participants block a binding change until settled.
+    if code == "PENDING_OPERATION":
+        return (
+            "Pending tool work or attached participants block this change; the binding is "
+            "unchanged. Let the pending tool calls complete so their completions settle "
+            "them, or have attached participants detach (an issue's coordinator moves only "
+            "after its other participants detach), then retry. To keep working meanwhile, "
+            "submit `Task: <bound issue>` and repeat its ticket read."
+        )
+    # An unmanaged payload directory is imported only by explicit adoption.
+    if code == "ADOPTION_REQUIRED":
+        return (
+            "The target issue's payload directory exists without managed state; nothing was "
+            "created or moved. Import it with an adopt request carrying its exact inventory, "
+            f"owners and evidence, using {command}."
         )
     # Provider admission is fixed by host, readiness and the configured connector.
     if code == "HOST_UNSUPPORTED_PROVIDER":

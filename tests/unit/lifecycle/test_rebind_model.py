@@ -136,6 +136,15 @@ class Store:
         self.bindings = Bindings()
         self.registration = {"repo_id": "repo"}
         self.task = Payloads()
+        self.bound: dict[str, object] | None = {"issue_id": "AGENT-30", "binding_generation": 1}
+
+    def binding(self) -> dict[str, object] | None:
+        """Return this session's live binding, by default the old issue.
+
+        Returns:
+            The modeled binding, or None for an unbound session.
+        """
+        return self.bound
 
     def view(self, identifier: str) -> None:
         """Record the new issue view after commit.
@@ -338,8 +347,13 @@ def test_rebind_retry_after_old_retirement_commits_only_target(
     # Build old and target issues with one explicit participant binding.
     store = Store()
     old, new, key = fixture_state(store)
-    # Put pending work on the old participant before rebind.
+    # Model this request's own committed retirement before the crash.
     old.state["participants"][key].update(status="detached", ack=None)
+    retire = {**rebind_request(), "request_id": "rebind-1:retire"}
+    old.state["requests"][core.sha(b"rebind-1:retire")] = {
+        "digest": core.sha(core.canonical(retire)),
+        "result": {},
+    }
     # Install fake Issue calls.
     monkeypatch.setattr(core, "Issue", Issue)
     # Transfer the selected participant between old and target issues.
@@ -657,3 +671,94 @@ def test_rebind_existing_target_rejects_other_provider_identity(
     # The matching identity keeps the existing assignment rule and succeeds.
     assert core.rebind(store, rebind_request(issue_uuid="target-uuid"))["ok"] is True  # type: ignore[arg-type]
     assert "create:AGENT-31" in store.order
+
+
+@pytest.mark.parametrize(
+    "bound",
+    [
+        None,
+        {"issue_id": "AGENT-29", "binding_generation": 1},
+        {"issue_id": "AGENT-30", "binding_generation": 2},
+        {"issue_id": "AGENT-31", "binding_generation": 1},
+    ],
+)
+def test_rebind_requires_the_live_binding_on_the_old_issue(
+    monkeypatch: pytest.MonkeyPatch, bound: dict[str, object] | None
+) -> None:
+    """A rebind leaves only the issue and generation the session is bound to now.
+
+    Args:
+        monkeypatch: Pytest fixture used to replace the dependency under test.
+        bound: Live binding modeled for the session, never naming AGENT-30 at generation 1.
+    """
+    # Bind the session elsewhere (or nowhere) while AGENT-30 still lists it.
+    store = Store()
+    old, new, key = absent_target(store)
+    store.bound = bound
+    monkeypatch.setattr(core, "Issue", Issue)
+    # Refuse before either issue changes.
+    with pytest.raises(core.WorkspaceError) as captured:
+        core.rebind(store, rebind_request(issue_uuid="target-uuid"))  # type: ignore[arg-type]
+    assert captured.value.code == "STALE_BINDING"
+    assert new.state is None
+    assert old.state["participants"][key]["status"] == "ready"
+    assert not any(item.startswith("commit:") for item in store.order)
+
+
+def test_rebind_refuses_detached_old_member_without_its_own_retirement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A participation detached by anything but this request cannot be left again.
+
+    Args:
+        monkeypatch: Pytest fixture used to replace the dependency under test.
+    """
+    # Detach the old member without a retirement record from this request.
+    store = Store()
+    old, new, key = absent_target(store)
+    old.state["participants"][key].update(status="detached", ack=None)
+    monkeypatch.setattr(core, "Issue", Issue)
+    # Refuse before the target is created.
+    with pytest.raises(core.WorkspaceError) as captured:
+        core.rebind(store, rebind_request(issue_uuid="target-uuid"))  # type: ignore[arg-type]
+    assert captured.value.code == "STALE_BINDING"
+    assert new.state is None
+    assert not any(item.startswith("commit:") for item in store.order)
+
+
+def test_rebind_replay_is_accepted_after_the_binding_moved(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An identical replay of a committed rebind finds the binding already on the target.
+
+    Args:
+        monkeypatch: Pytest fixture used to replace the dependency under test.
+    """
+    # Model a fully committed rebind: old detached, target attached, binding moved.
+    store = Store()
+    old, new, key = fixture_state(store)
+    old.state["participants"][key].update(status="detached", ack=None)
+    new.state["participants"][key] = {
+        "generation": 1,
+        "status": "attached",
+        "pending": {},
+        "packet": [],
+        "ack": None,
+    }
+    request = rebind_request()
+    target_request = {
+        **request,
+        "operation": "rebind",
+        "issue_id": "AGENT-31",
+        "old_issue_id": "AGENT-30",
+        "binding_generation": None,
+    }
+    new.state["requests"][core.sha(request["request_id"].encode())] = {
+        "digest": core.sha(core.canonical(target_request)),
+        "result": {"ok": True, "code": "OK", "participant_id": key, "binding_generation": 1},
+    }
+    store.bound = {"issue_id": "AGENT-31", "binding_generation": 1}
+    monkeypatch.setattr(core, "Issue", Issue)
+    # The replay returns the saved result without committing again.
+    assert core.rebind(store, request)["participant_id"] == key  # type: ignore[arg-type]
+    assert not any(item.startswith("commit:") for item in store.order)
