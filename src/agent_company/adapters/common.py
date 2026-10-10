@@ -1726,9 +1726,10 @@ def _recovery_route(code: str, host: str) -> str:
     # A session bound to another issue keeps that binding until an explicit rebind.
     if code == "BINDING_CONFLICT":
         return (
-            "This session is bound to another issue or call. Continue the bound issue, or "
-            "run an explicit rebind to a target that already assigns this session, using "
-            f"{command}."
+            "This session is bound to another issue or call. Continue the bound issue, "
+            "submit `Task: <other-issue>` and read that ticket so startup rebinds you "
+            "(the old issue is preserved), or run an explicit rebind to a target that "
+            f"already assigns this session, using {command}."
         )
     # Lifecycle requests must name the registered checkout.
     if code == "REPOSITORY_MISMATCH":
