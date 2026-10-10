@@ -1,7 +1,7 @@
 [
   {
     "source_path": "src/agent_company/lifecycle/task_workspace.py",
-    "source_sha256": "a5d415ddd2b9590f9aac94de895e86178adb2c2015ba7e3a525434e6da5ca388",
+    "source_sha256": "4dc33dacad4b0b069dfc3ff013bb084b188fd9250651280c04d57c5aef46bcc3",
     "timeout_seconds": 20,
     "kind": "wrong_result",
     "old": "return hashlib.sha256(data).hexdigest()",
@@ -14,7 +14,7 @@
   },
   {
     "source_path": "src/agent_company/lifecycle/task_workspace.py",
-    "source_sha256": "a5d415ddd2b9590f9aac94de895e86178adb2c2015ba7e3a525434e6da5ca388",
+    "source_sha256": "4dc33dacad4b0b069dfc3ff013bb084b188fd9250651280c04d57c5aef46bcc3",
     "timeout_seconds": 20,
     "kind": "missing_exception",
     "old": "require(isinstance(value, str) and ISSUE.fullmatch(value), \"INVALID_ISSUE\")",
@@ -27,7 +27,7 @@
   },
   {
     "source_path": "src/agent_company/lifecycle/task_workspace.py",
-    "source_sha256": "a5d415ddd2b9590f9aac94de895e86178adb2c2015ba7e3a525434e6da5ca388",
+    "source_sha256": "4dc33dacad4b0b069dfc3ff013bb084b188fd9250651280c04d57c5aef46bcc3",
     "timeout_seconds": 20,
     "kind": "omitted_effect",
     "old": "        FAILPOINT(point)",

@@ -800,3 +800,25 @@ def test_rebind_must_leave_the_live_binding_issue(monkeypatch: pytest.MonkeyPatc
     assert admitted_unready(rebind("AGENT-28", "AGENT-30")) is False
     assert admitted_unready(rebind("AGENT-30", "AGENT-31")) is False
     assert opened == []
+
+
+def test_coordinator_self_refresh_rejects_shape_and_digest_before_any_store_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The direct check denies extra or missing fields and malformed digests.
+
+    Args:
+        monkeypatch: Replaces repository, binding and store boundaries.
+    """
+    event = {"cwd": str(CHECKOUT), "session_id": "session"}
+    # Extra or missing request fields are denied without opening the store.
+    monkeypatch.setattr(common.core, "Store", lambda _request: pytest.fail("opened store"))
+    assert common.coordinator_self_refresh(refresh(refreshed(), arbitrary="x"), event) is False
+    missing = {k: v for k, v in refresh(refreshed()).items() if k != "packet"}
+    assert common.coordinator_self_refresh(missing, event) is False
+    # A proposed reference carrying a non-text or malformed digest is denied after the read.
+    install_state(monkeypatch, coordinator_state())
+    for digest in (7, None, "not-a-digest"):
+        bad = [{**refreshed()[0], "sha256": digest}, refreshed()[1]]
+        assert common.coordinator_self_refresh(refresh(bad), event) is False
+    assert common.coordinator_self_refresh(refresh(refreshed()), event) is True

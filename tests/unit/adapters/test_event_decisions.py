@@ -539,3 +539,70 @@ def test_claude_main_uses_runner_when_not_cursor_imported(
     )
     assert claude.main() == 2
     assert calls == [(claude.handle, claude.failure)]
+
+
+def test_claude_preparation_reads_pass_through_a_pending_ticket_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Preparation reads keep the Task marker and never settle the ticket lookup.
+
+    Args:
+        monkeypatch: Pytest fixture that isolates external state for this case.
+    """
+    monkeypatch.delenv("CURSOR_VERSION", raising=False)
+    monkeypatch.setattr(claude.common, "native_identity", lambda event, _host: event)
+    monkeypatch.setattr(claude.common, "lookup_required", lambda _event, _host: True)
+    monkeypatch.setattr(claude.common, "preparation_tool", lambda _event, _host: True)
+    monkeypatch.setattr(
+        claude.common, "native_ticket_lookup", lambda *_args, **_kwargs: pytest.fail("lookup")
+    )
+    monkeypatch.setattr(claude.common, "native_pre", lambda *_args: pytest.fail("pre"))
+    monkeypatch.setattr(claude.common, "native_post", lambda *_args, **_kwargs: pytest.fail("post"))
+    # Neither the start nor the completion of a preparation read is recorded or settled.
+    assert claude.handle({"hook_event_name": "PreToolUse", "tool_name": "Read"}) == {}
+    assert claude.handle({"hook_event_name": "PostToolUse", "tool_name": "Read"}) == {}
+
+
+def test_claude_subagent_start_reports_the_child_join_as_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SubagentStart returns the child join text as additional context only.
+
+    Args:
+        monkeypatch: Pytest fixture that isolates external state for this case.
+    """
+    monkeypatch.delenv("CURSOR_VERSION", raising=False)
+    monkeypatch.setattr(claude.common, "native_identity", lambda event, _host: event)
+    seen: list[tuple[object, str]] = []
+    monkeypatch.setattr(
+        claude.common,
+        "child_start",
+        lambda event, host: seen.append((event, host)) or "TASK_WORKSPACE_CHILD_READY: x",
+    )
+    event = {"hook_event_name": "SubagentStart", "child": True}
+    assert claude.handle(event) == {
+        "hookSpecificOutput": {
+            "hookEventName": "SubagentStart",
+            "additionalContext": "TASK_WORKSPACE_CHILD_READY: x",
+        }
+    }
+    assert seen == [(event, claude.HOST)]
+
+
+def test_claude_subagent_stop_observes_only_a_child_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SubagentStop records an observation for a child and never settles or detaches it.
+
+    Args:
+        monkeypatch: Pytest fixture that isolates external state for this case.
+    """
+    monkeypatch.delenv("CURSOR_VERSION", raising=False)
+    monkeypatch.setattr(claude.common, "native_identity", lambda event, _host: event)
+    observed: list[object] = []
+    monkeypatch.setattr(
+        claude.common, "native_observe", lambda event, _host: observed.append(event)
+    )
+    event = {"hook_event_name": "SubagentStop", "child": True}
+    assert claude.handle(event) == {}
+    assert observed == [event]

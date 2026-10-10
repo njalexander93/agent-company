@@ -2432,3 +2432,51 @@ def test_roadmap_refresh_keeps_readiness_without_changed_roadmap_reference() -> 
         # Refreshing must not change readiness when no recorded digest differs.
         core.refresh_roadmap_reference(state, "coordinator", "d" * 64)  # type: ignore[arg-type]
         assert state == before
+
+
+def test_roadmap_refresh_ignores_unscoped_coordinator_and_missing_assignment() -> None:
+    """An absent or unscoped coordinator refreshes nothing; a missing assignment is fine."""
+    # No participant record and a participant without a packet both return unchanged.
+    for participants in [{}, {"coordinator": {"packet": None, "ack": None, "status": "ready"}}]:
+        state: dict[str, Any] = {"participants": copy.deepcopy(participants)}
+        core.refresh_roadmap_reference(state, "coordinator", "d" * 64)  # type: ignore[arg-type]
+        assert state == {"participants": participants}
+    # Without a stored assignment only the participant packet is refreshed.
+    packet = [source_ref("roadmap.md", "a" * 64)]
+    state = {
+        "participants": {"coordinator": {"packet": packet, "ack": "c" * 64, "status": "ready"}}
+    }
+    core.refresh_roadmap_reference(state, "coordinator", "d" * 64)  # type: ignore[arg-type]
+    participant = state["participants"]["coordinator"]
+    assert participant == {
+        "packet": [source_ref("roadmap.md", "d" * 64)],
+        "ack": None,
+        "status": "attached",
+    }
+    assert "assignments" not in state
+
+
+def test_coordinator_roadmap_update_refreshes_its_own_packet_reference() -> None:
+    """A coordinator's roadmap update re-points its packet and requires a new ack."""
+    store, issue = MemoryStore(), MemoryIssue()
+    key = issue.state["coordinator"]
+    source = {"id": "issue", "locator": "context/issue.md", "sha256": core.sha(b"source")}
+    request = base_request(
+        "update",
+        expected_revision=7,
+        path="roadmap.md",
+        old_digest=core.sha(b"approved roadmap"),
+        content="revised roadmap",
+        provenance={"sources": [source], "applicability": "AGENT-30", "status": "draft"},
+    )
+    assert core.operate(store, issue, request)["ok"] is True  # type: ignore[arg-type]
+    participant = issue.state["participants"][key]
+    assert participant["packet"][0]["sha256"] == core.sha(b"revised roadmap")
+    assert participant["ack"] is None
+    assert participant["status"] == "attached"
+    assert issue.payload["roadmap.md"] == b"revised roadmap"
+    # A note update by the same coordinator leaves its roadmap reference untouched.
+    store, issue = MemoryStore(), MemoryIssue()
+    note = {**request, "path": "context/note.md", "old_digest": core.sha(b"old note")}
+    assert core.operate(store, issue, note)["ok"] is True  # type: ignore[arg-type]
+    assert issue.state["participants"][key]["status"] == "ready"

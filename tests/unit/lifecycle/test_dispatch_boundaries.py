@@ -504,3 +504,49 @@ def test_execute_collects_only_after_successful_create_with_explicit_candidates(
     # Confirm only the explicit candidate issue receives cleanup.
     assert result["collection"] == [{"issue_id": "AGENT-29", "ok": True}]
     assert calls == ["create", "create", "collect"]
+
+
+def test_execute_reports_stale_references_beside_the_source_stale_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stale packet failure carries the changed references without exception text.
+
+    Args:
+        monkeypatch: Replaces the store boundary with a stale-source failure.
+    """
+    stale = [
+        {
+            "id": "rules",
+            "locator": "/checkout/AGENTS.md",
+            "recorded_sha256": "a" * 64,
+            "current_sha256": "b" * 64,
+            "available": True,
+        }
+    ]
+
+    def open_store(_request: dict[str, Any]) -> object:
+        """Fail the store open with the stale-source diagnostic.
+
+        Args:
+            _request: Lifecycle request, unused by this fake.
+
+        Raises:
+            core.StaleSourceError: Always, naming the stale reference.
+        """
+        raise core.StaleSourceError(stale)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(core, "Store", open_store)
+    request = {
+        "schema_version": 1,
+        "operation": "read",
+        "request_id": "read-1",
+        "issue_id": "AGENT-30",
+        "repo_id": "repo",
+        "host": "codex",
+        "session_id": "session",
+    }
+    result = core.execute(request)
+    assert (result["ok"], result["code"]) == (False, "SOURCE_STALE")
+    assert result["stale"] == stale
+    # The response holds a copy, never the exception's own list.
+    assert result["stale"] is not stale

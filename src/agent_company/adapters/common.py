@@ -1512,7 +1512,9 @@ def _join_child(
     """
     # The child's own participant key tells whether an earlier attempt already joined it.
     child_key = core.participant_key({"host": host, "session_id": event["session_id"]})
-    for attempt in range(CHILD_JOIN_ATTEMPTS):
+    attempt = 0
+    # Every pass ends in a return or a raise; the attempt count bounds the retries.
+    while True:
         # Read the revision immediately before the join; an existing member needs none.
         state = _issue_state(parent)
         if child_key in state["participants"]:
@@ -1534,11 +1536,38 @@ def _join_child(
         if joined["ok"]:
             return
         # Retry only revision drift or contention, while attempts and budget remain.
-        final = attempt == CHILD_JOIN_ATTEMPTS - 1 or time.monotonic() >= deadline
+        attempt += 1
+        final = attempt == CHILD_JOIN_ATTEMPTS or time.monotonic() >= deadline
         if joined["code"] not in CHILD_RETRY_CODES or final:
             raise core.WorkspaceError(joined["code"])
         # Back off briefly so the competing hook process can commit and release locks.
-        time.sleep(min(0.02 * (attempt + 1), max(0.0, deadline - time.monotonic())))
+        time.sleep(min(0.02 * attempt, max(0.0, deadline - time.monotonic())))
+
+
+def _acknowledge_child(child: core.JSONObject) -> tuple[str, core.JSONObject]:
+    """Read the child's packet, then acknowledge exactly the revision and digest it returned.
+
+    Args:
+        child: The child's bound lifecycle read request.
+
+    Returns:
+        The read packet digest and the acknowledge response, which may report a conflict.
+
+    Raises:
+        core.WorkspaceError: If the read itself fails.
+    """
+    read = core.execute({**child, "request_id": str(uuid.uuid4())})
+    core.require(read["ok"], read["code"])
+    acknowledged = core.execute(
+        {
+            **child,
+            "operation": "acknowledge",
+            "request_id": str(uuid.uuid4()),
+            "expected_revision": read["revision"],
+            "packet_digest": read["packet_digest"],
+        }
+    )
+    return str(read["packet_digest"]), acknowledged
 
 
 def _ready_child(event: core.JSONObject, host: str) -> str:
@@ -1557,28 +1586,15 @@ def _ready_child(event: core.JSONObject, host: str) -> str:
     """
     # Resolve the child's own binding, created by its join, for every lifecycle call.
     child = request_for(event, "read", host)
-    for attempt in range(2):
-        # Acknowledge exactly the revision and digest the preceding read returned.
-        read = core.execute({**child, "request_id": str(uuid.uuid4())})
-        core.require(read["ok"], read["code"])
-        acknowledged = core.execute(
-            {
-                **child,
-                "operation": "acknowledge",
-                "request_id": str(uuid.uuid4()),
-                "expected_revision": read["revision"],
-                "packet_digest": read["packet_digest"],
-            }
-        )
-        if acknowledged["ok"]:
-            break
-        # Another hook advanced the revision after the read: read again once.
-        if acknowledged["code"] != "REVISION_CONFLICT" or attempt == 1:
-            raise core.WorkspaceError(acknowledged["code"])
+    digest, acknowledged = _acknowledge_child(child)
+    # Another hook advanced the revision after the read: read and acknowledge again once.
+    if not acknowledged["ok"] and acknowledged["code"] == "REVISION_CONFLICT":
+        digest, acknowledged = _acknowledge_child(child)
+    core.require(acknowledged["ok"], acknowledged["code"])
     # Readiness takes no revision, so it is verified once after the acknowledgment.
     ready = core.execute({**child, "operation": "ready", "request_id": str(uuid.uuid4())})
     core.require(ready["ok"], ready["code"])
-    return str(read["packet_digest"])
+    return digest
 
 
 def child_start(event: core.JSONObject, host: str) -> str:
