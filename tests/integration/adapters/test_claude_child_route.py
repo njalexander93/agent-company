@@ -515,6 +515,47 @@ def test_child_provider_writes_are_denied(case: Fixture, operation: str) -> None
     assert "parent-write" in case.state()["participants"][case.base["coordinator"]]["pending"]
 
 
+def test_child_handback_and_parent_message_record_no_pending_work(case: Fixture) -> None:
+    """Admit the child's hand-back and the parent's message without pending entries.
+
+    Args:
+        case: Disposable repository fixture.
+    """
+    # The ready child's report to its parent is admitted and settles nothing.
+    start_child(case)
+    before = copy.deepcopy(case.state())
+    handback = event(
+        case,
+        "PreToolUse",
+        child=True,
+        tool_name="SubagentHandback",
+        tool_use_id="child-report",
+        tool_input={"message": "heading"},
+    )
+    assert not denied(claude.handle(handback))
+    assert (
+        claude.handle({**handback, "hook_event_name": "PostToolUse", "tool_response": "ok"}) == {}
+    )
+    assert case.state() == before
+    # The parent may message its subagent the same way, also without pending work.
+    message = event(
+        case,
+        "PreToolUse",
+        tool_name="SendMessage",
+        tool_use_id="parent-message",
+        tool_input={"to": "agent", "message": "report"},
+    )
+    assert not denied(claude.handle(message))
+    assert case.state() == before
+    # A parent cannot impersonate a hand-back; the tool stays unsupported for it.
+    parent_handback = {**handback, "tool_use_id": "parent-report"}
+    del parent_handback["agent_id"], parent_handback["agent_type"]
+    response = claude.handle(parent_handback)
+    assert denied(response)
+    assert "HOST_UNSUPPORTED_TOOL" in response["hookSpecificOutput"]["permissionDecisionReason"]
+    assert case.state() == before
+
+
 def test_cursor_subagent_start_is_unchanged(case: Fixture) -> None:
     """Keep Cursor's subagentStart denial independent of the Claude child route.
 

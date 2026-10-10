@@ -1028,9 +1028,12 @@ def native_bootstrap(event: core.JSONObject, host: str, ready: bool = False) -> 
 
 
 CLAUDE_SYNC_TOOLS = frozenset({"Read", "Write", "Edit", "Glob", "Grep", "NotebookEdit"})
-# Schema loading and skill loading change no files; a tool they surface is still
-# evaluated on its own call, so these record no pending work.
-CLAUDE_NO_EFFECT_TOOLS = frozenset({"ToolSearch", "Skill"})
+# Schema loading, skill loading and messaging change no files or provider state; a
+# tool they surface is still evaluated on its own call, so these record no pending work.
+CLAUDE_NO_EFFECT_TOOLS = frozenset({"ToolSearch", "Skill", "SendMessage"})
+# A subagent's report to its parent changes nothing either; only a child identity may
+# use it, so a parent cannot impersonate a hand-back.
+CLAUDE_CHILD_REPORT_TOOLS = frozenset({"SubagentHandback"})
 CURSOR_SYNC_TOOLS = frozenset({"Read", "Write", "Edit", "Grep", "Delete"})
 
 
@@ -1106,8 +1109,13 @@ def native_tool(event: core.JSONObject, host: str) -> str:
                 "REPOSITORY_MISMATCH",
             )
         return tool
+    # A child may also hand its report back; every other host keeps its own set.
     supported = (
-        CLAUDE_SYNC_TOOLS | CLAUDE_NO_EFFECT_TOOLS if host == "claude-code" else CURSOR_SYNC_TOOLS
+        CLAUDE_SYNC_TOOLS
+        | CLAUDE_NO_EFFECT_TOOLS
+        | (CLAUDE_CHILD_REPORT_TOOLS if event.get("child") is True else frozenset())
+        if host == "claude-code"
+        else CURSOR_SYNC_TOOLS
     )
     core.require(tool in supported, "HOST_UNSUPPORTED_TOOL")
     core.require(
@@ -1142,8 +1150,8 @@ def native_pre(event: core.JSONObject, host: str) -> None:
         return
     # Native permission approval remains separate from recording pending work.
     tool = native_tool(event, host)
-    # A ready session's no-effect schema or skill load needs no settlement.
-    if host == "claude-code" and tool in CLAUDE_NO_EFFECT_TOOLS:
+    # A ready session's no-effect load, message or hand-back needs no settlement.
+    if host == "claude-code" and tool in CLAUDE_NO_EFFECT_TOOLS | CLAUDE_CHILD_REPORT_TOOLS:
         return
     # Remember the parent's Agent call so SubagentStart can require it to be pending.
     if tool == "Agent":
@@ -1174,8 +1182,8 @@ def native_post(event: core.JSONObject, host: str, failed: bool) -> None:
     if native_bootstrap(event, host, ready=True):
         return
     tool = native_tool(event, host)
-    # No-effect schema and skill loads were never recorded as pending work.
-    if host == "claude-code" and tool in CLAUDE_NO_EFFECT_TOOLS:
+    # No-effect loads, messages and hand-backs were never recorded as pending work.
+    if host == "claude-code" and tool in CLAUDE_NO_EFFECT_TOOLS | CLAUDE_CHILD_REPORT_TOOLS:
         return
     # Require the documented success/failure payload before treating an event as completion.
     if failed:
@@ -1515,7 +1523,8 @@ def _recovery_route(code: str, host: str) -> str:
     # Unsupported tools need a different tool, not lifecycle recovery.
     if code == "HOST_UNSUPPORTED_TOOL":
         tools = (
-            "Read, Write, Edit, Glob, Grep, NotebookEdit, foreground Bash, ToolSearch or Skill"
+            "Read, Write, Edit, Glob, Grep, NotebookEdit, foreground Bash, ToolSearch, Skill or "
+            "SendMessage (a subagent also has SubagentHandback)"
             if host == "claude-code"
             else "Read, Write, Edit, Grep, Delete or foreground Shell"
         )

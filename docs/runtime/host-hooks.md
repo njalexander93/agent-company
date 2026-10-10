@@ -270,22 +270,30 @@ These rules are implemented in `adapters/common.py`, `adapters/claude.py`, and `
 | Boundary | Claude Code | Cursor Agent |
 | --- | --- | --- |
 | Identity | Exact native session ID. A hook carrying `agent_id` with a valid `session_id` is a subagent keyed `<session_id>/agent/<agent_id>`; `subagent_id`, `parent_conversation_id`, background markers and `agent_id` without `session_id` are rejected | Exact conversation ID; require any session ID to match; one workspace root |
-| Ordinary tools | Read, Write, Edit, Glob, Grep, NotebookEdit; foreground Bash under the setting above. `ToolSearch` and `Skill` are readiness-checked no-effect operations with no pending entry; a tool they surface is evaluated on its own call | Read, Write, Edit, Grep, Delete; Shell with supported foreground arguments |
+| Ordinary tools | Read, Write, Edit, Glob, Grep, NotebookEdit; foreground Bash under the setting above. `ToolSearch`, `Skill` and `SendMessage` are readiness-checked no-effect operations with no pending entry; a tool they surface is evaluated on its own call. A subagent's `SubagentHandback` is the same kind of no-effect operation and is admitted only under a child identity | Read, Write, Edit, Grep, Delete; Shell with supported foreground arguments |
 | Linear provider after readiness | Configured connector only (same server name and `mcp_server.source` checks as the ticket read): `get_issue` (any ID), `get_user`, `list_users`, `list_issue_statuses`, `list_comments`, `save_issue`, `save_comment` (a subagent child gets the read operations only). Each call is pending work under its native `tool_use_id`, settled by `PostToolUse` (any non-null `tool_response`, including Desktop's content-block list) or `PostToolUseFailure` | No native provider admission; `MCP:` tools are denied |
 | Ticket-first startup | Exact configured Linear issue read before readiness; matching native completion runs shared startup | Exact Linear issue read with generic call-ID and MCP server checks before shared startup |
 | Admission | Deny on failed readiness outside the ticket-read/recovery exceptions; otherwise preserve native permission decisions | Allow only the particular validated ticket-read, recovery or ordinary tool call |
 | File-tool completion | Supported success/failure event and required payload settle the observed call | Same; native failure type is checked |
 | Shell completion | Successful Bash result with string stdout/stderr, `interrupted: false`, and no async markers | Successful Shell result with integer `exitCode` and no async markers |
 | Ambiguous shell result/failure | Retain pending operation and report recovery | Same; booleans are not exit codes |
-| Child/provider/background tools | Deny unsupported tool names, unconfigured servers, other provider operations (including document/archive operations) and background identities. A ready parent's foreground `Agent` call (no `run_in_background: true`, no `isolation`) is pending work under its `tool_use_id`; `Task`, `TaskOutput`, `TaskStop`, `SpawnAgent` and `Agent` from a child are denied. `SubagentStart` joins the child (restricted/unverified, below); `SubagentStop` is an observation | Same; `subagentStart` also denies; remote sessions denied |
+| Child/provider/background tools | Deny unsupported tool names, unconfigured servers, other provider operations (including document/archive operations) and background identities. A ready parent's foreground `Agent` call (no `run_in_background: true`, no `isolation`) is pending work under its `tool_use_id`; `Task`, `TaskOutput`, `TaskStop`, `SpawnAgent` and `Agent` from a child are denied. `SubagentStart` joins the child (restricted, below); `SubagentStop` is an observation | Same; `subagentStart` also denies; remote sessions denied |
 | Session start | Advisory recovery/readiness context; no readiness grant | Advisory context only |
 | Compaction | PreCompact/PostCompact observations only; no context or decision output | Advisory context only |
 | Stop/session end | Optional observation only | Optional observation only; no automatic follow-up |
 
-### Claude subagent child route (restricted/unverified)
+### Claude subagent child route (restricted)
 
-This route is implemented and covered by synthetic protocol tests only. It stays
-**restricted/unverified** until a live Desktop session/tool pair is retained. On
+This route is implemented and covered by synthetic protocol tests, plus one observed
+local Desktop session (AGENT-34, 2026-10-09, macOS): `SubagentStart` fired before the
+child's first tool call and delivered the fixed `additionalContext`; the child's
+`PreToolUse`/`PostToolUse` carried the parent `session_id` with `agent_id`, so the child
+was keyed and settled under its own participant while the parent stayed ready;
+`SubagentStop` fired at the end of each child turn; the `Agent` `tool_input` carried
+`description`, `prompt` and `model`. That session also showed the child's
+`SubagentHandback` being denied as an unsupported tool, which is why it is now admitted
+for child identities. One local session is not platform coverage: the route stays
+**restricted**, and Linux, Windows and cloud/Cowork hosts remain unverified. On
 `SubagentStart` the adapter requires the parent binding (host plus raw `session_id`)
 to be ready and one admitted parent `Agent` call to be pending. It then runs core
 `join` for the child session (a roadmap-only reader packet, `issue_uuid` checked)

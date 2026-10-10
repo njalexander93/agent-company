@@ -128,7 +128,8 @@ round trip. See the [host guide](host-hooks.md) for current adapter contracts an
 child/spawn restrictions; unverified child identities do not inherit readiness. A
 Claude `Agent`-tool subagent of a ready parent receives its own reader binding at
 `SubagentStart` and reports its participant key and packet digest in the hook
-context; this route is restricted/unverified until live evidence is retained.
+context; this route is restricted, observed in one local Desktop session and
+unverified on other hosts (see the host guide).
 
 The pre-readiness command allowlist is operation-specific. It includes the
 original `diagnose/register/bind/adopt/resume/restore` routes plus scoped `read` and
@@ -252,7 +253,7 @@ intent. It never recursively removes the task root.
 
 ### Host limitations
 
-Follow the [host guide](host-hooks.md) for native configuration, event coverage and trust. Direct adapter subprocess tests do not prove that an installed host loaded the candidate or invoked its callbacks. Child identity, async association and provider observations must be demonstrated on the actual supported path; otherwise retain explicit denial or uncertainty. The Claude subagent child route is covered by synthetic protocol tests only; native `SubagentStart`/`SubagentStop` delivery and the subagent's `agent_id` on tool events are not yet verified on an installed host.
+Follow the [host guide](host-hooks.md) for native configuration, event coverage and trust. Direct adapter subprocess tests do not prove that an installed host loaded the candidate or invoked its callbacks. Child identity, async association and provider observations must be demonstrated on the actual supported path; otherwise retain explicit denial or uncertainty. The Claude subagent child route is covered by synthetic protocol tests and one observed local macOS Desktop session (native `SubagentStart`/`SubagentStop` delivery and the subagent's `agent_id` on tool events, recorded in the host guide); other hosts and platforms remain unverified.
 
 Filesystem support and host support are separate checks. Windows uses a native
 NTFS implementation; Linux and macOS use the POSIX implementation. A filesystem
