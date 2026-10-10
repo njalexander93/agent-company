@@ -304,3 +304,267 @@ def test_windows_bootstrap_rejects_unsafe_literal_argv_and_wrong_entry(
     # Failure must happen at command construction, before any shell runs.
     with pytest.raises(ValueError, match="Unsupported PowerShell argument"):
         common.bootstrap_command(request, "codex")
+
+
+SELF_KEY = core.participant_key(base("scope"))
+READER_KEY = "f" * 64
+REFRESHED = "b" * 64
+
+
+def packet_ref(identifier: str, locator: str, reader: str = SELF_KEY) -> dict[str, Any]:
+    """Build one committed packet reference with a fixed original digest.
+
+    Args:
+        identifier: Reference ID unique within the packet.
+        locator: Managed or absolute source locator.
+        reader: Participant key the reference is scoped to.
+
+    Returns:
+        A complete packet reference.
+    """
+    return {
+        "id": identifier,
+        "locator": locator,
+        "sha256": "a" * 64,
+        "required": True,
+        "authority": "task-workspace",
+        "reason": "startup",
+        "stage": "planning",
+        "reader": reader,
+    }
+
+
+CURRENT = [packet_ref("roadmap", "roadmap.md"), packet_ref("procedure", "/checkout/AGENTS.md")]
+
+
+class IssueControl:
+    """Expose a lockable issue control directory for the self-refresh state read."""
+
+    def __enter__(self) -> IssueControl:
+        """Hold the modeled control directory or lock.
+
+        Returns:
+            This control node.
+        """
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        """Release the modeled control directory or lock.
+
+        Args:
+            _args: Context manager exception fields, unused by this fake.
+        """
+
+    def lock(self) -> IssueControl:
+        """Model the issue lock as a reentrant no-op.
+
+        Returns:
+            This control node.
+        """
+        return self
+
+
+class StateStore(IssueControl):
+    """Model a registered store whose issues directory yields one control node."""
+
+    def __init__(self, _request: dict[str, Any]) -> None:
+        """Accept the scope request as the core Store would.
+
+        Args:
+            _request: Decoded scope request, unused by this fake.
+        """
+        self.issues = SimpleNamespace(child=lambda _identifier: IssueControl())
+
+
+def install_state(monkeypatch: pytest.MonkeyPatch, state: dict[str, Any]) -> None:
+    """Expose one assignment and one committed issue state to the bootstrap parser.
+
+    Args:
+        monkeypatch: Replaces repository, binding and store boundaries.
+        state: Committed issue state returned by the fake issue.
+    """
+    # Bind the session to AGENT-30 and serve the supplied committed state.
+    monkeypatch.setattr(common.core, "repository", lambda _path: (CHECKOUT, None, [CHECKOUT]))
+    monkeypatch.setattr(common.core.Directory, "absolute", lambda _path: AssignmentDirectory())
+    monkeypatch.setattr(common.core, "Store", StateStore)
+    monkeypatch.setattr(
+        common.core,
+        "Issue",
+        lambda *_args: SimpleNamespace(recover=lambda: None, committed_state=lambda: state),
+    )
+
+
+def coordinator_state(packet: list[dict[str, Any]] | None = CURRENT) -> dict[str, Any]:
+    """Build committed state where the observed session coordinates the issue.
+
+    Args:
+        packet: The coordinator's committed packet, or None when unscoped.
+
+    Returns:
+        A minimal committed state with coordinator and reader participants.
+    """
+    return {
+        "coordinator": SELF_KEY,
+        "participants": {
+            SELF_KEY: {"packet": packet, "ack": None, "status": "attached"},
+            READER_KEY: {"packet": [packet_ref("roadmap", "roadmap.md", READER_KEY)]},
+        },
+    }
+
+
+def refresh(packet: list[dict[str, Any]], **extra: object) -> dict[str, Any]:
+    """Build a self-refresh scope request with the supplied packet.
+
+    Args:
+        packet: Proposed packet references.
+        extra: Additional or replacement request fields.
+
+    Returns:
+        A scope request for the assigned issue.
+    """
+    fields: dict[str, object] = {
+        "repo_id": "repo",
+        "issue_id": "AGENT-30",
+        "binding_generation": 1,
+        "expected_revision": 7,
+        "target_participant": SELF_KEY,
+        "packet": packet,
+    }
+    return base("scope", **{**fields, **extra})
+
+
+def refreshed(packet: list[dict[str, Any]] = CURRENT) -> list[dict[str, Any]]:
+    """Replace every digest in a packet with the refreshed digest.
+
+    Args:
+        packet: Packet references to copy.
+
+    Returns:
+        Copies of the references with only sha256 changed.
+    """
+    return [{**ref, "sha256": REFRESHED} for ref in packet]
+
+
+def admitted_unready(request: dict[str, Any]) -> bool:
+    """Evaluate one request through the canonical parser for an unready session.
+
+    Args:
+        request: Lifecycle request encoded into the shell command.
+
+    Returns:
+        Whether the hook would admit the command before readiness.
+    """
+    event = {"cwd": str(CHECKOUT), "session_id": "session"}
+    command = common.bootstrap_command(request, "codex")
+    return common.canonical_bootstrap(event, command, "codex", ready=False)
+
+
+def test_unready_coordinator_self_refresh_scope_is_admitted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A coordinator may re-scope its own packet with only refreshed digests.
+
+    Args:
+        monkeypatch: Replaces repository, binding and store boundaries.
+    """
+    # The digest-only refresh of the coordinator's own current packet is admitted.
+    install_state(monkeypatch, coordinator_state())
+    assert admitted_unready(refresh(refreshed())) is True
+    # An unchanged digest is still a valid digest-only shape.
+    assert admitted_unready(refresh([dict(ref) for ref in CURRENT])) is True
+
+
+@pytest.mark.parametrize(
+    "packet",
+    [
+        pytest.param(refreshed(CURRENT[:1]), id="removed-reference"),
+        pytest.param(
+            refreshed([*CURRENT, packet_ref("extra", "context/note.md")]), id="added-reference"
+        ),
+        pytest.param(refreshed(CURRENT[::-1]), id="reordered-references"),
+        *[
+            pytest.param([{**refreshed()[0], field: value}, refreshed()[1]], id="changed-" + field)
+            for field, value in (
+                ("locator", "context/other.md"),
+                ("reader", READER_KEY),
+                ("required", False),
+                ("authority", "repository-governing"),
+                ("reason", "other"),
+                ("stage", "implementation"),
+                ("id", "renamed"),
+            )
+        ],
+        pytest.param([{**refreshed()[0], "sha256": "not-a-digest"}, refreshed()[1]], id="bad-sha"),
+        pytest.param([{**refreshed()[0], "sha256": "A" * 64}, refreshed()[1]], id="upper-sha"),
+        pytest.param([{**refreshed()[0], "extra": "field"}, refreshed()[1]], id="extra-ref-field"),
+        pytest.param("not-a-list", id="nonlist-packet"),
+    ],
+)
+def test_unready_self_refresh_rejects_changed_packet_shape(
+    monkeypatch: pytest.MonkeyPatch, packet: Any
+) -> None:
+    """Any packet change beyond reference digests keeps the scope denied.
+
+    Args:
+        monkeypatch: Replaces repository, binding and store boundaries.
+        packet: Proposed packet that differs from the committed one beyond digests.
+    """
+    # Only sha256 may differ from the committed coordinator packet.
+    install_state(monkeypatch, coordinator_state())
+    assert admitted_unready(refresh(packet)) is False
+
+
+def test_unready_self_refresh_rejects_other_target_extra_fields_and_owned_paths(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The self-refresh cannot scope another key, assign paths or carry extra fields.
+
+    Args:
+        monkeypatch: Replaces repository, binding and store boundaries.
+    """
+    # Targeting another participant with the same packet is still a coordinator scope.
+    install_state(monkeypatch, coordinator_state())
+    other = refresh(refreshed(), target_participant=READER_KEY)
+    assert admitted_unready(other) is False
+    # Owned paths and arbitrary fields are outside the self-refresh shape.
+    assert admitted_unready(refresh(refreshed(), owned_paths=["context/note.md"])) is False
+    assert admitted_unready(refresh(refreshed(), arbitrary="injection")) is False
+    # A foreign issue fails the assignment check after the shape check.
+    assert admitted_unready(refresh(refreshed(), issue_id="AGENT-31")) is False
+
+
+def test_unready_self_refresh_rejects_non_coordinator_and_unscoped_callers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A reader or a coordinator without a committed packet cannot self-refresh.
+
+    Args:
+        monkeypatch: Replaces repository, binding and store boundaries.
+    """
+    # A reader holding its own packet is not the coordinator.
+    reader = coordinator_state()
+    reader["coordinator"] = READER_KEY
+    install_state(monkeypatch, reader)
+    assert admitted_unready(refresh(refreshed())) is False
+    # A coordinator with no committed packet has nothing to refresh.
+    install_state(monkeypatch, coordinator_state(packet=None))
+    assert admitted_unready(refresh(refreshed())) is False
+    # A coordinator absent from the participants map is denied as well.
+    absent = coordinator_state()
+    del absent["participants"][SELF_KEY]
+    install_state(monkeypatch, absent)
+    assert admitted_unready(refresh(refreshed())) is False
+
+
+def test_ready_scope_keeps_its_existing_admission(monkeypatch: pytest.MonkeyPatch) -> None:
+    """After readiness the self-refresh check does not narrow ordinary coordinator scope.
+
+    Args:
+        monkeypatch: Replaces repository, binding and store boundaries.
+    """
+    # A ready coordinator may still scope another participant with owned paths.
+    install_state(monkeypatch, coordinator_state())
+    request = refresh(refreshed(), target_participant=READER_KEY, owned_paths=["context/n.md"])
+    event = {"cwd": str(CHECKOUT), "session_id": "session"}
+    command = common.bootstrap_command(request, "codex")
+    assert common.canonical_bootstrap(event, command, "codex", ready=True) is True

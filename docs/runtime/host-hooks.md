@@ -83,6 +83,13 @@ local lifecycle integration, not proposal approval.
    `diagnose` in its pre-registration shape, or in its issue-level shape with
    `repo_id`, `issue_id` and optional `binding_generation` for the issue in its
    recorded assignment. Both shapes are read-only and accept no other fields.
+   The issue coordinator may also run one `scope` before readiness: a self-refresh
+   whose `target_participant` is its own key and whose `packet` repeats its current
+   packet with the same references in the same order, changing only each `sha256`
+   to a digest, with no `owned_paths` and no other fields. It recovers a coordinator
+   whose own governing source changed (`SOURCE_STALE`). The core then clears the
+   acknowledgment, so readiness still needs `read`, `acknowledge` with the returned
+   `packet_digest`, then `ready`. The rule is shared by every native host.
 5. A successful matching issue-read completion invokes the shared startup orchestrator. It derives the
    main worktree from Git, registers or resumes, creates a new issue with the observed
    master as coordinator, installs an initial reader packet, reads its source bytes,
@@ -329,7 +336,9 @@ The Claude provider allowlist checks the server, provenance and operation name o
 Field-level rules, such as an assignee equal to the initiating human or the target state
 name, remain in the contributor procedure's read-back rule; provider success is not
 lifecycle authority. Denials name the admitted next operation for their code; see
-[explicit setup](task-workspace-usage.md#explicit-setup-and-bootstrap).
+[explicit setup](task-workspace-usage.md#explicit-setup-and-bootstrap). A coordinator
+denied with `SOURCE_STALE` recovers through the self-refresh `scope` (setup step 4),
+then `read`, `acknowledge` and `ready`; a reader asks the coordinator to re-scope it.
 
 Unsupported MCP/provider routes must use a separately verified provider workflow. No native
 archive-provider coverage is claimed here. Interrupted or ambiguous shell work remains pending:

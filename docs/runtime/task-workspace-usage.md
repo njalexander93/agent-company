@@ -67,8 +67,9 @@ ticket read and, on Claude Code, the preparation reads. `BINDING_MISSING` names
 the `Task:` line and ticket read. `NOT_READY`, which a coordinator sees after
 its own committed roadmap update, names `read`, `acknowledge` with the returned
 `packet_digest`, then `ready`. `SOURCE_STALE` gives the coordinator route (a
-repeated Task line and ticket read) and the reader route (coordinator `scope` or
-a repeated Task line and ticket read). `HOST_UNSUPPORTED_PROVIDER`,
+self-refresh `scope` of its own key with only refreshed digests, then `read`,
+`acknowledge` with the returned `packet_digest` and `ready`) and the reader route
+(coordinator `scope` or a repeated Task line and ticket read). `HOST_UNSUPPORTED_PROVIDER`,
 `HOST_UNSUPPORTED_TOOL` and `HOST_UNSUPPORTED_CHILD_IDENTITY` state that no
 lifecycle operation changes the outcome and name the admitted alternative.
 `HOST_UNSUPPORTED_BACKGROUND` and `HOST_UNSUPPORTED_ASYNC` ask for a foreground,
@@ -142,9 +143,15 @@ state and append no event. A maintenance binding permits the specified archive/i
 cleanup operations. Narrow schemas also permit terminal `archive-prepare`,
 coordinator `reconcile-files`, and explicit `rebind`: requiring ordinary readiness
 for those repair operations would deadlock recovery. Core ownership, generation,
-revision and pending-operation checks still apply. `create` and `scope` are not
-unready-session exceptions; the
-explicit startup assignment supplies them automatically. Ready sessions can call
+revision and pending-operation checks still apply. `create` is not an
+unready-session exception, and `scope` is one only in its coordinator
+self-refresh shape: the issue coordinator targets its own participant key with
+its current packet, same references in the same order, every field except
+`sha256` unchanged and each `sha256` a digest, with no `owned_paths` and no
+other fields. It recovers a coordinator whose own governing source changed; the
+core clears the acknowledgment, so `read`, `acknowledge` and `ready` must follow.
+Every other `scope`, and `create`, needs readiness; the explicit startup
+assignment supplies them automatically. Ready sessions can call
 the reviewed lifecycle CLI without registering that same local transaction as a
 pending external tool. Unknown bootstrap fields are rejected.
 

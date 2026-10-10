@@ -21,6 +21,7 @@ BOOTSTRAP_FIELDS = {
     "diagnose": set(),
     "register": {"main_worktree", "startup"},
     "bind": set(),
+    "scope": {"target_participant", "packet"},
     "adopt": {"coordinator", "inventory", "owners", "evidence"},
     "resume": set(),
     "restore": {"observations"},
@@ -833,6 +834,67 @@ def bootstrap_request(command: str, host: str, python: str, lifecycle: Path) -> 
     return request
 
 
+def coordinator_self_refresh(request: core.JSONObject, event: core.JSONObject) -> bool:
+    """Recognize the coordinator's digest-only re-scope of its own current packet.
+
+    A coordinator whose own governing source changed is stranded at SOURCE_STALE: it
+    cannot read, acknowledge or ready the stale packet, and scope is otherwise not a
+    pre-readiness operation. This shape lets it replace only the reference digests;
+    the core scope then clears acknowledgment, so readiness still needs read,
+    acknowledge and ready at the new revision.
+
+    Args:
+        request: Decoded scope request whose session, host and worktree already match.
+        event: Observed hook envelope supplying the actual session identity.
+
+    Returns:
+        True only when the caller is the issue coordinator, targets its own key, keeps
+        every reference field except a valid ``sha256`` and assigns no owned paths.
+    """
+    # Restrict the request to the self-refresh fields; owned paths are never refreshed.
+    if not set(request) <= COMMON_FIELDS | {"target_participant", "packet"} or not {
+        "repo_id",
+        "issue_id",
+        "target_participant",
+        "packet",
+    } <= set(request):
+        return False
+    key = core.participant_key({"host": request["host"], "session_id": event["session_id"]})
+    # The target must be the caller's own participant key.
+    if request["target_participant"] != key:
+        return False
+    # Read the committed issue state under its lock, as the core would before scope.
+    with (
+        core.Store(request) as store,
+        store.issues.child(request["issue_id"]) as control,
+        control.lock(),
+    ):
+        issue = core.Issue(store, control, request["issue_id"])
+        issue.recover()
+        state = issue.committed_state()
+    # Only the issue coordinator holding an existing packet may refresh itself.
+    member = state["participants"].get(key)
+    current = member.get("packet") if member is not None else None
+    if key != state["coordinator"] or current is None:
+        return False
+    packet = request["packet"]
+    # Require the same references in the same order with only sha256 changed.
+    if not isinstance(packet, list) or len(packet) != len(current):
+        return False
+    for proposed, existing in zip(packet, current, strict=True):
+        # Each proposed reference must be an object carrying a 64-hex digest.
+        if not isinstance(proposed, dict) or not isinstance(proposed.get("sha256"), str):
+            return False
+        if not core.DIGEST.fullmatch(proposed["sha256"]):
+            return False
+        # Every field but the digest must equal the committed reference.
+        if {k: v for k, v in proposed.items() if k != "sha256"} != {
+            k: v for k, v in existing.items() if k != "sha256"
+        }:
+            return False
+    return True
+
+
 def canonical_bootstrap(
     event: core.JSONObject,
     command: object,
@@ -885,6 +947,13 @@ def canonical_bootstrap(
         if request["operation"] == "diagnose" and not (
             {"repo_id", "issue_id"} <= set(request)
             and set(request) <= identity | {"repo_id", "issue_id", "binding_generation"}
+        ):
+            return False
+        # An unready scope is admitted only as the coordinator's digest-only self-refresh.
+        if (
+            not ready
+            and request["operation"] == "scope"
+            and not coordinator_self_refresh(request, event)
         ):
             return False
         # Require the bootstrap issue to match the session assignment stored in this worktree.
@@ -1462,10 +1531,12 @@ def _recovery_route(code: str, host: str) -> str:
     # Coordinators and readers refresh a stale packet through different owners.
     if code == "SOURCE_STALE":
         return (
-            "A required packet source changed after acknowledgment. Coordinator: submit "
-            "`Task: <issue-id>` again and repeat the exact get_issue read so startup "
-            "re-scopes your packet. Reader: ask the coordinator to refresh your packet with "
-            "scope, or resubmit the Task line and exact get_issue read to refresh a "
+            "A required packet source changed after acknowledgment. Coordinator: run a "
+            "self-refresh scope (target_participant is your own key, packet is your current "
+            "packet with only the sha256 digests refreshed, no owned_paths), then read, "
+            "acknowledge the returned packet_digest, then ready. Reader: ask the coordinator "
+            "to refresh your packet with scope, or resubmit the Task line and exact "
+            "get_issue read to refresh a "
             f"roadmap-only packet; then read, acknowledge and ready, using {command}."
         )
     # Background or asynchronous work must be re-issued in the foreground.
