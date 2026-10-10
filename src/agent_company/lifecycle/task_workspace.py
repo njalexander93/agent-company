@@ -1196,6 +1196,154 @@ def validate_packet(packet: list[SourceRef]) -> list[SourceRef]:
     return packet
 
 
+def refresh_roadmap_reference(state: WorkspaceState, key: str, digest: str) -> None:
+    """Move the coordinator's own roadmap reference to newly staged roadmap bytes.
+
+    Only references whose locator is ``roadmap.md`` in the coordinator's participant
+    packet and stored assignment change. Other references, other participants and
+    reader packets stay untouched. A changed packet clears acknowledgment so readiness
+    needs a new ``read``, exact-digest ``acknowledge`` and ``ready``.
+
+    Args:
+        state: Staged issue control state for the committing ``update``.
+        key: Coordinator participant key that owns ``roadmap.md``.
+        digest: SHA-256 digest of the staged roadmap bytes.
+    """
+    # Locate the coordinator's packet; an unscoped coordinator has nothing to refresh.
+    participant = state["participants"].get(key)
+    if participant is None or participant["packet"] is None:
+        return
+    # Point the packet's roadmap references at the new bytes.
+    packet = roadmap_refreshed(participant["packet"], digest)
+    # Leave readiness intact when no recorded roadmap digest changed.
+    if packet == participant["packet"]:
+        return
+    # Keep the stored assignment's roadmap reference on the same committed digest.
+    assignment = state.get("assignments", {}).get(key)
+    if assignment is not None:
+        assignment["packet"] = roadmap_refreshed(assignment["packet"], digest)
+    # Invalidate acknowledgment without reviving a detached participant generation.
+    participant.update({"packet": packet, "ack": None})
+    if participant["status"] != "detached":
+        participant["status"] = "attached"
+
+
+def roadmap_refreshed(packet: list[SourceRef], digest: str) -> list[SourceRef]:
+    """Copy a packet with every ``roadmap.md`` reference set to one digest.
+
+    Args:
+        packet: Assigned source references to copy.
+        digest: SHA-256 digest of the committed roadmap bytes.
+
+    Returns:
+        A new packet list; non-roadmap references are copied unchanged.
+    """
+    # Copy each reference so the caller's committed packet is never mutated in place.
+    refreshed: list[SourceRef] = []
+    for ref in packet:
+        copy_ref = ref.copy()
+        # Replace the digest only for the managed roadmap locator.
+        if copy_ref["locator"] == "roadmap.md":
+            copy_ref["sha256"] = digest
+        refreshed.append(copy_ref)
+    return refreshed
+
+
+class SourceState(TypedDict):
+    """Compare one assigned reference's recorded digest with its current source bytes."""
+
+    id: str
+    locator: str
+    recorded_sha256: str
+    current_sha256: str | None
+    available: bool
+
+
+class StaleSourceError(WorkspaceError):
+    """Report a required packet source mismatch together with every changed reference."""
+
+    def __init__(self, stale: list[SourceState]) -> None:
+        """Store the changed references beside the public SOURCE_STALE diagnostic.
+
+        Args:
+            stale: References whose current digest differs from the recorded one,
+                including unreadable sources with a null current digest.
+        """
+        # Keep the bounded code and attach a recovery instruction naming the list.
+        super().__init__(
+            "SOURCE_STALE",
+            "The references in `stale` changed. Refresh their recorded sha256 to "
+            "current_sha256 through the coordinator's scope, then read, acknowledge and ready.",
+        )
+        self.stale = stale
+
+
+def external_source(locator: str) -> bytes | None:
+    """Read one absolute packet source through the no-follow parent-directory boundary.
+
+    Args:
+        locator: Absolute source locator recorded in a packet reference.
+
+    Returns:
+        The exact source bytes, or None when the source is missing, unsafe or unreadable.
+    """
+    # Open the parent through the validated traversal and read only the named file.
+    path = Path(locator)
+    try:
+        with Directory.absolute(path.parent) as parent:
+            return parent.read(path.name, MAX_FILE)
+    # Report an unreadable source as absent; callers decide whether it blocks readiness.
+    except (OSError, WorkspaceError):
+        return None
+
+
+def source_state(ref: SourceRef, current: str | None) -> SourceState:
+    """Describe one reference's recorded and current digests.
+
+    Args:
+        ref: Assigned source reference exactly as stored in the packet.
+        current: Current SHA-256 digest of the source, or None when unreadable.
+
+    Returns:
+        The reference identity, both digests and whether they still match.
+    """
+    return {
+        "id": ref["id"],
+        "locator": ref["locator"],
+        "recorded_sha256": ref["sha256"],
+        "current_sha256": current,
+        "available": current == ref["sha256"],
+    }
+
+
+def packet_sources(packet: list[SourceRef], digests: dict[str, str]) -> list[SourceState]:
+    """Compute each packet reference's current state without reading payload bytes.
+
+    Payload-relative locators take the committed manifest digest, which is exactly what
+    ``read`` verifies the payload bytes against. Absolute locators are read through the
+    same no-follow reader that ``packet_reads`` uses. No state, lock or event changes.
+
+    Args:
+        packet: Assigned source references in their stored order.
+        digests: Committed payload manifest mapping relative paths to digests.
+
+    Returns:
+        One source state per reference, aligned with ``packet``.
+    """
+    # Resolve each reference from the committed manifest or the external source bytes.
+    sources: list[SourceState] = []
+    for ref in packet:
+        # Payload references use the committed digest; absent paths are unreadable.
+        if not Path(ref["locator"]).is_absolute():
+            current = digests.get(ref["locator"])
+        else:
+            # External references hash the bytes currently at their absolute locator.
+            data = external_source(ref["locator"])
+            current = None if data is None else sha(data)
+        sources.append(source_state(ref, current))
+    return sources
+
+
 def packet_reads(
     state: WorkspaceState, participant: Participant, files: PayloadFiles
 ) -> list[SourceAvailability]:
@@ -1210,35 +1358,32 @@ def packet_reads(
         Assigned reference descriptors annotated with availability.
 
     Raises:
-        WorkspaceError: If the packet is missing or a required source is stale.
+        WorkspaceError: If the packet is missing.
+        StaleSourceError: If a required source is missing, unreadable or changed; it
+            lists every reference whose current digest differs from the recorded one.
     """
     # Require an assigned source packet before resolving any source bytes.
     require(participant.get("packet") is not None, "SCOPE_MISSING")
     assert participant["packet"] is not None  # Established by the scope guard above.
     refs: list[SourceAvailability] = []
+    sources: list[SourceState] = []
+    blocked = False
     # Read only assigned references and compare their exact content digests.
     for ref in participant["packet"]:
-        data = None
-        # Resolve each reference through the appropriate filesystem boundary.
-        try:
-            # Open external references safely; resolve relative references from
-            # validated payload bytes.
-            if Path(ref["locator"]).is_absolute():
-                path = Path(ref["locator"])
-                # Read the assigned external source beneath a validated parent handle.
-                with Directory.absolute(path.parent) as parent:
-                    data = parent.read(path.name, MAX_FILE)
-            else:
-                # Resolve managed references from the already validated issue payload bytes.
-                data = files.get(ref["locator"])
-        except (OSError, WorkspaceError):
-            # Missing optional sources remain unavailable; required sources block readiness.
-            if ref["required"]:
-                raise WorkspaceError("SOURCE_STALE") from None
+        # Open external references safely; resolve relative references from
+        # validated payload bytes.
+        if Path(ref["locator"]).is_absolute():
+            data = external_source(ref["locator"])
+        else:
+            data = files.get(ref["locator"])
         # Compare exact source bytes and retain availability for optional references.
-        valid = data is not None and sha(data) == ref["sha256"]
-        require(valid or not ref["required"], "SOURCE_STALE")
-        refs.append({**ref, "available": valid})
+        source = source_state(ref, None if data is None else sha(data))
+        sources.append(source)
+        blocked = blocked or (ref["required"] and not source["available"])
+        refs.append({**ref, "available": source["available"]})
+    # A changed required source blocks readiness and names every changed reference.
+    if blocked:
+        raise StaleSourceError([source for source in sources if not source["available"]])
     return refs
 
 
@@ -1709,6 +1854,25 @@ def finish_cleanup(issue: Issue) -> None:
     issue.state = state
 
 
+def initial_payload(identifier: str) -> PayloadFiles:
+    """Build the packaged starting payload for a newly created issue workspace.
+
+    Args:
+        identifier: Validated issue ID substituted into the roadmap template.
+
+    Returns:
+        The template roadmap bytes and an empty event stream.
+
+    Raises:
+        OSError: If the packaged roadmap template cannot be read.
+    """
+    template = resources.files("agent_company").joinpath("resources/task_workspace/roadmap.md")
+    return {
+        "roadmap.md": template.read_text().replace("{{issue_id}}", identifier).encode(),
+        "events.jsonl": b"",
+    }
+
+
 def operate(store: Store, issue: Issue, request: JSONObject) -> JSONObject:
     """Dispatch one issue request under the caller-held binding and issue locks.
 
@@ -1757,7 +1921,7 @@ def operate(store: Store, issue: Issue, request: JSONObject) -> JSONObject:
             return result
     # Return issue presence and storage state without changing participation.
     if operation == "diagnose":
-        return {
+        diagnosis: JSONObject = {
             "ok": True,
             "code": "PRESENT" if state else "ABSENT",
             "repo_id": store.registration["repo_id"],
@@ -1765,6 +1929,15 @@ def operate(store: Store, issue: Issue, request: JSONObject) -> JSONObject:
             "revision": state["revision"] if state else None,
             "storage": state["storage"] if state else "absent",
         }
+        member = state["participants"].get(key) if state else None
+        packet = member.get("packet") if member is not None else None
+        # Expose a recorded caller's committed packet exactly as stored, plus each
+        # reference's current digest, so a coordinator stranded at SOURCE_STALE can
+        # build its digest-only self-refresh scope from this result alone.
+        if state and packet is not None:
+            diagnosis["packet"] = copy.deepcopy(packet)
+            diagnosis["sources"] = packet_sources(packet, state.get("files", {}))
+        return diagnosis
     # Read the existing session binding; never infer it from the prompt.
     binding = store.binding()
     # Prevent attachment operations from reusing another issue binding.
@@ -1798,13 +1971,7 @@ def operate(store: Store, issue: Issue, request: JSONObject) -> JSONObject:
             state["seq"], state["head"] = validate_history(files)
         else:
             # Initialize from the packaged roadmap and start an empty event stream.
-            template = resources.files("agent_company").joinpath(
-                "resources/task_workspace/roadmap.md"
-            )
-            files = {
-                "roadmap.md": template.read_text().replace("{{issue_id}}", issue.id).encode(),
-                "events.jsonl": b"",
-            }
+            files = initial_payload(issue.id)
         result = attach(state, request)
         # Publish this lifecycle result through the recoverable transaction.
         result = issue.commit(state, files, request, result, operation)
@@ -2107,6 +2274,10 @@ def operate(store: Store, issue: Issue, request: JSONObject) -> JSONObject:
         token(provenance["status"])
         state["provenance"][path] = {**provenance, "author": key, "supersedes": state["revision"]}
         files[path] = data
+        # Keep the coordinator's own roadmap reference on the committed bytes and
+        # require a fresh read, acknowledgment and readiness at the new revision.
+        if path == "roadmap.md" and key == state["coordinator"]:
+            refresh_roadmap_reference(state, key, sha(data))
     # Retain the bounded handoff record and evidence before marking a submitted PR in review.
     elif operation == "checkpoint":
         checkpoint = request["checkpoint"]
@@ -2494,6 +2665,15 @@ def operate(store: Store, issue: Issue, request: JSONObject) -> JSONObject:
 def rebind(store: Store, request: JSONObject) -> JSONObject:
     """Move one explicit session binding while fencing and preserving its old issue.
 
+    ``issue_id`` and ``binding_generation`` name the old binding; ``issue_uuid`` names
+    the target's provider identity. An existing target keeps its assignment rule: it
+    must already assign the caller or name it coordinator. An absent target is
+    created from the packaged template with the caller as its coordinator, which
+    requires ``issue_uuid``. The old issue must be the session's live binding at the
+    stated generation, and a detached old member moves only as this request's own retry.
+    Either way the old participant is detached and the old payload and coordinator
+    ownership stay unchanged.
+
     Args:
         store: Validated shared repository Store.
         request: Versioned lifecycle request with explicit repository, issue and session identities.
@@ -2502,31 +2682,35 @@ def rebind(store: Store, request: JSONObject) -> JSONObject:
         The target participant binding result.
 
     Raises:
-        WorkspaceError: If target assignment, generations, pending work or retry identity conflicts.
+        WorkspaceError: If target assignment or identity, the live binding, generations,
+            pending work, caller kind or retry identity conflicts, or an unadopted target
+            payload exists.
         OSError: If either issue or binding cannot be persisted.
     """
     # Validate distinct old and target issue identities before rebinding.
     old_id, new_id = issue_id(request["issue_id"]), issue_id(request["new_issue_id"])
     require(old_id != new_id, "BINDING_CONFLICT")
+    # A subagent holds only a coordinator-scoped assignment; it never moves a binding.
+    require("/agent/" not in token(request["session_id"]), "NOT_OWNER")
     key = participant_key(request)
     evidence(request.get("evidence"))
     # Manage both issue-lock lifetimes as one ordered rebinding operation.
     with ExitStack() as stack:
         controls = {}
-        # Lock both issues in stable order before retiring the old binding or attaching the new one.
+        # Lock both issues in stable order; only the target's control may be created here.
         for identifier in sorted([old_id, new_id]):
-            control = stack.enter_context(store.issues.child(identifier))
+            control = stack.enter_context(store.issues.child(identifier, identifier == new_id))
             stack.enter_context(control.lock())
             controls[identifier] = control
         old, new = Issue(store, controls[old_id], old_id), Issue(store, controls[new_id], new_id)
         old.recover()
         new.recover()
-        require(old.state and new.state, "RECOVERY_REQUIRED")
-        old_files, new_files = old.files(), new.files()
-        old_state, new_state_value = (
-            copy.deepcopy(old.committed_state()),
-            copy.deepcopy(new.committed_state()),
-        )
+        require(old.state, "RECOVERY_REQUIRED")
+        creating = not new.state
+        old_files = old.files()
+        old_state = copy.deepcopy(old.committed_state())
+        # Require the caller's current old participation with no unresolved work; a
+        # coordinator leaves only after every other participant has detached.
         member = old_state["participants"].get(key)
         require(member and member["generation"] == request["binding_generation"], "STALE_BINDING")
         assert member is not None  # Established by the generation guard above.
@@ -2546,7 +2730,47 @@ def rebind(store: Store, request: JSONObject) -> JSONObject:
             "old_issue_id": old_id,
             "binding_generation": request.get("new_binding_generation"),
         }
-        previous = new_state_value["requests"].get(sha(request["request_id"].encode()))
+        previous: RequestRecord | None = None
+        # Create an absent target only from its provider identity and an unused payload path.
+        if creating:
+            require(isinstance(request.get("issue_uuid"), str), "INVALID_REQUEST")
+            require(not store.task.exists(new_id), "ADOPTION_REQUIRED")
+            new_state_value = new_state(store, {**target_request, "coordinator": key})
+            new_files = initial_payload(new_id)
+        else:
+            # An existing target must match any supplied provider identity.
+            new_files = new.files()
+            new_state_value = copy.deepcopy(new.committed_state())
+            require(
+                not request.get("issue_uuid")
+                or request["issue_uuid"] == new_state_value["issue_uuid"],
+                "ISSUE_MISMATCH",
+            )
+            previous = new_state_value["requests"].get(sha(request["request_id"].encode()))
+        # The old issue must be this worktree's live session binding at the stated
+        # generation; only a replay of the committed target may find it already moved.
+        binding = store.binding()
+        require(
+            binding is not None
+            and (
+                (
+                    binding["issue_id"] == old_id
+                    and binding["binding_generation"] == request["binding_generation"]
+                )
+                or (previous is not None and binding["issue_id"] == new_id)
+            ),
+            "STALE_BINDING",
+        )
+        # A detached old member proceeds only as this request's own retry: a replay of the
+        # committed target, or a retry after this request already retired it.
+        retire_request = {**request, "request_id": request["request_id"] + ":retire"}
+        retired = old_state["requests"].get(sha(retire_request["request_id"].encode()))
+        require(
+            previous is not None
+            or member["status"] != "detached"
+            or (retired is not None and retired["digest"] == sha(canonical(retire_request))),
+            "STALE_BINDING",
+        )
         # Replay only an identical request; a reused ID with different content is a conflict.
         if previous:
             require(previous["digest"] == sha(canonical(target_request)), "REQUEST_CONFLICT")
@@ -2568,7 +2792,7 @@ def rebind(store: Store, request: JSONObject) -> JSONObject:
             old.commit(
                 old_state,
                 old_files,
-                {**request, "request_id": request["request_id"] + ":retire"},
+                retire_request,
                 {},
                 "rebind",
             )
@@ -2711,9 +2935,12 @@ def execute(request: JSONObject) -> JSONObject:
             if result["ok"] and operation == "create" and request.get("cleanup_candidates"):
                 result["collection"] = collect_candidates(store, request)
             return result
-    # Return the bounded lifecycle diagnostic without exposing exception contents.
+    # Return the bounded lifecycle diagnostic; a stale packet also names what changed.
     except WorkspaceError as error:
-        return {"ok": False, "code": error.code, "action": error.action}
+        failure: JSONObject = {"ok": False, "code": error.code, "action": error.action}
+        if isinstance(error, StaleSourceError):
+            failure["stale"] = copy.deepcopy(error.stale)
+        return failure
     # Return only the narrow paths needed to retry the denied filesystem operation.
     except PermissionError:
         paths = permission_paths(request)

@@ -39,9 +39,7 @@ def test_codex_wrappers_fix_the_host_and_defer_to_shared_contracts(
     monkeypatch.setattr(
         codex.common,
         "prompt",
-        lambda native, host, *, attempt_attach: (
-            seen.append(("prompt", native, host, attempt_attach)) or {}
-        ),
+        lambda native, host: seen.append(("prompt", native, host)) or {},
     )
     assert codex.request_for(event, "ready") == {}
     assert codex.automatic_attach(event, "AGENT-30") is None
@@ -49,7 +47,7 @@ def test_codex_wrappers_fix_the_host_and_defer_to_shared_contracts(
     assert seen == [
         ("request", event, "ready", "codex"),
         ("attach", event, "AGENT-30", "codex"),
-        ("prompt", event, "codex", False),
+        ("prompt", event, "codex"),
     ]
 
 

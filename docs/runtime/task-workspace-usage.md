@@ -39,8 +39,11 @@ dependency. Use the platform filesystem requirements in the
 4. Use `read`, then `acknowledge` with its exact `packet_digest`. This establishes
    delivery facts only. Call `ready` to verify current readiness; the next covered
    tool also checks it. After required source edits, request a coordinator refresh,
-   then read and acknowledge the replacement digest before dependent work. Scope replacement
-   invalidates acknowledgment even if the packet text happens to be unchanged.
+   then read and acknowledge the replacement digest before dependent work. A
+   coordinator's own committed `roadmap.md` update is refreshed by the core, as
+   described below; `read`, `acknowledge` and `ready` then restore readiness.
+   Scope replacement invalidates acknowledgment even if the packet text happens
+   to be unchanged.
 5. Updates require the returned `binding_generation`, current `expected_revision`,
    `path`, `old_digest`, UTF-8 `content`, and `provenance` containing `sources`,
    `applicability`, and `status`. Evidence lists use `id`, `locator`, `sha256`.
@@ -58,6 +61,38 @@ for Unix hosts and Claude's Bash tool. Pass the result through the native host's
 binds the exact worktree, host, session and issue. Wrappers, redirection,
 substitutions and unrelated commands are not bootstrap exceptions.
 
+An adapter denial starts with `TASK_WORKSPACE_NOT_READY: <code>` and names the
+admitted next operation for that code. `TICKET_READ_REQUIRED` names the exact
+ticket read and, on Claude Code, the preparation reads. `BINDING_MISSING` names
+the `Task:` line and ticket read. `NOT_READY`, which a coordinator sees after
+its own committed roadmap update, names `read`, `acknowledge` with the returned
+`packet_digest`, then `ready`. `SOURCE_STALE` gives the coordinator route (an
+issue-level `diagnose`, then a self-refresh `scope` of its own key with that
+result's `packet`, each `sha256` replaced by the aligned
+`sources[*].current_sha256`, then `read`,
+`acknowledge` with the returned `packet_digest` and `ready`; a scope with
+unchanged digests is accepted but does not restore readiness, and the failed
+`read` names the changed references in `stale`) and the reader route
+(coordinator `scope` or a repeated Task line and ticket read). `HOST_UNSUPPORTED_PROVIDER`,
+`HOST_UNSUPPORTED_TOOL` and `HOST_UNSUPPORTED_CHILD_IDENTITY` state that no
+lifecycle operation changes the outcome and name the admitted alternative.
+`HOST_UNSUPPORTED_BACKGROUND` and `HOST_UNSUPPORTED_ASYNC` ask for a foreground,
+non-isolated re-issue. `REVISION_CONFLICT` asks for a reread and reapply.
+`BINDING_CONFLICT` names the bound issue, the Task-line switch, or an explicit
+`rebind` to a target that already assigns the session. `REPOSITORY_MISMATCH` names
+the registered checkout or worktree. `PROVIDER_RESPONSE_INVALID` and
+`ISSUE_MISMATCH` ask for the exact selected-ticket `get_issue` under a new native
+call; a repeated `ISSUE_MISMATCH` points to an issue-level `diagnose` of the local
+workspace recorded under another provider UUID. `NOT_OWNER` and `SCOPE_MISSING`
+ask the coordinator to `scope` the path or participant; `SCOPE_MISSING` also names
+the return route (`Task: <bound issue>` and its ticket read) after a refused switch.
+`PENDING_OPERATION` asks for pending tool work to complete or attached participants
+to detach before a retry. `ADOPTION_REQUIRED` names `adopt` with inventory, owners
+and evidence. `BUSY`
+asks for one retry, then `diagnose`. Every remaining code uses the general
+bootstrap route (`diagnose`, `register`, `resume`, `read`, `acknowledge`); this
+is an explicit boundary, not a per-code route.
+
 ```python
 from agent_company.adapters.common import bootstrap_command
 
@@ -74,6 +109,8 @@ The startup prompt accepts exactly one standalone `Task: <issue-id>` line, for e
 `Task: ISSUE-1`. Each supported runtime adapter records that identifier before
 requiring local registration. Its exact Linear issue read is admitted before
 readiness through the [host-specific ticket-read protocol](host-hooks.md#ticket-read-protocols).
+On Claude Code, only the bounded preparation reads in
+[setup step 3](host-hooks.md#setup-and-bootstrap) may precede it.
 The adapter verifies the response's identifier and immutable issue UUID, then
 invokes the shared startup orchestrator with the actual runtime/session identity.
 
@@ -81,9 +118,15 @@ Startup derives the Git main worktree, registers or resumes, and creates a missi
 issue under the initiating session's coordinator key. It installs an initial packet
 from the selected checkout's governing files and the main worktree's canonical task
 bytes, reads the source bytes, acknowledges their exact digest and verifies `ready`.
-Repeated starts preserve roadmap, approval, coordinator and packet. A committed
-coordinator-owned roadmap update refreshes only its roadmap packet digest;
-unexpected file edits still fail integrity checks. A different session can join
+Repeated starts preserve roadmap, approval, coordinator and packet. When the
+coordinator's `update` commits `roadmap.md`, the core moves only that coordinator's
+own `roadmap.md` packet reference, and its stored assignment, to the committed
+digest. The same commit clears its acknowledgment and returns it to `attached`, so
+`ready` reports `NOT_READY` until the coordinator calls `read` and then
+`acknowledge` with the new `packet_digest`. Both are pre-readiness exceptions; the
+next covered tool, or an explicit `ready`, verifies readiness at the new revision.
+Reader packets keep their recorded digest until their own `join` refresh.
+Unexpected file edits still fail integrity checks. A different session can join
 with a core-selected roadmap-only reader packet after the verified ticket read.
 Reader readiness does not transfer ownership; coordinator handoff remains explicit.
 
@@ -93,26 +136,70 @@ assignment remains a recovery route when the normal provider callback path is
 unavailable. Native callback delivery and real provider responses require separate
 installed-host evidence for each runtime. Protocol tests do not establish a live
 round trip. See the [host guide](host-hooks.md) for current adapter contracts and
-child/spawn restrictions; unverified child identities do not inherit readiness.
+child/spawn restrictions; unverified child identities do not inherit readiness. A
+Claude `Agent`-tool subagent of a ready parent receives its own reader binding at
+`SubagentStart` and reports its participant key and packet digest in the hook
+context; this route is restricted, observed in local Desktop sessions and
+unverified on other hosts (see the host guide). A child that receives no binding at
+`SubagentStart` cannot recover, because that event fires once; the parent dispatches a
+fresh subagent instead.
 
 The pre-readiness command allowlist is operation-specific. It includes the
 original `diagnose/register/bind/adopt/resume/restore` routes plus scoped `read` and
 exact-digest `acknowledge`, needed to establish readiness without a general tool
-exemption. A maintenance binding permits the specified archive/index/read-back and
+exemption. `diagnose` has two admitted shapes. The pre-registration shape carries
+only the session identity fields. The issue-level shape adds `repo_id` and
+`issue_id`, plus an optional `binding_generation`, and is admitted only for the
+issue in the session's recorded assignment. Both are read-only: they commit no
+state and append no event. For a recorded participant with a packet, the
+issue-level result also carries `packet`, the committed reference list exactly
+as stored, and `sources`, aligned with `packet`: each entry's `id`, `locator`,
+`recorded_sha256`, `current_sha256` (the committed manifest digest for a
+payload-relative locator, the no-follow reader's digest for an absolute one, or
+`null` when unreadable) and `available` (current equals recorded). A maintenance binding permits the specified archive/index/read-back and
 cleanup operations. Narrow schemas also permit terminal `archive-prepare`,
 coordinator `reconcile-files`, and explicit `rebind`: requiring ordinary readiness
 for those repair operations would deadlock recovery. Core ownership, generation,
-revision and pending-operation checks still apply. `create` and `scope` are not
-unready-session exceptions; the
-explicit startup assignment supplies them automatically. Ready sessions can call
+revision and pending-operation checks still apply. `create` is not an
+unready-session exception, and `scope` is one only in its coordinator
+self-refresh shape: the issue coordinator targets its own participant key with
+its current packet (the issue-level `diagnose` result's `packet`; a prior `read`
+result's references work only after each computed `available` key is removed),
+same references in the same order, every field except
+`sha256` unchanged and each `sha256` a digest (normally the aligned
+`sources[*].current_sha256` from the same `diagnose`), with no `owned_paths` and no
+other fields. It recovers a coordinator whose own governing source changed; the
+core clears the acknowledgment, so `read`, `acknowledge` and `ready` must follow.
+Every other `scope`, and `create`, needs readiness; the explicit startup
+assignment supplies them automatically. Ready sessions can call
 the reviewed lifecycle CLI without registering that same local transaction as a
 pending external tool. Unknown bootstrap fields are rejected.
 
-`rebind` takes the old issue/generation, `new_issue_id`, optional
-`new_binding_generation`, and evidence. The target must already exist with an
-explicit assignment. It locks both issues in lexical order, fences old work and
-preserves the old payload. Pending operations block it. It does not create a
-new assignment or transfer coordinator ownership implicitly.
+A session binding names one issue. While it does, `create`, `attach`, `resume`
+and `join` for any other issue return `BINDING_CONFLICT`; a bound session starts
+or enters a second issue only through `rebind`. `rebind` takes the old
+issue/generation, `new_issue_id`, optional `new_binding_generation`, evidence, and
+`issue_uuid` naming the target. An existing target must already assign the caller
+(installed by the target's coordinator through `scope`) or hold the caller's earlier
+participation; otherwise `rebind` returns `SCOPE_MISSING` and the old binding stays
+attached. A supplied `issue_uuid` must match an existing target (`ISSUE_MISMATCH`).
+An absent target is created from the packaged template with the caller as
+coordinator; this requires `issue_uuid` and no unadopted payload directory.
+`rebind` locks both issues in lexical order, fences old work and preserves the old
+payload. The old issue must be the caller's live binding at the stated generation;
+leaving a detached participation is allowed only as this request's own retry or
+replay (`STALE_BINDING` otherwise). Pending operations block it, and an old issue's coordinator moves only
+after its other participants have detached. It never transfers coordinator
+ownership of the old issue, and a subagent identity cannot rebind.
+
+On ticket-first hosts this happens automatically. A bound session submits a Task
+line for the other issue; the adapter records it as a pending assignment and leaves
+the binding alone. The verified ticket read then runs `rebind` (create when the
+issue is absent) with the ticket identity as evidence, followed by the usual
+packet read, acknowledgment and readiness. A failed read or refused rebind keeps
+the old binding; a Task line for the bound issue returns to it. The hook admits a
+manual `rebind` only away from the live binding's issue (when one exists), and only toward the recorded Task issue, or away from it toward an issue
+that already has committed state.
 
 ### Transactions, events and collection
 
@@ -209,7 +296,7 @@ intent. It never recursively removes the task root.
 
 ### Host limitations
 
-Follow the [host guide](host-hooks.md) for native configuration, event coverage and trust. Direct adapter subprocess tests do not prove that an installed host loaded the candidate or invoked its callbacks. Child identity, async association and provider observations must be demonstrated on the actual supported path; otherwise retain explicit denial or uncertainty.
+Follow the [host guide](host-hooks.md) for native configuration, event coverage and trust. Direct adapter subprocess tests do not prove that an installed host loaded the candidate or invoked its callbacks. Child identity, async association and provider observations must be demonstrated on the actual supported path; otherwise retain explicit denial or uncertainty. The Claude subagent child route is covered by synthetic protocol tests and one observed local macOS Desktop session (native `SubagentStart`/`SubagentStop` delivery and the subagent's `agent_id` on tool events, recorded in the host guide); other hosts and platforms remain unverified.
 
 Filesystem support and host support are separate checks. Windows uses a native
 NTFS implementation; Linux and macOS use the POSIX implementation. A filesystem

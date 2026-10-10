@@ -772,3 +772,173 @@ def test_new_task_line_fences_previous_ready_session_until_ticket_read(tmp_path:
         )
         assert "TICKET_READ_REQUIRED" in str(denied)
     assert "TASK_WORKSPACE_READY" in lookup(root, "master", ticket_response())["systemMessage"]
+
+
+SECOND_UUID = "5d3c1f0e-8b2a-4c6d-9e7f-0a1b2c3d4e5f"
+
+
+def second_response() -> dict[str, object]:
+    """Model the verified connector result for a second issue, TEST-2.
+
+    Returns:
+        A successful Codex connector result fixture for TEST-2.
+    """
+    issue = {"id": "TEST-2", "uuid": SECOND_UUID, "title": "Second issue"}
+    return {"isError": False, "content": [{"type": "text", "text": json.dumps(issue)}]}
+
+
+def lookup_issue(root: Path, identifier: str, tool_id: str, response: object) -> dict[str, object]:
+    """Run one exact master-session lookup for any issue under a fresh native call ID.
+
+    Args:
+        root: Disposable repository root used by this case.
+        identifier: Issue the session's current Task line names.
+        tool_id: Native tool call ID for this lookup.
+        response: Provider result supplied to the completion callback.
+
+    Returns:
+        The ticket lookup hook result.
+    """
+    fields = {
+        "tool_name": "mcp__codex_apps__linear_get_issue",
+        "tool_input": {"id": identifier},
+        "tool_use_id": tool_id,
+    }
+    assert codex.handle(event(root, "PreToolUse", **fields)) == {}
+    return codex.handle(event(root, "PostToolUse", tool_response=response, **fields))
+
+
+def issue_state(root: Path, identifier: str) -> dict[str, object]:
+    """Read one issue's committed control state after recovery.
+
+    Args:
+        root: Disposable repository root used by this case.
+        identifier: Issue whose state is read.
+
+    Returns:
+        The committed issue state.
+    """
+    base = {
+        "schema_version": 1,
+        "worktree": str(root),
+        "host": "codex",
+        "session_id": "master",
+        "issue_id": identifier,
+        "repo_id": json.loads((root / ".task" / ".repository.json").read_text())["repo_id"],
+    }
+    # Recover and read the committed state under the issue lock.
+    with core.Store(base) as store, store.issues.child(identifier) as control, control.lock():
+        issue = core.Issue(store, control, identifier)
+        issue.recover()
+        return issue.committed_state()
+
+
+def bound_issue(root: Path) -> str:
+    """Return the issue the master session's persisted binding names.
+
+    Args:
+        root: Disposable repository root used by this case.
+
+    Returns:
+        The bound issue ID.
+    """
+    key = core.participant_key({"host": "codex", "session_id": "master"})
+    return json.loads((root / ".task" / ".bindings" / (key + ".json")).read_text())["issue_id"]
+
+
+def test_bound_session_task_line_for_new_issue_rebinds_after_verified_read(
+    tmp_path: Path,
+) -> None:
+    """A bound session starts a second issue; the first stays preserved and fenced.
+
+    Args:
+        tmp_path: Disposable directory for repository or file fixtures.
+    """
+    # Start TEST-1 and remember its approved bytes.
+    root = repository(tmp_path)
+    codex.handle(event(root, "UserPromptSubmit", prompt="Task: TEST-1"))
+    assert "TASK_WORKSPACE_READY" in lookup(root, "master", ticket_response())["systemMessage"]
+    roadmap = (root / ".task" / "TEST-1" / "roadmap.md").read_bytes()
+    key = core.participant_key({"host": "codex", "session_id": "master"})
+    # A Task line for TEST-2 is admitted and fences tools until its exact read.
+    prompt = codex.handle(event(root, "UserPromptSubmit", prompt="Task: TEST-2"))
+    assert "decision" not in prompt
+    assert bound_issue(root) == "TEST-1"
+    assert not (root / ".task" / "TEST-2").exists()
+    # The verified TEST-2 read rebinds the session into a new issue it coordinates.
+    result = lookup_issue(root, "TEST-2", "lookup-2", second_response())
+    assert "TASK_WORKSPACE_READY" in result["systemMessage"]
+    assert bound_issue(root) == "TEST-2"
+    second = issue_state(root, "TEST-2")
+    assert second["coordinator"] == key and second["issue_uuid"] == SECOND_UUID
+    assert second["participants"][key]["status"] == "ready"
+    # TEST-1 keeps its payload and coordinator; only this participant is fenced.
+    first = issue_state(root, "TEST-1")
+    assert first["coordinator"] == key
+    assert first["participants"][key]["status"] == "detached"
+    assert (root / ".task" / "TEST-1" / "roadmap.md").read_bytes() == roadmap
+    # A later Task line returns the session to TEST-1 through the same route.
+    codex.handle(event(root, "UserPromptSubmit", prompt="Task: TEST-1"))
+    back = lookup_issue(root, "TEST-1", "lookup-3", ticket_response())
+    assert "TASK_WORKSPACE_READY" in back["systemMessage"]
+    assert bound_issue(root) == "TEST-1"
+    assert issue_state(root, "TEST-2")["participants"][key]["status"] == "detached"
+
+
+def test_failed_switch_read_keeps_old_binding_and_allows_return(tmp_path: Path) -> None:
+    """A failed provider read creates nothing and leaves a route back to the bound issue.
+
+    Args:
+        tmp_path: Disposable directory for repository or file fixtures.
+    """
+    # Start TEST-1, then request TEST-2 and fail its provider read.
+    root = repository(tmp_path)
+    codex.handle(event(root, "UserPromptSubmit", prompt="Task: TEST-1"))
+    lookup(root, "master", ticket_response())
+    codex.handle(event(root, "UserPromptSubmit", prompt="Task: TEST-2"))
+    failed = lookup_issue(root, "TEST-2", "lookup-2", {"isError": True, "code": "NETWORK_ERROR"})
+    assert "PROVIDER_NETWORK_ERROR" in failed["systemMessage"]
+    # The old binding and participant are untouched and TEST-2 has no workspace.
+    key = core.participant_key({"host": "codex", "session_id": "master"})
+    assert bound_issue(root) == "TEST-1"
+    assert issue_state(root, "TEST-1")["participants"][key]["status"] == "ready"
+    assert not (root / ".task" / "TEST-2").exists()
+    # Returning to TEST-1 resumes it without any rebind.
+    codex.handle(event(root, "UserPromptSubmit", prompt="Task: TEST-1"))
+    back = lookup_issue(root, "TEST-1", "lookup-3", ticket_response())
+    assert "TASK_WORKSPACE_READY" in back["systemMessage"]
+    assert bound_issue(root) == "TEST-1"
+
+
+def test_refused_switch_rebind_keeps_old_binding_and_allows_return(tmp_path: Path) -> None:
+    """An existing target without an assignment refuses rebind and strands nothing.
+
+    Args:
+        tmp_path: Disposable directory for repository or file fixtures.
+    """
+    # Another session owns TEST-2 and has not assigned the master session.
+    root = repository(tmp_path)
+    codex.handle(event(root, "UserPromptSubmit", session_id="owner", prompt="Task: TEST-2"))
+    fields = {
+        "tool_name": "mcp__codex_apps__linear_get_issue",
+        "tool_input": {"id": "TEST-2"},
+        "tool_use_id": "owner-lookup",
+    }
+    codex.handle(event(root, "PreToolUse", session_id="owner", **fields))
+    codex.handle(
+        event(root, "PostToolUse", session_id="owner", tool_response=second_response(), **fields)
+    )
+    # The bound master asks for TEST-2; the verified read cannot rebind it.
+    codex.handle(event(root, "UserPromptSubmit", prompt="Task: TEST-1"))
+    lookup(root, "master", ticket_response())
+    codex.handle(event(root, "UserPromptSubmit", prompt="Task: TEST-2"))
+    refused = lookup_issue(root, "TEST-2", "lookup-2", second_response())
+    assert "SCOPE_MISSING" in refused["systemMessage"]
+    key = core.participant_key({"host": "codex", "session_id": "master"})
+    assert bound_issue(root) == "TEST-1"
+    assert issue_state(root, "TEST-1")["participants"][key]["status"] == "ready"
+    assert key not in issue_state(root, "TEST-2")["participants"]
+    # The completed TEST-2 correlation does not block a return to TEST-1.
+    codex.handle(event(root, "UserPromptSubmit", prompt="Task: TEST-1"))
+    back = lookup_issue(root, "TEST-1", "lookup-3", ticket_response())
+    assert "TASK_WORKSPACE_READY" in back["systemMessage"]

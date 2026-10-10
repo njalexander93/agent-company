@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shlex
+import time
 import uuid
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -21,6 +22,7 @@ BOOTSTRAP_FIELDS = {
     "diagnose": set(),
     "register": {"main_worktree", "startup"},
     "bind": set(),
+    "scope": {"target_participant", "packet"},
     "adopt": {"coordinator", "inventory", "owners", "evidence"},
     "resume": set(),
     "restore": {"observations"},
@@ -181,19 +183,22 @@ def automatic_attach(event: core.JSONObject, identifier: str, host: str) -> None
             raise core.WorkspaceError(result["code"])
 
 
-def prompt(event: core.JSONObject, host: str, attempt_attach: bool = False) -> core.JSONObject:
-    """Record one explicit Task line and attempt only its assigned workspace setup.
+def prompt(event: core.JSONObject, host: str) -> core.JSONObject:
+    """Record one explicit Task line and leave setup to the verified ticket read.
+
+    On a ticket-first host, a bound session's Task line for another issue records that
+    issue as a pending assignment; the binding moves only when the verified ticket read
+    runs the startup rebind, so a failed read leaves the old binding in place.
 
     Args:
         event: Observed host hook input, including the actual session and tool identities.
         host: Explicit adapter identity; never taken from untrusted tool arguments.
-        attempt_attach: Whether to use the legacy preassigned setup after recording Task.
 
     Returns:
         An empty response, prompt denial or bounded setup context.
 
     Raises:
-        core.WorkspaceError: If workspace registration or setup fails.
+        core.WorkspaceError: If the checkout or binding directory is invalid.
         OSError: If assignment persistence fails.
     """
     # Extract only explicit Task lines from the submitted prompt.
@@ -220,31 +225,50 @@ def prompt(event: core.JSONObject, host: str, attempt_attach: bool = False) -> c
     ):
         # Derive the assignment key from the explicit host/session identity.
         key = core.participant_key(request)
-        # Reject implicit task switches in either the live binding or the recorded assignment.
-        for name in (key + ".json", key + ".assignment.json"):
-            # Validate any existing entry before reusing or replacing it.
-            if bindings.exists(name) and bindings.json(name)["issue_id"] != identifier:
-                return {
-                    "decision": "block",
-                    "reason": "BINDING_CONFLICT: Explicit rebind is required.",
-                }
+        # Read the live binding and the recorded Task identity, either possibly absent.
+        binding = bindings.json(key + ".json") if bindings.exists(key + ".json") else None
+        recorded = (
+            bindings.json(key + ".assignment.json")
+            if bindings.exists(key + ".assignment.json")
+            else None
+        )
+        # An unbound session never replaces its recorded Task identity.
+        if binding is None and recorded is not None and recorded["issue_id"] != identifier:
+            return {
+                "decision": "block",
+                "reason": "BINDING_CONFLICT: Explicit rebind is required.",
+            }
+        # A bound session's Task line replaces only its pending assignment: the binding
+        # moves after the verified ticket read, so drop a lookup correlation for another
+        # issue that could otherwise refuse this issue's read.
+        lookup = key + ".lookup.json"
+        if (
+            binding is not None
+            and bindings.exists(lookup)
+            and bindings.json(lookup).get("id") != identifier
+        ):
+            bindings.unlink(lookup)
         bindings.put(key + ".assignment.json", {"issue_id": identifier})
-        # Ticket-first hosts retain a marker until the provider read completes.
-        if not attempt_attach:
-            bindings.put(key + ".lookup-required.json", {"issue_id": identifier})
-    # Attempt setup using only the recorded startup assignment or existing packet.
-    if attempt_attach:
-        automatic_attach(event, identifier, host)
+        # Name the bound issue this Task line moves away from, for the setup context.
+        moving = (
+            binding["issue_id"]
+            if binding is not None and binding["issue_id"] != identifier
+            else None
+        )
+        # Every host retains a marker until the provider read completes.
+        bindings.put(key + ".lookup-required.json", {"issue_id": identifier})
     return {
         "hookSpecificOutput": {
             "hookEventName": "UserPromptSubmit",
             "additionalContext": (
                 "Task identity recorded. Read the requested Linear ticket first. "
                 "Then complete scoped workspace setup and verify readiness."
-                if not attempt_attach
-                else "Task identity recorded. Explicitly assigned workspace setup was "
-                "attempted. Read and acknowledge the permitted packet before task "
-                "tools; use the lifecycle diagnostic route if setup is missing."
+                + (
+                    f" The verified read rebinds this session from {moving}, which stays "
+                    f"preserved; a new Task: {moving} line returns to it."
+                    if moving is not None
+                    else ""
+                )
             ),
         }
     }
@@ -285,6 +309,24 @@ def lookup_required(event: core.JSONObject, host: str) -> bool:
                 return bindings.exists(key + ".lookup-required.json")
 
 
+def _claude_linear_providers() -> dict[str, set[str]]:
+    """Map each configured Claude Linear server name to its accepted provenance sources.
+
+    Returns:
+        Named local servers plus the operator-mapped Desktop connector UUID, when valid.
+    """
+    # Named local servers come from user, project, plugin or SDK definitions.
+    providers = {
+        "linear": {"user", "project", "plugin", "sdk"},
+        "linear-server": {"user", "project", "plugin", "sdk"},
+    }
+    # Bind opaque Desktop names only through explicit, operator-verified configuration.
+    connector = os.environ.get("AGENT_COMPANY_CLAUDE_LINEAR_CONNECTOR_ID", "")
+    if re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", connector):
+        providers[connector] = {"claudeai", "dynamic", "sdk"}
+    return providers
+
+
 def _linear_tool(event: core.JSONObject, host: str) -> tuple[str, core.JSONObject] | None:
     """Validate one host's documented Linear MCP name and argument shape.
 
@@ -302,14 +344,7 @@ def _linear_tool(event: core.JSONObject, host: str) -> tuple[str, core.JSONObjec
     if host == "claude-code":
         server = event.get("mcp_server")
         name = event.get("tool_name")
-        # Bind opaque Desktop names only through explicit, operator-verified configuration.
-        providers = {
-            "linear": {"user", "project", "plugin", "sdk"},
-            "linear-server": {"user", "project", "plugin", "sdk"},
-        }
-        connector = os.environ.get("AGENT_COMPANY_CLAUDE_LINEAR_CONNECTOR_ID", "")
-        if re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", connector):
-            providers[connector] = {"claudeai", "dynamic", "sdk"}
+        providers = _claude_linear_providers()
         # Ignore other operations and unconfigured connectors; no UUID-wide exception.
         if name not in {f"mcp__{provider}__get_issue" for provider in providers}:
             return None
@@ -346,6 +381,163 @@ def _linear_tool(event: core.JSONObject, host: str) -> tuple[str, core.JSONObjec
     if not isinstance(arguments, dict):
         raise core.WorkspaceError("INVALID_REQUEST")
     return token, arguments
+
+
+LINEAR_PROVIDER_OPERATIONS = frozenset(
+    {
+        "get_issue",
+        "get_user",
+        "list_users",
+        "list_issue_statuses",
+        "list_comments",
+        "save_issue",
+        "save_comment",
+    }
+)
+# A child subagent receives only the read operations; writes stay with its parent.
+LINEAR_CHILD_OPERATIONS = LINEAR_PROVIDER_OPERATIONS - {"save_issue", "save_comment"}
+PREPARATION_FILES = ("docs/runtime/contributor-workflow.md", "AGENTS.md")
+
+
+def _linear_provider_tool(event: core.JSONObject, host: str) -> str | None:
+    """Identify one post-readiness Linear operation on a configured Claude connector.
+
+    Field-level checks, such as the assignee or state named by ``save_issue``,
+    stay in the contributor procedure's read-back rule; this check covers only
+    the server, its provenance and the operation name.
+
+    Args:
+        event: Native tool event carrying the MCP-qualified name and server provenance.
+        host: Native adapter identity; only Claude Code has this route.
+
+    Returns:
+        The admitted operation name, or None for any other host, server or operation.
+    """
+    # Cursor and other hosts keep their provider calls outside this route.
+    if host != "claude-code":
+        return None
+    # Read the observed server and name alongside the configured provider map.
+    server = event.get("mcp_server")
+    name = event.get("tool_name")
+    providers = _claude_linear_providers()
+    # Require the same configured server name and provenance as the ticket read.
+    if not (
+        isinstance(server, dict)
+        and isinstance(server.get("name"), str)
+        and server["name"] in providers
+        and server.get("source") in providers[server["name"]]
+        and isinstance(name, str)
+    ):
+        return None
+    # Admit only the explicit operation allowlist on that exact server.
+    prefix = "mcp__" + server["name"] + "__"
+    operation = name[len(prefix) :] if name.startswith(prefix) else None
+    return operation if operation in LINEAR_PROVIDER_OPERATIONS else None
+
+
+def _preparation_path(event: core.JSONObject, value: object, exact: bool = False) -> bool:
+    """Check that a path names one governing preparation file in the selected checkout.
+
+    Args:
+        event: Identity-validated native event whose ``cwd`` selects the checkout.
+        value: Observed absolute path argument, never resolved through links.
+        exact: Require the literal path spelling, as for a shell argument.
+
+    Returns:
+        Whether the path is exactly one preparation file and no traversed entry is a link.
+    """
+    # Require an absolute textual path before consulting the checkout.
+    if not isinstance(value, str) or not Path(value).is_absolute():
+        return False
+    # Resolve the selected checkout root from the observed working directory.
+    root, _, _ = core.repository(event["cwd"])
+    # Compare lexically so neither ".." nor a symbolic link can redirect the read.
+    for relative in PREPARATION_FILES:
+        expected = root / relative
+        # Accept only the exact path whose checkout-relative entries are not links.
+        if (value == str(expected)) if exact else (Path(value) == expected):
+            parts = Path(relative).parts
+            entries = [root.joinpath(*parts[: index + 1]) for index in range(len(parts))]
+            return not any(entry.is_symlink() or entry.is_junction() for entry in entries)
+    return False
+
+
+def preparation_tool(event: core.JSONObject, host: str) -> bool:
+    """Recognize one read-only preparation call allowed before the selected ticket read.
+
+    The call receives no lifecycle decision and writes nothing: the lookup marker
+    stays in place, so the exact ``get_issue`` remains the first issue-provider
+    operation. Claude's normal permission flow still applies to the call.
+
+    Args:
+        event: Identity-validated native tool event.
+        host: Native adapter identity; only Claude Code has a preparation phase.
+
+    Returns:
+        True for a schema load of configured ``get_issue`` tools, or a read of
+        ``docs/runtime/contributor-workflow.md`` or ``AGENTS.md`` in this checkout.
+    """
+    # Cursor's ticket-first route is unchanged.
+    if host != "claude-code":
+        return False
+    # Read the native tool name and input without trusting either.
+    tool = event.get("tool_name")
+    args = event.get("tool_input")
+    # Every preparation tool takes a structured native input.
+    if not isinstance(args, dict):
+        return False
+    # Contain malformed values and checkout errors as an ordinary denial.
+    try:
+        # A schema load may select only configured get_issue tools.
+        if tool == "ToolSearch":
+            query = args.get("query")
+            limit = args.get("max_results", 1)
+            # Reject undocumented fields, oversized queries and invalid limits.
+            if (
+                not set(args) <= {"query", "max_results"}
+                or not isinstance(query, str)
+                or len(query) > 256
+                or type(limit) is not int
+                or not 1 <= limit <= 20
+            ):
+                return False
+            # An exact selection must name only configured issue-read tools.
+            if query.startswith("select:"):
+                names = [name.strip() for name in query[len("select:") :].split(",")]
+                allowed = {f"mcp__{provider}__get_issue" for provider in _claude_linear_providers()}
+                return bool(names) and all(name in allowed for name in names)
+            # A bounded keyword search must name the issue-read operation.
+            return (
+                "get_issue" in query and re.fullmatch(r"[A-Za-z0-9_+\- ]{1,128}", query) is not None
+            )
+        # A file read must target one governing file exactly.
+        if tool == "Read":
+            return set(args) <= {"file_path", "offset", "limit"} and _preparation_path(
+                event, args.get("file_path")
+            )
+        # A shell read must be exactly cat with one governing file argument.
+        if tool == "Bash":
+            command = args.get("command")
+            # Reject undocumented fields, background execution and control characters.
+            if (
+                not set(args) <= {"command", "description", "timeout", "run_in_background"}
+                or args.get("run_in_background", False) is not False
+                or not isinstance(command, str)
+                or any(character in command for character in "\r\n\0")
+            ):
+                return False
+            # Parse without evaluating; only cat plus one literal governing path qualifies.
+            argv = shlex.split(command)
+            return (
+                len(argv) == 2
+                and argv[0] == "cat"
+                and _preparation_path(event, argv[1], exact=True)
+            )
+    # Unparseable commands and unreadable checkouts are not preparation reads.
+    except (core.WorkspaceError, OSError, ValueError, KeyError, TypeError):
+        return False
+    # Every other tool waits for the ticket read.
+    return False
 
 
 def native_ticket_lookup(
@@ -665,6 +857,114 @@ def bootstrap_request(command: str, host: str, python: str, lifecycle: Path) -> 
     return request
 
 
+def coordinator_self_refresh(request: core.JSONObject, event: core.JSONObject) -> bool:
+    """Recognize the coordinator's digest-only re-scope of its own current packet.
+
+    A coordinator whose own governing source changed is stranded at SOURCE_STALE: it
+    cannot read, acknowledge or ready the stale packet, and scope is otherwise not a
+    pre-readiness operation. This shape lets it replace only the reference digests;
+    the core scope then clears acknowledgment, so readiness still needs read,
+    acknowledge and ready at the new revision.
+
+    Args:
+        request: Decoded scope request whose session, host and worktree already match.
+        event: Observed hook envelope supplying the actual session identity.
+
+    Returns:
+        True only when the caller is the issue coordinator, targets its own key, keeps
+        every reference field except a valid ``sha256`` and assigns no owned paths.
+
+    Raises:
+        core.WorkspaceError: If the registered store or issue control directory is
+            invalid or the issue has no committed state.
+        OSError: If the store or committed state file cannot be read.
+        KeyError: If the committed state lacks the coordinator or participant map.
+    """
+    # The bootstrap field table already limits the fields; the refresh needs these four.
+    if not {"repo_id", "issue_id", "target_participant", "packet"} <= set(request):
+        return False
+    key = core.participant_key({"host": request["host"], "session_id": event["session_id"]})
+    # The target must be the caller's own participant key.
+    if request["target_participant"] != key:
+        return False
+    # Read the committed state file only: the hook takes no lock and runs no recovery;
+    # the core scope recovers and checks expected_revision itself.
+    with core.Store(request) as store, store.issues.child(request["issue_id"]) as control:
+        core.require(control.exists("state.json"), "BINDING_MISSING")
+        state = control.json("state.json")
+    # Only the issue coordinator holding an existing packet may refresh itself.
+    member = state["participants"].get(key)
+    current = member.get("packet") if member is not None else None
+    if key != state["coordinator"] or current is None:
+        return False
+    packet = request["packet"]
+    # Require the same references in the same order with only sha256 changed.
+    if not isinstance(packet, list) or len(packet) != len(current):
+        return False
+    for proposed, existing in zip(packet, current, strict=True):
+        # Each proposed reference must be an object carrying a 64-hex digest.
+        if not isinstance(proposed, dict) or not isinstance(proposed.get("sha256"), str):
+            return False
+        if not core.DIGEST.fullmatch(proposed["sha256"]):
+            return False
+        # Every field but the digest must equal the committed reference.
+        if {k: v for k, v in proposed.items() if k != "sha256"} != {
+            k: v for k, v in existing.items() if k != "sha256"
+        }:
+            return False
+    return True
+
+
+def rebind_admitted(
+    request: core.JSONObject, event: core.JSONObject, assignment: core.JSONObject
+) -> bool:
+    """Bind an explicit rebind's target to the session's recorded Task identity.
+
+    A Task line for another issue records that issue as the session's assignment while
+    the binding still names the old one; that recorded target may be rebound to, and
+    created if absent. A rebind from the assigned issue keeps the earlier rule and is
+    admitted only toward a target that already exists, so it never creates an issue
+    the session was not explicitly given. When the session has a live binding, the
+    rebind must leave exactly that issue. A subagent never rebinds.
+
+    Args:
+        request: Decoded rebind request whose session, host and worktree already match.
+        event: Observed hook envelope; a normalized subagent carries ``child``.
+        assignment: The session's recorded Task assignment.
+
+    Returns:
+        Whether the request's old and new issues fit the recorded assignment.
+
+    Raises:
+        core.WorkspaceError: If the target issue ID or registered store is invalid.
+        OSError: If the binding or issue control directory cannot be inspected.
+        KeyError: If the request lacks its issue, repository or target fields.
+    """
+    # A subagent holds a coordinator-scoped assignment and cannot move a binding.
+    if event.get("child") is True:
+        return False
+    # Validate the target ID before opening the store.
+    target = core.issue_id(request["new_issue_id"])
+    # Read the session binding and the target's control directory read-only: no lock
+    # and no recovery.
+    with core.Store(request) as store:
+        # A rebind leaves only the issue this worktree's live binding names.
+        binding = store.binding()
+        if binding is not None and request["issue_id"] != binding["issue_id"]:
+            return False
+        # The recorded Task identity authorizes its target, even if absent.
+        if target == assignment["issue_id"]:
+            return True
+        # Otherwise only a rebind away from the assigned issue toward an existing target.
+        if request["issue_id"] != assignment["issue_id"]:
+            return False
+        # An absent control directory or state file means the target does not exist.
+        if not store.issues.exists(target):
+            return False
+        with store.issues.child(target) as control:
+            return bool(control.exists("state.json"))
+
+
 def canonical_bootstrap(
     event: core.JSONObject,
     command: object,
@@ -706,18 +1006,19 @@ def canonical_bootstrap(
         # Require the bootstrap worktree to match the observed hook worktree.
         if core.repository(request["worktree"])[0] != core.repository(event["cwd"])[0]:
             return False
-        # Keep registration and diagnostics free of arbitrary issue/tool fields.
-        if request["operation"] in {"register", "diagnose"}:
-            return set(request) <= {
-                "schema_version",
-                "operation",
-                "request_id",
-                "worktree",
-                "host",
-                "session_id",
-                "main_worktree",
-                "startup",
-            }
+        # Keep registration and pre-registration diagnostics free of arbitrary issue/tool fields.
+        identity = {"schema_version", "operation", "request_id", "worktree", "host", "session_id"}
+        if request["operation"] == "register" or (
+            request["operation"] == "diagnose" and "repo_id" not in request
+        ):
+            return set(request) <= identity | {"main_worktree", "startup"}
+        # Accept only the exact read-only issue-level diagnostic shape; the assignment
+        # check below then binds its issue to this session.
+        if request["operation"] == "diagnose" and not (
+            {"repo_id", "issue_id"} <= set(request)
+            and set(request) <= identity | {"repo_id", "issue_id", "binding_generation"}
+        ):
+            return False
         # Require the bootstrap issue to match the session assignment stored in this worktree.
         with (
             core.Directory.absolute(core.repository(event["cwd"])[0]) as root,
@@ -726,8 +1027,16 @@ def canonical_bootstrap(
             # Read the recorded assignment through the local binding directory.
             with local.child(".bindings") as bindings:
                 assignment = bindings.json(core.participant_key(request) + ".assignment.json")
-        matches_assignment: bool = request.get("issue_id") == assignment["issue_id"]
-        return matches_assignment
+        # A rebind matches the assignment through its target or an existing destination.
+        if request["operation"] == "rebind":
+            return rebind_admitted(request, event, assignment)
+        # An unassigned issue is denied before any issue store is opened.
+        if request.get("issue_id") != assignment["issue_id"]:
+            return False
+        # An unready scope is admitted only as the coordinator's digest-only self-refresh.
+        if not ready and request["operation"] == "scope":
+            return coordinator_self_refresh(request, event)
+        return True
     # Malformed or inaccessible assignment state never authorizes bootstrap.
     except (core.WorkspaceError, OSError, ValueError, KeyError, TypeError):
         return False
@@ -759,20 +1068,28 @@ def native_identity(event: core.JSONObject, host: str) -> core.JSONObject:
         host: Either claude-code or cursor, selected by the entry point.
 
     Returns:
-        A normalized envelope retaining native tool IDs and inputs.
+        A normalized envelope retaining native tool IDs and inputs. A Claude subagent
+        event is keyed by ``<session_id>/agent/<agent_id>``, marked ``child`` and keeps
+        the raw parent session in ``parent_session_id``.
 
     Raises:
-        core.WorkspaceError: If identity is absent, ambiguous, or belongs to a child.
+        core.WorkspaceError: If identity is absent, ambiguous, or belongs to an
+            unsupported child.
     """
-    # Children and remote/background sessions have no supported binding here.
+    # Only Claude's documented agent_id marks a supported child; every other child,
+    # remote or background marker has no supported binding here.
+    child = host == "claude-code" and event.get("agent_id") is not None
     core.require(
-        event.get("agent_id") is None
+        (event.get("agent_id") is None or child)
         and event.get("subagent_id") is None
         and event.get("parent_conversation_id") is None,
         "HOST_UNSUPPORTED_CHILD_IDENTITY",
     )
     core.require(event.get("is_background_agent", False) is False, "HOST_UNSUPPORTED_BACKGROUND")
-    normalized = event.copy()
+    # Derived child markers come only from this function, never from the raw envelope.
+    normalized = {
+        key: value for key, value in event.items() if key not in {"child", "parent_session_id"}
+    }
     # Cursor identity comes from its conversation and single workspace root.
     if host == "cursor":
         session = native_token(event.get("conversation_id"))
@@ -787,10 +1104,23 @@ def native_identity(event: core.JSONObject, host: str) -> core.JSONObject:
             "REPOSITORY_MISMATCH",
         )
     else:
+        # A child cannot be keyed without the parent session it runs under.
+        if child:
+            core.require(
+                isinstance(event.get("session_id"), str), "HOST_UNSUPPORTED_CHILD_IDENTITY"
+            )
         # Claude binds to its native session and absolute working directory.
         session = native_token(event.get("session_id"))
         cwd = event.get("cwd")
         core.require(isinstance(cwd, str) and Path(cwd).is_absolute(), "REPOSITORY_MISMATCH")
+        # Key a subagent deterministically under its parent; separators stay unambiguous.
+        if child:
+            agent = native_token(event.get("agent_id"))
+            core.require(
+                "/" not in agent and "/agent/" not in session, "HOST_UNSUPPORTED_CHILD_IDENTITY"
+            )
+            normalized.update(child=True, parent_session_id=session)
+            session = core.token(session + "/agent/" + agent)
     normalized.update(session_id=session, cwd=cwd)
     return normalized
 
@@ -838,6 +1168,12 @@ def native_bootstrap(event: core.JSONObject, host: str, ready: bool = False) -> 
 
 
 CLAUDE_SYNC_TOOLS = frozenset({"Read", "Write", "Edit", "Glob", "Grep", "NotebookEdit"})
+# Schema loading, skill loading and messaging change no files or provider state; a
+# tool they surface is still evaluated on its own call, so these record no pending work.
+CLAUDE_NO_EFFECT_TOOLS = frozenset({"ToolSearch", "Skill", "SendMessage"})
+# A subagent's report to its parent changes nothing either; only a child identity may
+# use it, so a parent cannot impersonate a hand-back.
+CLAUDE_CHILD_REPORT_TOOLS = frozenset({"SubagentHandback"})
 CURSOR_SYNC_TOOLS = frozenset({"Read", "Write", "Edit", "Grep", "Delete"})
 
 
@@ -861,12 +1197,29 @@ def native_tool(event: core.JSONObject, host: str) -> str:
     # Require a structured native tool input for supported synchronous work.
     if not isinstance(args, dict):
         raise core.WorkspaceError("INVALID_REQUEST")
-    # Provider calls use the separate ticket-read admission path.
+    # Only the configured Claude Linear connector's allowlisted operations become
+    # ordinary pending work; every other provider route stays unsupported.
     if tool.startswith(("mcp__", "MCP:")) or event.get("mcp_server") is not None:
-        raise core.WorkspaceError("HOST_UNSUPPORTED_PROVIDER")
-    # Child and delegation tools require their own verified identity.
+        operation = _linear_provider_tool(event, host)
+        core.require(operation is not None, "HOST_UNSUPPORTED_PROVIDER")
+        # A child subagent gets no provider writes; issue delivery stays with the parent.
+        core.require(
+            event.get("child") is not True or operation in LINEAR_CHILD_OPERATIONS,
+            "HOST_UNSUPPORTED_PROVIDER",
+        )
+        return tool
+    # Child and delegation tools require their own verified identity. Only a Claude
+    # parent's foreground Agent call has one: SubagentStart joins its child.
     if tool in {"Agent", "Task", "TaskOutput", "TaskStop", "SpawnAgent"}:
-        raise core.WorkspaceError("HOST_UNSUPPORTED_CHILD_IDENTITY")
+        core.require(
+            host == "claude-code" and tool == "Agent" and event.get("child") is not True,
+            "HOST_UNSUPPORTED_CHILD_IDENTITY",
+        )
+        # A background child outlives this call's synchronous correlation.
+        core.require(args.get("run_in_background", False) is False, "HOST_UNSUPPORTED_BACKGROUND")
+        # An isolated child runs in another worktree that this binding does not cover.
+        core.require(args.get("isolation") is None, "HOST_UNSUPPORTED_CHILD_IDENTITY")
+        return tool
     # The project disables Claude auto-backgrounding; never assume an unconfigured host did so.
     if host == "claude-code" and tool == "Bash":
         core.require(
@@ -892,7 +1245,14 @@ def native_tool(event: core.JSONObject, host: str) -> str:
                 "REPOSITORY_MISMATCH",
             )
         return tool
-    supported = CLAUDE_SYNC_TOOLS if host == "claude-code" else CURSOR_SYNC_TOOLS
+    # A child may also hand its report back; every other host keeps its own set.
+    supported = (
+        CLAUDE_SYNC_TOOLS
+        | CLAUDE_NO_EFFECT_TOOLS
+        | (CLAUDE_CHILD_REPORT_TOOLS if event.get("child") is True else frozenset())
+        if host == "claude-code"
+        else CURSOR_SYNC_TOOLS
+    )
     core.require(tool in supported, "HOST_UNSUPPORTED_TOOL")
     core.require(
         not any(
@@ -925,7 +1285,13 @@ def native_pre(event: core.JSONObject, host: str) -> None:
     if native_bootstrap(event, host, ready=True):
         return
     # Native permission approval remains separate from recording pending work.
-    native_tool(event, host)
+    tool = native_tool(event, host)
+    # A ready session's no-effect load, message or hand-back needs no settlement.
+    if host == "claude-code" and tool in CLAUDE_NO_EFFECT_TOOLS | CLAUDE_CHILD_REPORT_TOOLS:
+        return
+    # Remember the parent's Agent call so SubagentStart can require it to be pending.
+    if tool == "Agent":
+        record_agent_call(event, host)
     result = core.execute(
         {
             **request,
@@ -952,6 +1318,9 @@ def native_post(event: core.JSONObject, host: str, failed: bool) -> None:
     if native_bootstrap(event, host, ready=True):
         return
     tool = native_tool(event, host)
+    # No-effect loads, messages and hand-backs were never recorded as pending work.
+    if host == "claude-code" and tool in CLAUDE_NO_EFFECT_TOOLS | CLAUDE_CHILD_REPORT_TOOLS:
+        return
     # Require the documented success/failure payload before treating an event as completion.
     if failed:
         field = "error" if host == "claude-code" else "error_message"
@@ -1029,6 +1398,246 @@ def native_post(event: core.JSONObject, host: str, failed: bool) -> None:
     core.require(result["ok"], result["code"])
 
 
+AGENT_CALL_LIMIT = 16
+# Concurrent hook processes (sibling SubagentStart joins, the parent's own tool events)
+# advance the issue revision between a state read and the child's join. The join is
+# retried on a fresh revision within a budget that leaves the runner deadline room.
+CHILD_JOIN_ATTEMPTS = 8
+CHILD_JOIN_BUDGET_SECONDS = 1.0
+CHILD_RETRY_CODES = frozenset({"REVISION_CONFLICT", "BUSY"})
+
+
+def _agent_calls_name(event: core.JSONObject, host: str) -> str:
+    """Name the local marker that lists one parent session's admitted Agent call IDs.
+
+    Args:
+        event: Identity-validated parent envelope.
+        host: Explicit adapter identity.
+
+    Returns:
+        The binding-directory file name for this parent participant.
+    """
+    return core.participant_key({"host": host, "session_id": event["session_id"]}) + (
+        ".agent-calls.json"
+    )
+
+
+def record_agent_call(event: core.JSONObject, host: str) -> None:
+    """Record a parent's admitted foreground Agent call ID before its tool-start.
+
+    The core keeps pending work by tool ID only, so this bounded marker names which
+    pending IDs are Agent calls. SubagentStart intersects it with the parent's core
+    pending set; a stale entry therefore never authorizes a join.
+
+    Args:
+        event: Identity-validated parent PreToolUse envelope for the Agent tool.
+        host: Explicit adapter identity.
+
+    Raises:
+        core.WorkspaceError: If the checkout or tool identity is invalid.
+        OSError: If the binding directory cannot be written.
+    """
+    # Resolve this checkout's binding directory under the shared assignment lock.
+    root, _, _ = core.repository(event["cwd"])
+    name = _agent_calls_name(event, host)
+    with (
+        core.Directory.absolute(root) as worktree,
+        worktree.child(".task", True) as local,
+        local.child(".bindings", True) as bindings,
+        bindings.lock("assignment.lock"),
+    ):
+        # Append the native call ID and keep only the most recent bounded entries.
+        calls = bindings.json(name)["tool_ids"] if bindings.exists(name) else []
+        calls = [call for call in calls if call != event["tool_use_id"]]
+        calls.append(native_token(event["tool_use_id"]))
+        bindings.put(name, {"tool_ids": calls[-AGENT_CALL_LIMIT:]})
+
+
+def _issue_state(parent: core.JSONObject) -> core.WorkspaceState:
+    """Read the parent issue's committed state after recovering any staged transaction.
+
+    Args:
+        parent: Verified parent lifecycle request carrying repository and issue identity.
+
+    Returns:
+        The committed issue control state at its current revision.
+
+    Raises:
+        core.WorkspaceError: If the store or issue cannot be opened.
+        OSError: If issue state cannot be accessed.
+    """
+    # Hold the issue lock only for recovery and the committed read.
+    identifier = parent["issue_id"]
+    with core.Store(parent) as store, store.issues.child(identifier) as control, control.lock():
+        issue = core.Issue(store, control, identifier)
+        issue.recover()
+        return issue.committed_state()
+
+
+def _join_child(
+    event: core.JSONObject, host: str, parent: core.JSONObject, deadline: float
+) -> None:
+    """Join the child as a reader, re-reading the issue revision before every attempt.
+
+    Args:
+        event: Identity-validated SubagentStart envelope for the child.
+        host: Explicit adapter identity.
+        parent: Verified ready parent lifecycle request.
+        deadline: Monotonic time after which no further join attempt starts.
+
+    Raises:
+        core.WorkspaceError: With the last join code when attempts or the budget run out,
+            or immediately for a code that a fresh revision cannot resolve.
+    """
+    # The child's own participant key tells whether an earlier attempt already joined it.
+    child_key = core.participant_key({"host": host, "session_id": event["session_id"]})
+    attempt = 0
+    # Every pass ends in a return or a raise; the attempt count bounds the retries.
+    while True:
+        # Read the revision immediately before the join; an existing member needs none.
+        state = _issue_state(parent)
+        if child_key in state["participants"]:
+            return
+        joined = core.execute(
+            {
+                "schema_version": 1,
+                "operation": "join",
+                "request_id": str(uuid.uuid4()),
+                "worktree": event["cwd"],
+                "host": host,
+                "session_id": event["session_id"],
+                "repo_id": parent["repo_id"],
+                "issue_id": parent["issue_id"],
+                "issue_uuid": state["issue_uuid"],
+                "expected_revision": state["revision"],
+            }
+        )
+        if joined["ok"]:
+            return
+        # Retry only revision drift or contention, while attempts and budget remain.
+        attempt += 1
+        final = attempt == CHILD_JOIN_ATTEMPTS or time.monotonic() >= deadline
+        if joined["code"] not in CHILD_RETRY_CODES or final:
+            raise core.WorkspaceError(joined["code"])
+        # Back off briefly so the competing hook process can commit and release locks.
+        time.sleep(min(0.02 * attempt, max(0.0, deadline - time.monotonic())))
+
+
+def _acknowledge_child(child: core.JSONObject) -> tuple[str, core.JSONObject]:
+    """Read the child's packet, then acknowledge exactly the revision and digest it returned.
+
+    Args:
+        child: The child's bound lifecycle read request.
+
+    Returns:
+        The read packet digest and the acknowledge response, which may report a conflict.
+
+    Raises:
+        core.WorkspaceError: If the read itself fails.
+    """
+    read = core.execute({**child, "request_id": str(uuid.uuid4())})
+    core.require(read["ok"], read["code"])
+    acknowledged = core.execute(
+        {
+            **child,
+            "operation": "acknowledge",
+            "request_id": str(uuid.uuid4()),
+            "expected_revision": read["revision"],
+            "packet_digest": read["packet_digest"],
+        }
+    )
+    return str(read["packet_digest"]), acknowledged
+
+
+def _ready_child(event: core.JSONObject, host: str) -> str:
+    """Read, acknowledge and verify the child's own packet, tolerating one revision drift.
+
+    Args:
+        event: Identity-validated SubagentStart envelope for the joined child.
+        host: Explicit adapter identity.
+
+    Returns:
+        The digest of the packet the child acknowledged.
+
+    Raises:
+        core.WorkspaceError: If read, acknowledge or ready fails for the child.
+        OSError: If binding or issue state cannot be accessed.
+    """
+    # Resolve the child's own binding, created by its join, for every lifecycle call.
+    child = request_for(event, "read", host)
+    digest, acknowledged = _acknowledge_child(child)
+    # Another hook advanced the revision after the read: read and acknowledge again once.
+    if not acknowledged["ok"] and acknowledged["code"] == "REVISION_CONFLICT":
+        digest, acknowledged = _acknowledge_child(child)
+    core.require(acknowledged["ok"], acknowledged["code"])
+    # Readiness takes no revision, so it is verified once after the acknowledgment.
+    ready = core.execute({**child, "operation": "ready", "request_id": str(uuid.uuid4())})
+    core.require(ready["ok"], ready["code"])
+    return digest
+
+
+def child_start(event: core.JSONObject, host: str) -> str:
+    """Join a Claude subagent as its own reader when its ready parent awaits an Agent call.
+
+    SubagentStart fires once and cannot block, so a child that misses its join has no
+    later recovery. The join and the acknowledgment therefore tolerate the revision
+    drift caused by concurrent hook processes, within a bounded budget.
+
+    Args:
+        event: Identity-validated SubagentStart envelope marked as a child.
+        host: Explicit adapter identity.
+
+    Returns:
+        Fixed control text naming only the child's participant key and packet digest.
+
+    Raises:
+        core.WorkspaceError: If the event is not a child, the parent binding is not
+            ready, no admitted parent Agent call is pending, or a lifecycle step fails
+            (including a join still in conflict after its bounded retries).
+        OSError: If binding or issue state cannot be accessed.
+    """
+    # Start the retry budget at entry so the whole hook stays inside the runner deadline.
+    deadline = time.monotonic() + CHILD_JOIN_BUDGET_SECONDS
+    # Only a normalized Claude child carries the parent session it runs under.
+    core.require(event.get("child") is True, "HOST_UNSUPPORTED_CHILD_IDENTITY")
+    parent_event = {**event, "session_id": event["parent_session_id"]}
+    # The parent's own binding must be ready; a child never borrows an unready parent.
+    parent = request_for(parent_event, "ready", host)
+    result = core.execute(parent)
+    core.require(result["ok"], result["code"])
+    identifier = parent["issue_id"]
+    # Derive the parent's pending call IDs and the child's own participant key.
+    state = _issue_state(parent)
+    pending = set(state["participants"][core.participant_key(parent)]["pending"])
+    child_key = core.participant_key({"host": host, "session_id": event["session_id"]})
+    root, _, _ = core.repository(event["cwd"])
+    # Require a pending admitted Agent call, then record the child's issue assignment.
+    with (
+        core.Directory.absolute(root) as worktree,
+        worktree.child(".task") as local,
+        local.child(".bindings") as bindings,
+        bindings.lock("assignment.lock"),
+    ):
+        name = _agent_calls_name(parent_event, host)
+        calls = set(bindings.json(name)["tool_ids"]) if bindings.exists(name) else set()
+        core.require(bool(calls & pending), "HOST_UNSUPPORTED_CHILD_IDENTITY")
+        assignment = child_key + ".assignment.json"
+        # A child identity already recorded for another issue is never reassigned.
+        if bindings.exists(assignment):
+            core.require(bindings.json(assignment)["issue_id"] == identifier, "BINDING_CONFLICT")
+        bindings.put(assignment, {"issue_id": identifier})
+    # Join with the core-chosen roadmap-only packet, then make the child ready on it.
+    _join_child(event, host, parent, deadline)
+    digest = _ready_child(event, host)
+    # Report identifiers and digests only; task text stays in the packet sources.
+    return (
+        f"TASK_WORKSPACE_CHILD_READY: participant {child_key}; packet {digest}. "
+        "This subagent holds its own reader binding for the parent's issue. Read the packet "
+        "through the lifecycle read operation, write only paths the coordinator scopes to "
+        "this participant, and do not start nested Agent calls."
+    )
+
+
 def native_context(event: core.JSONObject, host: str) -> str:
     """Report readiness or a recovery route without granting tool permission.
 
@@ -1049,22 +1658,198 @@ def native_context(event: core.JSONObject, host: str) -> str:
     return "Task binding checked. Read the assigned packet through the lifecycle read operation."
 
 
+def _recovery_route(code: str, host: str) -> str:
+    """Name the admitted next operation for one diagnostic.
+
+    Args:
+        code: Bounded diagnostic selected by the adapter or core.
+        host: Explicit adapter identity, which selects host-specific tool names.
+
+    Returns:
+        One or two sentences naming the operation that can change the outcome.
+    """
+    # Name the canonical command formatter once for every lifecycle route.
+    command = "the exact lifecycle command from adapters.common.bootstrap_command"
+    # The ticket-first gate admits the exact read plus Claude's preparation reads.
+    if code == "TICKET_READ_REQUIRED":
+        preparation = (
+            " Before it, only ToolSearch selecting that get_issue tool and Read or a plain "
+            "`cat` of <checkout>/docs/runtime/contributor-workflow.md or <checkout>/AGENTS.md "
+            "are admitted."
+            if host == "claude-code"
+            else ""
+        )
+        return (
+            "Next admitted operation: the configured Linear get_issue call with exactly "
+            '{"id": "<selected issue>"}.' + preparation
+        )
+    # An unbound session starts or resumes only through the ticket-first route.
+    if code == "BINDING_MISSING":
+        return (
+            "This session has no issue binding. Submit exactly one `Task: <issue-id>` line, "
+            "then read that ticket with the configured Linear get_issue call; startup "
+            f"registers or resumes the workspace. A pre-registration diagnose uses {command}."
+        )
+    # A current packet whose acknowledgment is missing or outdated needs a new cycle.
+    if code == "NOT_READY":
+        return (
+            "Acknowledgment is missing or outdated for the current packet (for example after "
+            "your own committed roadmap update): run read, then acknowledge the returned "
+            f"packet_digest, then ready, using {command}."
+        )
+    # Coordinators and readers refresh a stale packet through different owners.
+    if code == "SOURCE_STALE":
+        return (
+            "A required packet source changed after acknowledgment. Coordinator: run an "
+            "issue-level diagnose; its `packet` is your current packet and its `sources` "
+            "lists, in the same order, each reference's current_sha256. Then run a "
+            "self-refresh scope (target_participant is your own key, packet is that list "
+            "with each sha256 replaced by sources[*].current_sha256, no owned_paths), then "
+            "read, acknowledge the returned packet_digest, then ready. A scope with "
+            "unchanged digests is accepted but does not restore readiness; a failed read "
+            "lists the changed references in `stale`. Reader: ask the coordinator "
+            "to refresh your packet with scope, or resubmit the Task line and exact "
+            "get_issue read to refresh a "
+            f"roadmap-only packet; then read, acknowledge and ready, using {command}."
+        )
+    # Background or asynchronous work must be re-issued in the foreground.
+    if code in {"HOST_UNSUPPORTED_BACKGROUND", "HOST_UNSUPPORTED_ASYNC"}:
+        return (
+            "No lifecycle operation changes this outcome. Re-issue the call in the "
+            "foreground, without background execution or isolation, so its completion can "
+            "be correlated."
+        )
+    # A stale revision is resolved by rereading and reapplying the change.
+    if code == "REVISION_CONFLICT":
+        return (
+            "The issue revision changed. Read the current revision and file digest, reapply "
+            f"the change and retry with the new expected_revision, using {command}."
+        )
+    # A session bound to another issue keeps that binding until an explicit rebind.
+    if code == "BINDING_CONFLICT":
+        return (
+            "This session is bound to another issue or call. Continue the bound issue, "
+            "submit `Task: <other-issue>` and read that ticket so startup rebinds you "
+            "(the old issue is preserved), or run an explicit rebind to a target that "
+            f"already assigns this session, using {command}."
+        )
+    # Lifecycle requests must name the registered checkout.
+    if code == "REPOSITORY_MISMATCH":
+        return (
+            "The request names another repository or worktree. Retry from the registered "
+            "checkout or one of its registered worktrees."
+        )
+    # A rejected ticket response needs a fresh exact read.
+    if code in {"PROVIDER_RESPONSE_INVALID", "ISSUE_MISMATCH"}:
+        mismatch = (
+            " If ISSUE_MISMATCH repeats, the existing local workspace records another "
+            "provider issue UUID for this ID: inspect it with an issue-level diagnose "
+            "instead of rebinding into it."
+            if code == "ISSUE_MISMATCH"
+            else ""
+        )
+        return (
+            "The ticket response did not verify. Repeat the exact selected-ticket get_issue "
+            "call under a new native tool call; no workspace was created from this response."
+            + mismatch
+        )
+    # Ownership and scope come only from the coordinator; a refused switch can return.
+    if code in {"NOT_OWNER", "SCOPE_MISSING"}:
+        switch = (
+            " A Task-line switch into an existing issue that does not assign this session "
+            "stops here with the old binding unchanged: ask that issue's coordinator to "
+            "scope you, or submit `Task: <bound issue>` and repeat its ticket read to return."
+            if code == "SCOPE_MISSING"
+            else ""
+        )
+        return (
+            "This participant does not own the path or lacks an assignment. Ask the "
+            "coordinator to scope the path or participant, then read, acknowledge and ready."
+            + switch
+        )
+    # Unresolved work or attached participants block a binding change until settled.
+    if code == "PENDING_OPERATION":
+        return (
+            "Pending tool work or attached participants block this change; the binding is "
+            "unchanged. Let the pending tool calls complete so their completions settle "
+            "them, or have attached participants detach (an issue's coordinator moves only "
+            "after its other participants detach), then retry. To keep working meanwhile, "
+            "submit `Task: <bound issue>` and repeat its ticket read."
+        )
+    # An unmanaged payload directory is imported only by explicit adoption.
+    if code == "ADOPTION_REQUIRED":
+        return (
+            "The target issue's payload directory exists without managed state; nothing was "
+            "created or moved. Import it with an adopt request carrying its exact inventory, "
+            f"owners and evidence, using {command}."
+        )
+    # Provider admission is fixed by host, readiness and the configured connector.
+    if code == "HOST_UNSUPPORTED_PROVIDER":
+        admitted = (
+            " After readiness, only the configured Linear connector's get_issue, get_user, "
+            "list_users, list_issue_statuses, list_comments, save_issue and save_comment are "
+            "admitted."
+            if host == "claude-code"
+            else ""
+        )
+        return (
+            "No lifecycle operation admits this provider call. Before readiness only the "
+            "exact selected-ticket get_issue is admitted." + admitted + " Another server or "
+            "operation needs a separately verified provider workflow."
+        )
+    # Unsupported tools need a different tool, not lifecycle recovery.
+    if code == "HOST_UNSUPPORTED_TOOL":
+        tools = (
+            "Read, Write, Edit, Glob, Grep, NotebookEdit, foreground Bash, ToolSearch, Skill or "
+            "SendMessage (a subagent also has SubagentHandback)"
+            if host == "claude-code"
+            else "Read, Write, Edit, Grep, Delete or foreground Shell"
+        )
+        return f"No lifecycle operation admits this tool. Use one of the correlated tools: {tools}."
+    # Child work requires its own verified identity, never the parent binding.
+    if code == "HOST_UNSUPPORTED_CHILD_IDENTITY":
+        # Claude's only child route is a ready parent's foreground, non-isolated Agent call.
+        if host == "claude-code":
+            return (
+                "Child or delegation work cannot reuse the parent binding. Only a foreground "
+                "Agent call without isolation from a ready parent session is admitted; its "
+                "subagent receives its own reader binding at SubagentStart. Nested Agent "
+                "calls, Task, TaskOutput, TaskStop, SpawnAgent and children of an unready "
+                "parent stay unsupported; perform that step in the parent session."
+            )
+        return (
+            "Child or delegation work has no verified child identity on this host and cannot "
+            "reuse the parent binding. Perform the step in this session or dispatch it through "
+            "a supported child route; no lifecycle operation grants a child binding here."
+        )
+    # Lock contention and the hook deadline are transient.
+    if code == "BUSY":
+        return (
+            "Another lifecycle operation held the workspace lock or the hook deadline expired. "
+            f"Retry the same operation once; if BUSY repeats, run diagnose with {command}."
+        )
+    # Other diagnostics keep the general bootstrap route.
+    return (
+        f"Use {command} to diagnose, register, resume, read and acknowledge the assigned "
+        "packet. Unsupported child/provider/background work must use a separately verified "
+        "route."
+    )
+
+
 def recovery(code: str, host: str) -> str:
-    """Describe the supported recovery route without copying task content.
+    """Describe the admitted next operation for a diagnostic without copying task content.
 
     Args:
         code: Bounded diagnostic selected by the adapter or core.
         host: Explicit adapter identity required in lifecycle commands.
 
     Returns:
-        A bounded explanation of the retained state and allowed recovery route.
+        A bounded explanation naming the code, its admitted next operation and the
+        retained state.
     """
     return (
-        f"TASK_WORKSPACE_NOT_READY: {code}. Use adapters.common.bootstrap_command "
-        f"to format the exact project lifecycle command with host={host} and the observed "
-        "session ID to diagnose, "
-        "register, resume, read and acknowledge the assigned packet. "
-        "Unsupported child/provider/background work must use a separately verified route. "
+        f"TASK_WORKSPACE_NOT_READY: {code}. {_recovery_route(code, host)} "
+        f"Lifecycle commands use host={host} and the observed session ID. "
         "Pending work is retained; no completion or readiness was inferred."
     )
 

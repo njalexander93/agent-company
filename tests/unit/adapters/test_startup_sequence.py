@@ -50,6 +50,14 @@ class Context:
         """
         return self
 
+    def binding(self) -> dict[str, object] | None:
+        """Report an unbound session unless a case models an existing binding.
+
+        Returns:
+            None, because these modeled sessions hold no binding for another issue.
+        """
+        return None
+
 
 class Store(Context):
     """Supply a read-only issue state after startup completes."""
@@ -358,6 +366,7 @@ def test_start_refuses_stale_source_without_acknowledgment(
     monkeypatch.setattr(startup, "_call", call)
     monkeypatch.setattr(startup, "_initial_packet", lambda *_args: [])
     monkeypatch.setattr(startup, "_read_file", lambda _path: b"different")
+    monkeypatch.setattr(startup, "_session_binding", lambda _base: None)
     # A stale source must fail before acknowledgment.
     with pytest.raises(core.WorkspaceError) as captured:
         startup.start(
@@ -746,3 +755,243 @@ def test_start_existing_assignment_respects_coordinator_packet_authority(
         expected_digest = core.sha(b"old" if mode == "coordinator-unowned" else b"new")
         assert state["participants"][key]["packet"][0]["sha256"] == expected_digest
     assert operations == expected_operations
+
+
+BOUND = {"issue_id": "AGENT-29", "binding_generation": 4}
+VERIFIED = {"id": "AGENT-30", "uuid": "verified-uuid"}
+
+
+def test_start_rebinds_bound_session_into_absent_issue(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A session bound elsewhere creates the absent issue through rebind, not create.
+
+    Args:
+        monkeypatch: Pytest fixture that isolates external state for this case.
+        tmp_path: Disposable directory for repository or file fixtures.
+    """
+    key = core.participant_key({"host": "codex", "session_id": "actual-session"})
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    calls: list[dict[str, Any]] = []
+
+    def call(request: dict[str, Any]) -> dict[str, Any]:
+        """Model a new issue reached from an existing binding.
+
+        Args:
+            request: Lifecycle request issued by startup.
+
+        Returns:
+            The lifecycle operation result fixture.
+        """
+        calls.append(request)
+        operation = request["operation"]
+        # Registration reports a registered checkout.
+        if operation == "register":
+            return {"ok": True, "repo_id": "repo"}
+        # Diagnosis reports the target issue as absent.
+        if operation == "diagnose":
+            return {"ok": True, "code": "ABSENT", "revision": 1}
+        # The rebind creates the target and returns its first binding generation.
+        if operation == "rebind":
+            return {"ok": True, "binding_generation": 1}
+        # The packet read returns an empty reference list and its digest.
+        if operation == "read":
+            return {"ok": True, "references": [], "revision": 3, "packet_digest": "digest"}
+        # Scope, acknowledge and ready complete the ordinary new-issue sequence.
+        if operation in {"scope", "acknowledge", "ready"}:
+            return {"ok": True}
+        pytest.fail(f"unexpected operation {operation}")
+
+    monkeypatch.setattr(startup.core, "repository", lambda _cwd: (checkout, None, [checkout]))
+    monkeypatch.setattr(startup, "_call", call)
+    monkeypatch.setattr(startup, "_session_binding", lambda _base: dict(BOUND))
+    monkeypatch.setattr(startup, "_initial_packet", lambda *_args: [])
+    monkeypatch.setattr(startup.core, "Store", lambda request: Store(request, key))
+    monkeypatch.setattr(startup.core, "Issue", Issue)
+    result = startup.start({"cwd": str(checkout), "session_id": "actual-session"}, VERIFIED)
+    # Rebind replaces create and carries the old binding plus the verified read.
+    assert result["participant_id"] == result["coordinator"] == key
+    operations = [request["operation"] for request in calls]
+    assert operations == [
+        "register",
+        "diagnose",
+        "rebind",
+        "diagnose",
+        "scope",
+        "read",
+        "acknowledge",
+        "ready",
+    ]
+    rebind = calls[2]
+    assert (rebind["issue_id"], rebind["binding_generation"]) == ("AGENT-29", 4)
+    assert (rebind["new_issue_id"], rebind["issue_uuid"]) == ("AGENT-30", "verified-uuid")
+    assert rebind["evidence"] == startup._ticket_evidence(VERIFIED)
+    assert "coordinator" not in rebind and "new_binding_generation" not in rebind
+    assert calls[4]["issue_id"] == "AGENT-30" and calls[4]["binding_generation"] == 1
+
+
+def test_start_rebinds_bound_session_into_existing_participation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An existing target is reached by rebind with its participant generation.
+
+    Args:
+        monkeypatch: Pytest fixture that isolates external state for this case.
+        tmp_path: Disposable directory for repository or file fixtures.
+    """
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    key = core.participant_key({"host": "codex", "session_id": "actual-session"})
+    roadmap = {"locator": "roadmap.md", "sha256": core.sha(b"roadmap")}
+    state: dict[str, Any] = {
+        "issue_uuid": "verified-uuid",
+        "revision": 6,
+        "coordinator": key,
+        "owners": {"roadmap.md": key},
+        "participants": {key: {"generation": 2, "status": "detached", "packet": [roadmap]}},
+        "files": {"roadmap.md": core.sha(b"roadmap")},
+    }
+    calls: list[dict[str, Any]] = []
+
+    class ExistingStore(Context):
+        """Expose the existing target issue control handle."""
+
+        def __init__(self, _request: dict[str, object]) -> None:
+            """Select the shared issue control handle.
+
+            Args:
+                _request: Ignored lifecycle request accepted by this test callback.
+            """
+            self.issues = self
+
+    class ExistingIssue:
+        """Expose the committed target state after modeled recovery."""
+
+        def __init__(self, _store: ExistingStore, _control: Context, _identifier: str) -> None:
+            """Keep the configured shared state.
+
+            Args:
+                _store: Ignored store argument accepted by this test callback.
+                _control: Ignored lifecycle control supplied by this test seam.
+                _identifier: Ignored issue identifier accepted by this test callback.
+            """
+
+        def recover(self) -> None:
+            """Model completed transaction recovery."""
+
+        def committed_state(self) -> dict[str, Any]:
+            """Return the committed target state.
+
+            Returns:
+                The committed issue state fixture.
+            """
+            return state
+
+        def files(self) -> dict[str, bytes]:
+            """Return the verified committed payload.
+
+            Returns:
+                The committed payload fixture.
+            """
+            return {"roadmap.md": b"roadmap"}
+
+    def call(request: dict[str, Any]) -> dict[str, Any]:
+        """Model the move back into an issue this session coordinates.
+
+        Args:
+            request: Lifecycle request issued by startup.
+
+        Returns:
+            The lifecycle operation result fixture.
+        """
+        calls.append(request)
+        operation = request["operation"]
+        # Registration reports a registered checkout.
+        if operation == "register":
+            return {"ok": True, "repo_id": "repo"}
+        # Diagnosis reports an existing target issue.
+        if operation == "diagnose":
+            return {"ok": True, "code": "PRESENT", "revision": 6}
+        # The rebind reattaches the detached participant at a new generation.
+        if operation == "rebind":
+            state["participants"][key].update(generation=3, status="attached")
+            return {"ok": True, "binding_generation": 3}
+        # The packet read returns an empty reference list and its digest.
+        if operation == "read":
+            return {"ok": True, "references": [], "revision": 8, "packet_digest": "digest"}
+        # Acknowledge and ready complete the resumed sequence.
+        if operation in {"acknowledge", "ready"}:
+            return {"ok": True}
+        pytest.fail(f"unexpected operation {operation}")
+
+    monkeypatch.setattr(startup.core, "repository", lambda _cwd: (checkout, None, [checkout]))
+    monkeypatch.setattr(startup, "_call", call)
+    monkeypatch.setattr(startup, "_session_binding", lambda _base: dict(BOUND))
+    monkeypatch.setattr(startup.core, "Store", ExistingStore)
+    monkeypatch.setattr(startup.core, "Issue", ExistingIssue)
+    startup.start({"cwd": str(checkout), "session_id": "actual-session"}, VERIFIED)
+    # Rebind replaces resume/join and names the target participant's generation.
+    operations = [request["operation"] for request in calls]
+    assert operations == ["register", "diagnose", "rebind", "read", "acknowledge", "ready"]
+    assert calls[2]["new_binding_generation"] == 2
+    assert calls[2]["binding_generation"] == 4
+    assert calls[3]["binding_generation"] == 3
+
+
+def test_start_stops_at_refused_rebind_without_readiness(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A refused rebind leaves the old binding to the core and reaches no readiness step.
+
+    Args:
+        monkeypatch: Pytest fixture that isolates external state for this case.
+        tmp_path: Disposable directory for repository or file fixtures.
+    """
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    operations: list[str] = []
+
+    def call(request: dict[str, Any]) -> dict[str, Any]:
+        """Refuse the rebind the way the core does for unresolved old work.
+
+        Args:
+            request: Lifecycle request issued by startup.
+
+        Returns:
+            The lifecycle operation result fixture.
+
+        Raises:
+            core.WorkspaceError: When startup requests the rebind.
+        """
+        operations.append(request["operation"])
+        # Registration succeeds so the refusal is isolated.
+        if request["operation"] == "register":
+            return {"ok": True, "repo_id": "repo"}
+        # Diagnosis reports the target issue as absent.
+        if request["operation"] == "diagnose":
+            return {"ok": True, "code": "ABSENT", "revision": 1}
+        # The core refuses the rebind itself.
+        raise core.WorkspaceError("PENDING_OPERATION")
+
+    monkeypatch.setattr(startup.core, "repository", lambda _cwd: (checkout, None, [checkout]))
+    monkeypatch.setattr(startup, "_call", call)
+    monkeypatch.setattr(startup, "_session_binding", lambda _base: dict(BOUND))
+    # The refusal propagates unchanged and nothing follows it.
+    with pytest.raises(core.WorkspaceError) as captured:
+        startup.start({"cwd": str(checkout), "session_id": "actual-session"}, VERIFIED)
+    assert captured.value.code == "PENDING_OPERATION"
+    assert operations == ["register", "diagnose", "rebind"]
+
+
+def test_ticket_evidence_digests_only_verified_identity() -> None:
+    """The rebind evidence names the provider issue without copying ticket text."""
+    evidence = startup._ticket_evidence({**VERIFIED, "title": "Secret title"})
+    assert evidence == [
+        {
+            "id": "ticket-read",
+            "locator": "linear-issue:verified-uuid",
+            "sha256": core.sha(core.canonical(VERIFIED)),
+        }
+    ]
+    assert core.evidence(evidence) == evidence

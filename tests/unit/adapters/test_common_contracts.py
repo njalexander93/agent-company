@@ -42,8 +42,15 @@ def test_native_identity_preserves_claude_session_and_cwd(tmp_path: Path) -> Non
 @pytest.mark.parametrize(
     ("extra", "code"),
     [
-        ({"agent_id": "child"}, "HOST_UNSUPPORTED_CHILD_IDENTITY"),
+        ({"agent_id": "child", "session_id": None}, "HOST_UNSUPPORTED_CHILD_IDENTITY"),
+        ({"agent_id": "child", "session_id": 2}, "HOST_UNSUPPORTED_CHILD_IDENTITY"),
+        ({"agent_id": "a/b"}, "HOST_UNSUPPORTED_CHILD_IDENTITY"),
+        ({"agent_id": 7}, "INVALID_REQUEST"),
+        ({"agent_id": "child", "session_id": "s/agent/t"}, "HOST_UNSUPPORTED_CHILD_IDENTITY"),
+        ({"agent_id": "child", "subagent_id": "child"}, "HOST_UNSUPPORTED_CHILD_IDENTITY"),
+        ({"agent_id": "child", "is_background_agent": True}, "HOST_UNSUPPORTED_BACKGROUND"),
         ({"subagent_id": "child"}, "HOST_UNSUPPORTED_CHILD_IDENTITY"),
+        ({"parent_conversation_id": "parent"}, "HOST_UNSUPPORTED_CHILD_IDENTITY"),
         ({"is_background_agent": True}, "HOST_UNSUPPORTED_BACKGROUND"),
         ({"session_id": 2}, "INVALID_REQUEST"),
         ({"cwd": "relative"}, "REPOSITORY_MISMATCH"),
@@ -64,6 +71,51 @@ def test_native_identity_rejects_unbound_claude_context(
     with pytest.raises(core.WorkspaceError) as captured:
         common.native_identity(event, "claude-code")
     assert captured.value.code == code
+
+
+def test_native_identity_keys_claude_child_under_parent_session(tmp_path: Path) -> None:
+    """Key a Claude subagent by its parent session and host-issued agent ID.
+
+    Args:
+        tmp_path: Absolute checkout path used in the native event.
+    """
+    event = {"session_id": "parent", "cwd": str(tmp_path), "agent_id": "agent-1"}
+    normalized = common.native_identity(event, "claude-code")
+    # The child session is derived deterministically and keeps the raw parent session.
+    assert normalized["session_id"] == "parent/agent/agent-1"
+    assert normalized["parent_session_id"] == "parent"
+    assert normalized["child"] is True
+    assert core.participant_key({"host": "claude-code", "session_id": "parent"}) != (
+        core.participant_key({"host": "claude-code", "session_id": normalized["session_id"]})
+    )
+
+
+def test_native_identity_ignores_forged_child_markers(tmp_path: Path) -> None:
+    """Drop envelope-supplied child markers from a main-thread Claude event.
+
+    Args:
+        tmp_path: Absolute checkout path used in the native event.
+    """
+    event = {"session_id": "s", "cwd": str(tmp_path), "child": True, "parent_session_id": "x"}
+    normalized = common.native_identity(event, "claude-code")
+    assert normalized == {"session_id": "s", "cwd": str(tmp_path)}
+
+
+def test_native_identity_keeps_rejecting_cursor_agent_id(tmp_path: Path) -> None:
+    """Keep Cursor's identity grammar unchanged when an agent_id appears.
+
+    Args:
+        tmp_path: Absolute checkout path used as the single workspace root.
+    """
+    event = {
+        "conversation_id": "c",
+        "workspace_roots": [str(tmp_path)],
+        "agent_id": "agent-1",
+    }
+    # Only the Claude adapter has a supported child route.
+    with pytest.raises(core.WorkspaceError) as captured:
+        common.native_identity(event, "cursor")
+    assert captured.value.code == "HOST_UNSUPPORTED_CHILD_IDENTITY"
 
 
 def test_native_identity_requires_single_cursor_root(
@@ -136,6 +188,60 @@ def test_native_tool_rejects_uncorrelated_or_async_work(
     # Unsupported provider, child, unknown, async, and uncorrelated calls all fail admission.
     with pytest.raises(core.WorkspaceError) as captured:
         common.native_tool(event, "cursor")
+    assert captured.value.code == code
+
+
+def test_native_tool_admits_claude_parent_foreground_agent() -> None:
+    """Admit a Claude parent's foreground, non-isolated Agent call as ordinary work."""
+    args = {"description": "d", "prompt": "p", "subagent_type": "general-purpose"}
+    assert common.native_tool(native_event("Agent", args), "claude-code") == "Agent"
+    explicit = {**args, "run_in_background": False}
+    assert common.native_tool(native_event("Agent", explicit), "claude-code") == "Agent"
+
+
+@pytest.mark.parametrize(
+    ("event", "host", "code"),
+    [
+        (
+            native_event("Agent", {"run_in_background": True}),
+            "claude-code",
+            "HOST_UNSUPPORTED_BACKGROUND",
+        ),
+        (
+            native_event("Agent", {"isolation": "worktree"}),
+            "claude-code",
+            "HOST_UNSUPPORTED_CHILD_IDENTITY",
+        ),
+        (
+            native_event("Agent", {"isolation": "remote"}),
+            "claude-code",
+            "HOST_UNSUPPORTED_CHILD_IDENTITY",
+        ),
+        (
+            {**native_event("Agent"), "child": True},
+            "claude-code",
+            "HOST_UNSUPPORTED_CHILD_IDENTITY",
+        ),
+        (native_event("Agent"), "cursor", "HOST_UNSUPPORTED_CHILD_IDENTITY"),
+        (native_event("Task"), "claude-code", "HOST_UNSUPPORTED_CHILD_IDENTITY"),
+        (native_event("TaskOutput"), "claude-code", "HOST_UNSUPPORTED_CHILD_IDENTITY"),
+        (native_event("TaskStop"), "claude-code", "HOST_UNSUPPORTED_CHILD_IDENTITY"),
+        (native_event("SpawnAgent"), "claude-code", "HOST_UNSUPPORTED_CHILD_IDENTITY"),
+    ],
+)
+def test_native_tool_denies_unsupported_agent_routes(
+    event: dict[str, object], host: str, code: str
+) -> None:
+    """Deny background, isolated, nested, Cursor and other delegation tool calls.
+
+    Args:
+        event: Hook event supplied to the adapter under test.
+        host: Native adapter identity.
+        code: Expected boundary diagnostic.
+    """
+    # Only the foreground non-isolated Agent call from a Claude parent is admitted.
+    with pytest.raises(core.WorkspaceError) as captured:
+        common.native_tool(event, host)
     assert captured.value.code == code
 
 
@@ -367,6 +473,115 @@ def test_recovery_message_preserves_exact_diagnostic_without_task_content() -> N
     assert "TASK_WORKSPACE_NOT_READY: SOURCE_STALE" in message
     assert "host=cursor" in message
     assert "Pending work is retained" in message
+
+
+@pytest.mark.parametrize(
+    ("code", "host", "fragments"),
+    [
+        (
+            "TICKET_READ_REQUIRED",
+            "claude-code",
+            ["get_issue call with exactly", "ToolSearch", "AGENTS.md", "contributor-workflow.md"],
+        ),
+        ("TICKET_READ_REQUIRED", "cursor", ["get_issue call with exactly"]),
+        ("BINDING_MISSING", "claude-code", ["`Task: <issue-id>`", "get_issue"]),
+        (
+            "SOURCE_STALE",
+            "claude-code",
+            [
+                "Coordinator:",
+                "issue-level diagnose",
+                "sources[*].current_sha256",
+                "self-refresh scope",
+                "own key",
+                "unchanged digests is accepted but does not restore readiness",
+                "`stale`",
+                "Reader:",
+            ],
+        ),
+        *[
+            ("NOT_READY", host, ["run read, then acknowledge", "packet_digest", "then ready"])
+            for host in ("claude-code", "cursor")
+        ],
+        *[
+            (code, host, fragments)
+            for code, fragments in (
+                ("HOST_UNSUPPORTED_BACKGROUND", ["Re-issue the call in the foreground"]),
+                ("HOST_UNSUPPORTED_ASYNC", ["Re-issue the call in the foreground"]),
+                ("REVISION_CONFLICT", ["Read the current revision", "reapply"]),
+                ("BINDING_CONFLICT", ["Continue the bound issue", "rebind"]),
+                ("REPOSITORY_MISMATCH", ["registered checkout"]),
+                ("PROVIDER_RESPONSE_INVALID", ["exact selected-ticket get_issue", "new native"]),
+                (
+                    "ISSUE_MISMATCH",
+                    ["exact selected-ticket get_issue", "new native", "issue-level diagnose"],
+                ),
+                ("NOT_OWNER", ["coordinator to scope"]),
+                (
+                    "SCOPE_MISSING",
+                    ["coordinator to scope", "old binding unchanged", "`Task: <bound issue>`"],
+                ),
+                (
+                    "PENDING_OPERATION",
+                    ["binding is unchanged", "complete", "detach", "then retry"],
+                ),
+                ("ADOPTION_REQUIRED", ["adopt request", "inventory", "owners and evidence"]),
+            )
+            for host in ("claude-code", "cursor")
+        ],
+        (
+            "HOST_UNSUPPORTED_PROVIDER",
+            "claude-code",
+            ["exact selected-ticket get_issue", "save_issue and save_comment"],
+        ),
+        ("HOST_UNSUPPORTED_PROVIDER", "cursor", ["exact selected-ticket get_issue"]),
+        ("HOST_UNSUPPORTED_TOOL", "claude-code", ["Skill or", "SendMessage", "SubagentHandback"]),
+        ("HOST_UNSUPPORTED_TOOL", "cursor", ["Delete or foreground Shell"]),
+        (
+            "HOST_UNSUPPORTED_CHILD_IDENTITY",
+            "claude-code",
+            ["cannot reuse the parent binding", "foreground Agent", "SubagentStart"],
+        ),
+        ("HOST_UNSUPPORTED_CHILD_IDENTITY", "cursor", ["cannot reuse the parent binding"]),
+        ("BUSY", "claude-code", ["Retry the same operation once", "diagnose"]),
+        ("NOT_ACKNOWLEDGED", "cursor", ["diagnose, register, resume, read and acknowledge"]),
+    ],
+)
+def test_recovery_names_the_admitted_next_operation_per_code(
+    code: str, host: str, fragments: list[str]
+) -> None:
+    """Name each diagnostic's admitted next operation while keeping the code visible.
+
+    Args:
+        code: Diagnostic whose recovery text is checked.
+        host: Native adapter identity selecting host-specific tool names.
+        fragments: Phrases naming that code's admitted next operation.
+    """
+    message = common.recovery(code, host)
+    # Every message keeps the exact code, host and retained-state statement.
+    assert message.startswith(f"TASK_WORKSPACE_NOT_READY: {code}. ")
+    assert f"host={host}" in message
+    assert "Pending work is retained" in message
+    # The route names the specific operation that can change this outcome.
+    for fragment in fragments:
+        assert fragment in message
+    # Host-specific Claude routes are not advertised to Cursor.
+    if host == "cursor":
+        assert "ToolSearch" not in message
+        assert "save_comment" not in message
+        assert "Agent" not in message
+        assert "Skill" not in message
+
+
+@pytest.mark.parametrize("host", ["claude-code", "cursor"])
+def test_shared_recovery_branches_keep_code_specific_sentences_apart(host: str) -> None:
+    """The switch and UUID sentences appear only for the codes they describe.
+
+    Args:
+        host: Native adapter identity selecting host-specific tool names.
+    """
+    assert "Task-line switch" not in common.recovery("NOT_OWNER", host)
+    assert "another provider issue UUID" not in common.recovery("PROVIDER_RESPONSE_INVALID", host)
 
 
 def test_native_post_does_not_settle_cursor_without_output(
