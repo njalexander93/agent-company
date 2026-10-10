@@ -1090,7 +1090,9 @@ def started_coordinator(native: NativeCase) -> tuple[NativeHost, Fixture, JsonOb
     """
     # Provide a governing source before startup hashes it into the coordinator packet.
     host, case = native
-    (case.root / "AGENTS.md").write_text("# Rules\n")
+    # Write through the lifecycle directory boundary so every native backend can read it.
+    with core.Directory.absolute(case.root) as checkout:
+        checkout.write("AGENTS.md", b"# Rules\n")
     dispatch(host, native_event(host, case, "UserPromptSubmit", prompt="Task: TEST-1"))
     issue = {"id": "c0a8f3be-1c13-4f2b-9a1e-b2e61f11f977", "identifier": "TEST-1"}
     before, after = ticket_callbacks(host, case, issue)
@@ -1151,7 +1153,8 @@ def test_native_coordinator_self_refresh_recovers_stale_governing_source(
     """
     # Change a governing source in the ready coordinator's packet.
     host, case, base, shell = started_coordinator(native)
-    (case.root / "AGENTS.md").write_text("# Rules\n\nEdited by the coordinator.\n")
+    with core.Directory.absolute(case.root) as checkout:
+        checkout.write("AGENTS.md", b"# Rules\n\nEdited by the coordinator.\n")
     denied = dispatch(host, native_event(host, case, "PreToolUse"))
     assert_decision(host, denied, False)
     assert "SOURCE_STALE" in str(denied) and "self-refresh scope" in str(denied)
@@ -1217,7 +1220,8 @@ def test_native_coordinator_unchanged_digest_scope_keeps_source_stale(
     """
     # Strand the coordinator at SOURCE_STALE through its own governing edit.
     host, case, base, shell = started_coordinator(native)
-    (case.root / "AGENTS.md").write_text("# Rules\n\nEdited by the coordinator.\n")
+    with core.Directory.absolute(case.root) as checkout:
+        checkout.write("AGENTS.md", b"# Rules\n\nEdited by the coordinator.\n")
     diagnosis = lifecycle_call(
         host, case, shell, {**base, "operation": "diagnose", "request_id": "d"}
     )
@@ -1260,7 +1264,8 @@ def test_native_coordinator_self_refresh_rejects_widened_scope(
     """
     # Strand the coordinator at SOURCE_STALE through its own governing edit.
     host, case, base, shell = started_coordinator(native)
-    (case.root / "AGENTS.md").write_text("# Rules\n\nEdited by the coordinator.\n")
+    with core.Directory.absolute(case.root) as checkout:
+        checkout.write("AGENTS.md", b"# Rules\n\nEdited by the coordinator.\n")
     state = case.state()
     key = case.base["coordinator"]
     data = (case.root / "AGENTS.md").read_bytes()
@@ -1307,7 +1312,8 @@ def test_native_self_refresh_from_prior_read_requires_removing_available(
     read = lifecycle_call(host, case, shell, {**base, "operation": "read", "request_id": "r0"})
     assert read is not None and read["ok"] is True, read
     # Strand the coordinator, then refresh the AGENTS.md digest in those references.
-    (case.root / "AGENTS.md").write_text("# Rules\n\nEdited by the coordinator.\n")
+    with core.Directory.absolute(case.root) as checkout:
+        checkout.write("AGENTS.md", b"# Rules\n\nEdited by the coordinator.\n")
     digest = core.sha((case.root / "AGENTS.md").read_bytes())
     references = [
         {**ref, "sha256": digest} if ref["locator"].endswith("AGENTS.md") else ref

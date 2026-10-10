@@ -644,7 +644,9 @@ def test_child_join_retries_after_revision_drift(
         case: Disposable repository fixture.
         monkeypatch: Injects the revision drift before the first join.
     """
-    # The first join fails on the drifted revision; the retry re-reads and succeeds.
+    # The first join fails on the drifted revision; the retry re-reads and succeeds. A
+    # generous budget keeps slow native runners inside the retry window.
+    monkeypatch.setattr(common, "CHILD_JOIN_BUDGET_SECONDS", 60.0)
     joins = drift_before(case, monkeypatch, "join")
     response = start_child(case)
     assert [result["code"] for result in joins] == ["REVISION_CONFLICT", "OK"]

@@ -303,8 +303,10 @@ def stale_packet_issue(tmp_path: Path) -> tuple[MemoryIssue, dict[str, Any]]:
         The modeled issue and the caller's participant record.
     """
     # Write one changed and one unchanged external source; leave a third absent.
-    (tmp_path / "AGENTS.md").write_text("edited rules\n")
-    (tmp_path / "development.md").write_text("unchanged\n")
+    # Write through the lifecycle directory boundary so every native backend can read them.
+    with core.Directory.absolute(tmp_path) as sources:
+        sources.write("AGENTS.md", b"edited rules\n")
+        sources.write("development.md", b"unchanged\n")
     issue = MemoryIssue()
     key = core.participant_key(base_request("diagnose"))
     member = issue.state["participants"][key]
