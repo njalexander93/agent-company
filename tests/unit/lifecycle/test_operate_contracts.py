@@ -258,6 +258,15 @@ def test_diagnose_reports_absent_and_present_issue_without_binding_read() -> Non
         "revision": 7,
         "storage": "present",
         "packet": before["participants"][key]["packet"],
+        "sources": [
+            {
+                "id": "roadmap",
+                "locator": "roadmap.md",
+                "recorded_sha256": core.sha(b"approved roadmap"),
+                "current_sha256": core.sha(b"approved roadmap"),
+                "available": True,
+            }
+        ],
     }
     assert all("available" not in ref for ref in result["packet"])
     # The returned packet is a copy; changing it cannot alter committed state.
@@ -267,7 +276,7 @@ def test_diagnose_reports_absent_and_present_issue_without_binding_read() -> Non
     other = core.operate(  # type: ignore[arg-type]
         store, issue, base_request("diagnose", session_id="other-session")
     )
-    assert "packet" not in other and other["code"] == "PRESENT"
+    assert "packet" not in other and "sources" not in other and other["code"] == "PRESENT"
     # Model an absent issue record even though the store wrapper exists.
     issue.state = {}
     # Dispatch the diagnose request against the modeled issue.
@@ -282,6 +291,142 @@ def test_diagnose_reports_absent_and_present_issue_without_binding_read() -> Non
         "storage": "absent",
     }
     assert issue.commits == []
+
+
+def stale_packet_issue(tmp_path: Path) -> tuple[MemoryIssue, dict[str, Any]]:
+    """Model a coordinator whose packet mixes current, changed and unreadable sources.
+
+    Args:
+        tmp_path: Temporary directory holding the external governing sources.
+
+    Returns:
+        The modeled issue and the caller's participant record.
+    """
+    # Write one changed and one unchanged external source; leave a third absent.
+    (tmp_path / "AGENTS.md").write_text("edited rules\n")
+    (tmp_path / "development.md").write_text("unchanged\n")
+    issue = MemoryIssue()
+    key = core.participant_key(base_request("diagnose"))
+    member = issue.state["participants"][key]
+    template = member["packet"][0]
+    # Append references for the changed, unchanged, missing and unknown payload sources.
+    member["packet"] = [
+        template,
+        {
+            **template,
+            "id": "rules",
+            "locator": str(tmp_path / "AGENTS.md"),
+            "sha256": core.sha(b"original rules\n"),
+        },
+        {
+            **template,
+            "id": "dev",
+            "locator": str(tmp_path / "development.md"),
+            "sha256": core.sha(b"unchanged\n"),
+        },
+        {
+            **template,
+            "id": "gone",
+            "locator": str(tmp_path / "missing.md"),
+            "sha256": core.sha(b"gone\n"),
+            "required": False,
+        },
+        {
+            **template,
+            "id": "note",
+            "locator": "context/absent.md",
+            "sha256": core.sha(b"absent\n"),
+            "required": False,
+        },
+    ]
+    member["ack"] = core.sha(core.canonical(member["packet"]))
+    return issue, member
+
+
+def test_diagnose_sources_report_current_digests_for_every_reference(tmp_path: Path) -> None:
+    """Diagnose aligns each packet reference with its current digest and availability.
+
+    Args:
+        tmp_path: Temporary directory holding the external governing sources.
+    """
+    # Model a coordinator with changed, unchanged and unreadable references.
+    issue, member = stale_packet_issue(tmp_path)
+    before = copy.deepcopy(issue.state)
+    result = core.operate(MemoryStore(), issue, base_request("diagnose"))  # type: ignore[arg-type]
+    # The packet stays exactly as stored and sources align with it one to one.
+    assert result["packet"] == member["packet"]
+    assert [s["id"] for s in result["sources"]] == [r["id"] for r in member["packet"]]
+    assert [s["locator"] for s in result["sources"]] == [r["locator"] for r in member["packet"]]
+    assert [s["recorded_sha256"] for s in result["sources"]] == [
+        r["sha256"] for r in member["packet"]
+    ]
+    # Current digests come from the manifest or the external bytes; unreadable is null.
+    assert [s["current_sha256"] for s in result["sources"]] == [
+        core.sha(b"approved roadmap"),
+        core.sha(b"edited rules\n"),
+        core.sha(b"unchanged\n"),
+        None,
+        None,
+    ]
+    assert [s["available"] for s in result["sources"]] == [True, False, True, False, False]
+    # Diagnosis stays read-only and event-free.
+    assert issue.state == before
+    assert issue.commits == []
+
+
+def test_read_stale_failure_names_every_changed_reference(tmp_path: Path) -> None:
+    """A required stale source fails read with the changed references and their digests.
+
+    Args:
+        tmp_path: Temporary directory holding the external governing sources.
+    """
+    # Model a coordinator whose required governing source changed after acknowledgment.
+    issue, _member = stale_packet_issue(tmp_path)
+    before = copy.deepcopy(issue.state)
+    with pytest.raises(core.StaleSourceError) as captured:
+        core.operate(MemoryStore(), issue, base_request("read"))  # type: ignore[arg-type]
+    # The failure keeps its public code and lists only the mismatched references.
+    assert captured.value.code == "SOURCE_STALE"
+    assert captured.value.stale == [
+        {
+            "id": "rules",
+            "locator": str(tmp_path / "AGENTS.md"),
+            "recorded_sha256": core.sha(b"original rules\n"),
+            "current_sha256": core.sha(b"edited rules\n"),
+            "available": False,
+        },
+        {
+            "id": "gone",
+            "locator": str(tmp_path / "missing.md"),
+            "recorded_sha256": core.sha(b"gone\n"),
+            "current_sha256": None,
+            "available": False,
+        },
+        {
+            "id": "note",
+            "locator": "context/absent.md",
+            "recorded_sha256": core.sha(b"absent\n"),
+            "current_sha256": None,
+            "available": False,
+        },
+    ]
+    assert issue.state == before
+    assert issue.commits == []
+
+
+def test_read_tolerates_changed_optional_sources_only(tmp_path: Path) -> None:
+    """Optional unreadable references stay unavailable without blocking read.
+
+    Args:
+        tmp_path: Temporary directory holding the external governing sources.
+    """
+    # Restore the required governing source so only optional references differ.
+    issue, member = stale_packet_issue(tmp_path)
+    member["packet"][1]["sha256"] = core.sha(b"edited rules\n")
+    result = core.operate(MemoryStore(), issue, base_request("read"))  # type: ignore[arg-type]
+    # Read succeeds and reports the optional references as unavailable.
+    assert result["ok"] is True
+    assert [ref["available"] for ref in result["references"]] == [True, True, True, False, False]
 
 
 def test_ready_rejects_unacknowledged_packet_without_commit() -> None:

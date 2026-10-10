@@ -1161,11 +1161,14 @@ def test_native_coordinator_self_refresh_recovers_stale_governing_source(
     )
     assert diagnosis is not None and diagnosis["ok"] is True, diagnosis
     assert all("available" not in ref for ref in diagnosis["packet"])
-    # Re-scope the coordinator's own packet with only the refreshed digests.
-    data = (case.root / "AGENTS.md").read_bytes()
+    # The aligned sources name the stale governing file; nothing here hashes a file.
+    sources = diagnosis["sources"]
+    assert [s["locator"] for s in sources] == [r["locator"] for r in diagnosis["packet"]]
+    assert [s["locator"] for s in sources if not s["available"]] == [str(case.root / "AGENTS.md")]
+    # Re-scope the coordinator's own packet with diagnose's current digests only.
     packet = [
-        {**ref, "sha256": core.sha(data)} if ref["locator"].endswith("AGENTS.md") else ref
-        for ref in diagnosis["packet"]
+        {**ref, "sha256": source["current_sha256"]}
+        for ref, source in zip(diagnosis["packet"], sources, strict=True)
     ]
     scope = {
         **base,
@@ -1198,6 +1201,48 @@ def test_native_coordinator_self_refresh_recovers_stale_governing_source(
     assert ready is not None and ready["ok"] is True, ready
     # Ordinary tools are admitted again at the refreshed packet.
     assert_decision(host, dispatch(host, native_event(host, case, "PreToolUse")), True)
+
+
+def test_native_coordinator_unchanged_digest_scope_keeps_source_stale(
+    native: NativeCase,
+) -> None:
+    """A self-refresh repeating stale digests is accepted but cannot restore readiness.
+
+    Args:
+        native: Host-specific disposable repository fixture.
+
+    Raises:
+        AssertionError: The unchanged scope is refused, or read no longer names the
+            stale governing source.
+    """
+    # Strand the coordinator at SOURCE_STALE through its own governing edit.
+    host, case, base, shell = started_coordinator(native)
+    (case.root / "AGENTS.md").write_text("# Rules\n\nEdited by the coordinator.\n")
+    diagnosis = lifecycle_call(
+        host, case, shell, {**base, "operation": "diagnose", "request_id": "d"}
+    )
+    assert diagnosis is not None and diagnosis["ok"] is True, diagnosis
+    # Re-scope with the recorded packet unchanged: admitted and committed.
+    scope = {
+        **base,
+        "operation": "scope",
+        "request_id": "unchanged",
+        "expected_revision": diagnosis["revision"],
+        "target_participant": case.base["coordinator"],
+        "packet": diagnosis["packet"],
+    }
+    scoped = lifecycle_call(host, case, shell, scope)
+    assert scoped is not None and scoped["ok"] is True, scoped
+    # Read still fails, and the failure itself names the stale source and digests.
+    read = lifecycle_call(host, case, shell, {**base, "operation": "read", "request_id": "r"})
+    assert read is not None and read["ok"] is False and read["code"] == "SOURCE_STALE", read
+    stale = {s["locator"]: s for s in diagnosis["sources"] if not s["available"]}
+    assert read["stale"] == list(stale.values())
+    assert [s["locator"] for s in read["stale"]] == [str(case.root / "AGENTS.md")]
+    assert read["stale"][0]["current_sha256"] is not None
+    assert read["stale"][0]["current_sha256"] != read["stale"][0]["recorded_sha256"]
+    # Ordinary tools stay denied.
+    assert_decision(host, dispatch(host, native_event(host, case, "PreToolUse")), False)
 
 
 @pytest.mark.parametrize("change", ["locator", "target"])

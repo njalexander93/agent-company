@@ -66,10 +66,13 @@ admitted next operation for that code. `TICKET_READ_REQUIRED` names the exact
 ticket read and, on Claude Code, the preparation reads. `BINDING_MISSING` names
 the `Task:` line and ticket read. `NOT_READY`, which a coordinator sees after
 its own committed roadmap update, names `read`, `acknowledge` with the returned
-`packet_digest`, then `ready`. `SOURCE_STALE` gives the coordinator route (a
-self-refresh `scope` of its own key with the issue-level `diagnose` `packet` and
-only refreshed digests, then `read`,
-`acknowledge` with the returned `packet_digest` and `ready`) and the reader route
+`packet_digest`, then `ready`. `SOURCE_STALE` gives the coordinator route (an
+issue-level `diagnose`, then a self-refresh `scope` of its own key with that
+result's `packet`, each `sha256` replaced by the aligned
+`sources[*].current_sha256`, then `read`,
+`acknowledge` with the returned `packet_digest` and `ready`; a scope with
+unchanged digests is accepted but does not restore readiness, and the failed
+`read` names the changed references in `stale`) and the reader route
 (coordinator `scope` or a repeated Task line and ticket read). `HOST_UNSUPPORTED_PROVIDER`,
 `HOST_UNSUPPORTED_TOOL` and `HOST_UNSUPPORTED_CHILD_IDENTITY` state that no
 lifecycle operation changes the outcome and name the admitted alternative.
@@ -144,7 +147,10 @@ only the session identity fields. The issue-level shape adds `repo_id` and
 issue in the session's recorded assignment. Both are read-only: they commit no
 state and append no event. For a recorded participant with a packet, the
 issue-level result also carries `packet`, the committed reference list exactly
-as stored. A maintenance binding permits the specified archive/index/read-back and
+as stored, and `sources`, aligned with `packet`: each entry's `id`, `locator`,
+`recorded_sha256`, `current_sha256` (the committed manifest digest for a
+payload-relative locator, the no-follow reader's digest for an absolute one, or
+`null` when unreadable) and `available` (current equals recorded). A maintenance binding permits the specified archive/index/read-back and
 cleanup operations. Narrow schemas also permit terminal `archive-prepare`,
 coordinator `reconcile-files`, and explicit `rebind`: requiring ordinary readiness
 for those repair operations would deadlock recovery. Core ownership, generation,
@@ -154,7 +160,8 @@ self-refresh shape: the issue coordinator targets its own participant key with
 its current packet (the issue-level `diagnose` result's `packet`; a prior `read`
 result's references work only after each computed `available` key is removed),
 same references in the same order, every field except
-`sha256` unchanged and each `sha256` a digest, with no `owned_paths` and no
+`sha256` unchanged and each `sha256` a digest (normally the aligned
+`sources[*].current_sha256` from the same `diagnose`), with no `owned_paths` and no
 other fields. It recovers a coordinator whose own governing source changed; the
 core clears the acknowledgment, so `read`, `acknowledge` and `ready` must follow.
 Every other `scope`, and `create`, needs readiness; the explicit startup

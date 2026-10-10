@@ -1619,10 +1619,13 @@ def _recovery_route(code: str, host: str) -> str:
     if code == "SOURCE_STALE":
         return (
             "A required packet source changed after acknowledgment. Coordinator: run an "
-            "issue-level diagnose; its `packet` is your current packet. Then run a "
+            "issue-level diagnose; its `packet` is your current packet and its `sources` "
+            "lists, in the same order, each reference's current_sha256. Then run a "
             "self-refresh scope (target_participant is your own key, packet is that list "
-            "with only the sha256 digests refreshed, no owned_paths), then read, "
-            "acknowledge the returned packet_digest, then ready. Reader: ask the coordinator "
+            "with each sha256 replaced by sources[*].current_sha256, no owned_paths), then "
+            "read, acknowledge the returned packet_digest, then ready. A scope with "
+            "unchanged digests is accepted but does not restore readiness; a failed read "
+            "lists the changed references in `stale`. Reader: ask the coordinator "
             "to refresh your packet with scope, or resubmit the Task line and exact "
             "get_issue read to refresh a "
             f"roadmap-only packet; then read, acknowledge and ready, using {command}."

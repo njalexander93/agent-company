@@ -1249,6 +1249,101 @@ def roadmap_refreshed(packet: list[SourceRef], digest: str) -> list[SourceRef]:
     return refreshed
 
 
+class SourceState(TypedDict):
+    """Compare one assigned reference's recorded digest with its current source bytes."""
+
+    id: str
+    locator: str
+    recorded_sha256: str
+    current_sha256: str | None
+    available: bool
+
+
+class StaleSourceError(WorkspaceError):
+    """Report a required packet source mismatch together with every changed reference."""
+
+    def __init__(self, stale: list[SourceState]) -> None:
+        """Store the changed references beside the public SOURCE_STALE diagnostic.
+
+        Args:
+            stale: References whose current digest differs from the recorded one,
+                including unreadable sources with a null current digest.
+        """
+        # Keep the bounded code and attach a recovery instruction naming the list.
+        super().__init__(
+            "SOURCE_STALE",
+            "The references in `stale` changed. Refresh their recorded sha256 to "
+            "current_sha256 through the coordinator's scope, then read, acknowledge and ready.",
+        )
+        self.stale = stale
+
+
+def external_source(locator: str) -> bytes | None:
+    """Read one absolute packet source through the no-follow parent-directory boundary.
+
+    Args:
+        locator: Absolute source locator recorded in a packet reference.
+
+    Returns:
+        The exact source bytes, or None when the source is missing, unsafe or unreadable.
+    """
+    # Open the parent through the validated traversal and read only the named file.
+    path = Path(locator)
+    try:
+        with Directory.absolute(path.parent) as parent:
+            return parent.read(path.name, MAX_FILE)
+    # Report an unreadable source as absent; callers decide whether it blocks readiness.
+    except (OSError, WorkspaceError):
+        return None
+
+
+def source_state(ref: SourceRef, current: str | None) -> SourceState:
+    """Describe one reference's recorded and current digests.
+
+    Args:
+        ref: Assigned source reference exactly as stored in the packet.
+        current: Current SHA-256 digest of the source, or None when unreadable.
+
+    Returns:
+        The reference identity, both digests and whether they still match.
+    """
+    return {
+        "id": ref["id"],
+        "locator": ref["locator"],
+        "recorded_sha256": ref["sha256"],
+        "current_sha256": current,
+        "available": current == ref["sha256"],
+    }
+
+
+def packet_sources(packet: list[SourceRef], digests: dict[str, str]) -> list[SourceState]:
+    """Compute each packet reference's current state without reading payload bytes.
+
+    Payload-relative locators take the committed manifest digest, which is exactly what
+    ``read`` verifies the payload bytes against. Absolute locators are read through the
+    same no-follow reader that ``packet_reads`` uses. No state, lock or event changes.
+
+    Args:
+        packet: Assigned source references in their stored order.
+        digests: Committed payload manifest mapping relative paths to digests.
+
+    Returns:
+        One source state per reference, aligned with ``packet``.
+    """
+    # Resolve each reference from the committed manifest or the external source bytes.
+    sources: list[SourceState] = []
+    for ref in packet:
+        # Payload references use the committed digest; absent paths are unreadable.
+        if not Path(ref["locator"]).is_absolute():
+            current = digests.get(ref["locator"])
+        else:
+            # External references hash the bytes currently at their absolute locator.
+            data = external_source(ref["locator"])
+            current = None if data is None else sha(data)
+        sources.append(source_state(ref, current))
+    return sources
+
+
 def packet_reads(
     state: WorkspaceState, participant: Participant, files: PayloadFiles
 ) -> list[SourceAvailability]:
@@ -1263,35 +1358,32 @@ def packet_reads(
         Assigned reference descriptors annotated with availability.
 
     Raises:
-        WorkspaceError: If the packet is missing or a required source is stale.
+        WorkspaceError: If the packet is missing.
+        StaleSourceError: If a required source is missing, unreadable or changed; it
+            lists every reference whose current digest differs from the recorded one.
     """
     # Require an assigned source packet before resolving any source bytes.
     require(participant.get("packet") is not None, "SCOPE_MISSING")
     assert participant["packet"] is not None  # Established by the scope guard above.
     refs: list[SourceAvailability] = []
+    sources: list[SourceState] = []
+    blocked = False
     # Read only assigned references and compare their exact content digests.
     for ref in participant["packet"]:
-        data = None
-        # Resolve each reference through the appropriate filesystem boundary.
-        try:
-            # Open external references safely; resolve relative references from
-            # validated payload bytes.
-            if Path(ref["locator"]).is_absolute():
-                path = Path(ref["locator"])
-                # Read the assigned external source beneath a validated parent handle.
-                with Directory.absolute(path.parent) as parent:
-                    data = parent.read(path.name, MAX_FILE)
-            else:
-                # Resolve managed references from the already validated issue payload bytes.
-                data = files.get(ref["locator"])
-        except (OSError, WorkspaceError):
-            # Missing optional sources remain unavailable; required sources block readiness.
-            if ref["required"]:
-                raise WorkspaceError("SOURCE_STALE") from None
+        # Open external references safely; resolve relative references from
+        # validated payload bytes.
+        if Path(ref["locator"]).is_absolute():
+            data = external_source(ref["locator"])
+        else:
+            data = files.get(ref["locator"])
         # Compare exact source bytes and retain availability for optional references.
-        valid = data is not None and sha(data) == ref["sha256"]
-        require(valid or not ref["required"], "SOURCE_STALE")
-        refs.append({**ref, "available": valid})
+        source = source_state(ref, None if data is None else sha(data))
+        sources.append(source)
+        blocked = blocked or (ref["required"] and not source["available"])
+        refs.append({**ref, "available": source["available"]})
+    # A changed required source blocks readiness and names every changed reference.
+    if blocked:
+        raise StaleSourceError([source for source in sources if not source["available"]])
     return refs
 
 
@@ -1819,10 +1911,13 @@ def operate(store: Store, issue: Issue, request: JSONObject) -> JSONObject:
             "storage": state["storage"] if state else "absent",
         }
         member = state["participants"].get(key) if state else None
-        # Expose a recorded caller's committed packet exactly as stored, so a coordinator
-        # stranded at SOURCE_STALE can build its digest-only self-refresh scope.
-        if member is not None and member.get("packet") is not None:
-            diagnosis["packet"] = copy.deepcopy(member["packet"])
+        packet = member.get("packet") if member is not None else None
+        # Expose a recorded caller's committed packet exactly as stored, plus each
+        # reference's current digest, so a coordinator stranded at SOURCE_STALE can
+        # build its digest-only self-refresh scope from this result alone.
+        if state and packet is not None:
+            diagnosis["packet"] = copy.deepcopy(packet)
+            diagnosis["sources"] = packet_sources(packet, state.get("files", {}))
         return diagnosis
     # Read the existing session binding; never infer it from the prompt.
     binding = store.binding()
@@ -2774,9 +2869,12 @@ def execute(request: JSONObject) -> JSONObject:
             if result["ok"] and operation == "create" and request.get("cleanup_candidates"):
                 result["collection"] = collect_candidates(store, request)
             return result
-    # Return the bounded lifecycle diagnostic without exposing exception contents.
+    # Return the bounded lifecycle diagnostic; a stale packet also names what changed.
     except WorkspaceError as error:
-        return {"ok": False, "code": error.code, "action": error.action}
+        failure: JSONObject = {"ok": False, "code": error.code, "action": error.action}
+        if isinstance(error, StaleSourceError):
+            failure["stale"] = copy.deepcopy(error.stale)
+        return failure
     # Return only the narrow paths needed to retry the denied filesystem operation.
     except PermissionError:
         paths = permission_paths(request)

@@ -84,14 +84,20 @@ local lifecycle integration, not proposal approval.
    `repo_id`, `issue_id` and optional `binding_generation` for the issue in its
    recorded assignment. Both shapes are read-only and accept no other fields.
    For a recorded participant with a packet, the issue-level result also returns
-   `packet`, its committed reference list exactly as stored.
+   `packet`, its committed reference list exactly as stored, and `sources`, the
+   aligned list of each reference's `recorded_sha256`, `current_sha256` (`null`
+   when unreadable) and `available`. A stranded session cannot hash files itself,
+   because the hook denies every ordinary tool while it is unready.
    The issue coordinator may also run one `scope` before readiness: a self-refresh
    whose `target_participant` is its own key and whose `packet` repeats its current
    packet (the issue-level `diagnose` `packet`) with the same references in the same order, changing only each `sha256`
    to a digest, with no `owned_paths` and no other fields. It recovers a coordinator
-   whose own governing source changed (`SOURCE_STALE`). The core then clears the
+   whose own governing source changed (`SOURCE_STALE`): copy `packet` and replace
+   each `sha256` with the aligned `sources[*].current_sha256`. The core then clears the
    acknowledgment, so readiness still needs `read`, `acknowledge` with the returned
-   `packet_digest`, then `ready`. The rule is shared by every native host.
+   `packet_digest`, then `ready`. A scope that repeats unchanged digests is
+   accepted and bumps the revision but does not restore readiness; the failed
+   `read` lists the changed references in `stale`. The rule is shared by every native host.
 5. A successful matching issue-read completion invokes the shared startup orchestrator. It derives the
    main worktree from Git, registers or resumes, creates a new issue with the observed
    master as coordinator, installs an initial reader packet, reads its source bytes,
@@ -364,7 +370,7 @@ Field-level rules, such as an assignee equal to the initiating human or the targ
 name, remain in the contributor procedure's read-back rule; provider success is not
 lifecycle authority. Denials name the admitted next operation for their code; see
 [explicit setup](task-workspace-usage.md#explicit-setup-and-bootstrap). A coordinator
-denied with `SOURCE_STALE` recovers through the self-refresh `scope` (setup step 4),
+denied with `SOURCE_STALE` recovers through issue-level `diagnose` and the self-refresh `scope` built from its `sources` (setup step 4),
 then `read`, `acknowledge` and `ready`; a reader asks the coordinator to re-scope it.
 
 Unsupported MCP/provider routes must use a separately verified provider workflow. No native
