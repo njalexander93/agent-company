@@ -67,7 +67,8 @@ ticket read and, on Claude Code, the preparation reads. `BINDING_MISSING` names
 the `Task:` line and ticket read. `NOT_READY`, which a coordinator sees after
 its own committed roadmap update, names `read`, `acknowledge` with the returned
 `packet_digest`, then `ready`. `SOURCE_STALE` gives the coordinator route (a
-self-refresh `scope` of its own key with only refreshed digests, then `read`,
+self-refresh `scope` of its own key with the issue-level `diagnose` `packet` and
+only refreshed digests, then `read`,
 `acknowledge` with the returned `packet_digest` and `ready`) and the reader route
 (coordinator `scope` or a repeated Task line and ticket read). `HOST_UNSUPPORTED_PROVIDER`,
 `HOST_UNSUPPORTED_TOOL` and `HOST_UNSUPPORTED_CHILD_IDENTITY` state that no
@@ -139,14 +140,18 @@ exemption. `diagnose` has two admitted shapes. The pre-registration shape carrie
 only the session identity fields. The issue-level shape adds `repo_id` and
 `issue_id`, plus an optional `binding_generation`, and is admitted only for the
 issue in the session's recorded assignment. Both are read-only: they commit no
-state and append no event. A maintenance binding permits the specified archive/index/read-back and
+state and append no event. For a recorded participant with a packet, the
+issue-level result also carries `packet`, the committed reference list exactly
+as stored. A maintenance binding permits the specified archive/index/read-back and
 cleanup operations. Narrow schemas also permit terminal `archive-prepare`,
 coordinator `reconcile-files`, and explicit `rebind`: requiring ordinary readiness
 for those repair operations would deadlock recovery. Core ownership, generation,
 revision and pending-operation checks still apply. `create` is not an
 unready-session exception, and `scope` is one only in its coordinator
 self-refresh shape: the issue coordinator targets its own participant key with
-its current packet, same references in the same order, every field except
+its current packet (the issue-level `diagnose` result's `packet`; a prior `read`
+result's references work only after each computed `available` key is removed),
+same references in the same order, every field except
 `sha256` unchanged and each `sha256` a digest, with no `owned_paths` and no
 other fields. It recovers a coordinator whose own governing source changed; the
 core clears the acknowledgment, so `read`, `acknowledge` and `ready` must follow.

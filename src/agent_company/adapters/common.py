@@ -850,6 +850,12 @@ def coordinator_self_refresh(request: core.JSONObject, event: core.JSONObject) -
     Returns:
         True only when the caller is the issue coordinator, targets its own key, keeps
         every reference field except a valid ``sha256`` and assigns no owned paths.
+
+    Raises:
+        core.WorkspaceError: If the registered store or issue control directory is
+            invalid or the issue has no committed state.
+        OSError: If the store or committed state file cannot be read.
+        KeyError: If the committed state lacks the coordinator or participant map.
     """
     # Restrict the request to the self-refresh fields; owned paths are never refreshed.
     if not set(request) <= COMMON_FIELDS | {"target_participant", "packet"} or not {
@@ -863,15 +869,11 @@ def coordinator_self_refresh(request: core.JSONObject, event: core.JSONObject) -
     # The target must be the caller's own participant key.
     if request["target_participant"] != key:
         return False
-    # Read the committed issue state under its lock, as the core would before scope.
-    with (
-        core.Store(request) as store,
-        store.issues.child(request["issue_id"]) as control,
-        control.lock(),
-    ):
-        issue = core.Issue(store, control, request["issue_id"])
-        issue.recover()
-        state = issue.committed_state()
+    # Read the committed state file only: the hook takes no lock and runs no recovery;
+    # the core scope recovers and checks expected_revision itself.
+    with core.Store(request) as store, store.issues.child(request["issue_id"]) as control:
+        core.require(control.exists("state.json"), "BINDING_MISSING")
+        state = control.json("state.json")
     # Only the issue coordinator holding an existing packet may refresh itself.
     member = state["participants"].get(key)
     current = member.get("packet") if member is not None else None
@@ -949,13 +951,6 @@ def canonical_bootstrap(
             and set(request) <= identity | {"repo_id", "issue_id", "binding_generation"}
         ):
             return False
-        # An unready scope is admitted only as the coordinator's digest-only self-refresh.
-        if (
-            not ready
-            and request["operation"] == "scope"
-            and not coordinator_self_refresh(request, event)
-        ):
-            return False
         # Require the bootstrap issue to match the session assignment stored in this worktree.
         with (
             core.Directory.absolute(core.repository(event["cwd"])[0]) as root,
@@ -964,8 +959,13 @@ def canonical_bootstrap(
             # Read the recorded assignment through the local binding directory.
             with local.child(".bindings") as bindings:
                 assignment = bindings.json(core.participant_key(request) + ".assignment.json")
-        matches_assignment: bool = request.get("issue_id") == assignment["issue_id"]
-        return matches_assignment
+        # An unassigned issue is denied before any issue store is opened.
+        if request.get("issue_id") != assignment["issue_id"]:
+            return False
+        # An unready scope is admitted only as the coordinator's digest-only self-refresh.
+        if not ready and request["operation"] == "scope":
+            return coordinator_self_refresh(request, event)
+        return True
     # Malformed or inaccessible assignment state never authorizes bootstrap.
     except (core.WorkspaceError, OSError, ValueError, KeyError, TypeError):
         return False
@@ -1531,9 +1531,10 @@ def _recovery_route(code: str, host: str) -> str:
     # Coordinators and readers refresh a stale packet through different owners.
     if code == "SOURCE_STALE":
         return (
-            "A required packet source changed after acknowledgment. Coordinator: run a "
-            "self-refresh scope (target_participant is your own key, packet is your current "
-            "packet with only the sha256 digests refreshed, no owned_paths), then read, "
+            "A required packet source changed after acknowledgment. Coordinator: run an "
+            "issue-level diagnose; its `packet` is your current packet. Then run a "
+            "self-refresh scope (target_participant is your own key, packet is that list "
+            "with only the sha256 digests refreshed, no owned_paths), then read, "
             "acknowledge the returned packet_digest, then ready. Reader: ask the coordinator "
             "to refresh your packet with scope, or resubmit the Task line and exact "
             "get_issue read to refresh a "

@@ -338,10 +338,18 @@ CURRENT = [packet_ref("roadmap", "roadmap.md"), packet_ref("procedure", "/checko
 
 
 class IssueControl:
-    """Expose a lockable issue control directory for the self-refresh state read."""
+    """Expose one issue control directory holding a committed state file."""
+
+    def __init__(self, state: dict[str, Any]) -> None:
+        """Hold the committed state the hook may read.
+
+        Args:
+            state: Committed issue state served as ``state.json``.
+        """
+        self.state = state
 
     def __enter__(self) -> IssueControl:
-        """Hold the modeled control directory or lock.
+        """Hold the modeled control directory.
 
         Returns:
             This control node.
@@ -349,31 +357,38 @@ class IssueControl:
         return self
 
     def __exit__(self, *_args: object) -> None:
-        """Release the modeled control directory or lock.
+        """Release the modeled control directory.
 
         Args:
             _args: Context manager exception fields, unused by this fake.
         """
 
-    def lock(self) -> IssueControl:
-        """Model the issue lock as a reentrant no-op.
-
-        Returns:
-            This control node.
-        """
-        return self
-
-
-class StateStore(IssueControl):
-    """Model a registered store whose issues directory yields one control node."""
-
-    def __init__(self, _request: dict[str, Any]) -> None:
-        """Accept the scope request as the core Store would.
+    def exists(self, name: str) -> bool:
+        """Report only the committed state file as present.
 
         Args:
-            _request: Decoded scope request, unused by this fake.
+            name: Control entry requested by the hook.
+
+        Returns:
+            Whether the entry is the committed state file.
         """
-        self.issues = SimpleNamespace(child=lambda _identifier: IssueControl())
+        return name == "state.json"
+
+    def json(self, name: str) -> dict[str, Any]:
+        """Serve the committed state file and nothing else.
+
+        Args:
+            name: Control entry requested by the hook.
+
+        Returns:
+            The committed issue state.
+        """
+        assert name == "state.json"
+        return self.state
+
+    def lock(self) -> None:
+        """Fail if the read-only hook check tries to take the issue lock."""
+        pytest.fail("self-refresh admission took the issue lock")
 
 
 def install_state(monkeypatch: pytest.MonkeyPatch, state: dict[str, Any]) -> None:
@@ -381,16 +396,29 @@ def install_state(monkeypatch: pytest.MonkeyPatch, state: dict[str, Any]) -> Non
 
     Args:
         monkeypatch: Replaces repository, binding and store boundaries.
-        state: Committed issue state returned by the fake issue.
+        state: Committed issue state served from the issue control directory.
     """
-    # Bind the session to AGENT-30 and serve the supplied committed state.
+    # Bind the session to AGENT-30 and serve the supplied committed state file.
     monkeypatch.setattr(common.core, "repository", lambda _path: (CHECKOUT, None, [CHECKOUT]))
     monkeypatch.setattr(common.core.Directory, "absolute", lambda _path: AssignmentDirectory())
+    control = IssueControl(state)
+
+    class StateStore(IssueControl):
+        """Model a registered store whose issues directory yields the control node."""
+
+        def __init__(self, _request: dict[str, Any]) -> None:
+            """Accept the scope request as the core Store would.
+
+            Args:
+                _request: Decoded scope request, unused by this fake.
+            """
+            super().__init__(state)
+            self.issues = SimpleNamespace(child=lambda _identifier: control)
+
     monkeypatch.setattr(common.core, "Store", StateStore)
+    # Recovery must never run inside the hook's admission check.
     monkeypatch.setattr(
-        common.core,
-        "Issue",
-        lambda *_args: SimpleNamespace(recover=lambda: None, committed_state=lambda: state),
+        common.core, "Issue", lambda *_args: pytest.fail("hook constructed a recovering Issue")
     )
 
 
@@ -529,7 +557,7 @@ def test_unready_self_refresh_rejects_other_target_extra_fields_and_owned_paths(
     # Owned paths and arbitrary fields are outside the self-refresh shape.
     assert admitted_unready(refresh(refreshed(), owned_paths=["context/note.md"])) is False
     assert admitted_unready(refresh(refreshed(), arbitrary="injection")) is False
-    # A foreign issue fails the assignment check after the shape check.
+    # A foreign issue fails the assignment check before any issue store is opened.
     assert admitted_unready(refresh(refreshed(), issue_id="AGENT-31")) is False
 
 
@@ -568,3 +596,20 @@ def test_ready_scope_keeps_its_existing_admission(monkeypatch: pytest.MonkeyPatc
     event = {"cwd": str(CHECKOUT), "session_id": "session"}
     command = common.bootstrap_command(request, "codex")
     assert common.canonical_bootstrap(event, command, "codex", ready=True) is True
+
+
+def test_unready_self_refresh_for_unassigned_issue_opens_no_store(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A scope naming an unassigned issue is denied before any store, lock or recovery.
+
+    Args:
+        monkeypatch: Replaces repository, binding and store boundaries.
+    """
+    # Make every issue-store entry point fail the test if the hook reaches it.
+    install_state(monkeypatch, coordinator_state())
+    monkeypatch.setattr(
+        common.core, "Store", lambda _request: pytest.fail("opened a store for a foreign issue")
+    )
+    # The assignment check alone denies the foreign-issue self-refresh.
+    assert admitted_unready(refresh(refreshed(), issue_id="AGENT-31")) is False

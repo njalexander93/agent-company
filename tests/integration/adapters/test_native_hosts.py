@@ -1155,24 +1155,30 @@ def test_native_coordinator_self_refresh_recovers_stale_governing_source(
     denied = dispatch(host, native_event(host, case, "PreToolUse"))
     assert_decision(host, denied, False)
     assert "SOURCE_STALE" in str(denied) and "self-refresh scope" in str(denied)
+    # Obtain the current packet through the admitted issue-level diagnose, not state.json.
+    diagnosis = lifecycle_call(
+        host, case, shell, {**base, "operation": "diagnose", "request_id": "d"}
+    )
+    assert diagnosis is not None and diagnosis["ok"] is True, diagnosis
+    assert all("available" not in ref for ref in diagnosis["packet"])
     # Re-scope the coordinator's own packet with only the refreshed digests.
-    state = case.state()
-    key = case.base["coordinator"]
     data = (case.root / "AGENTS.md").read_bytes()
     packet = [
         {**ref, "sha256": core.sha(data)} if ref["locator"].endswith("AGENTS.md") else ref
-        for ref in state["participants"][key]["packet"]
+        for ref in diagnosis["packet"]
     ]
     scope = {
         **base,
         "operation": "scope",
         "request_id": "self-refresh",
-        "expected_revision": state["revision"],
-        "target_participant": key,
+        "expected_revision": diagnosis["revision"],
+        "target_participant": case.base["coordinator"],
         "packet": packet,
     }
     scoped = lifecycle_call(host, case, shell, scope)
     assert scoped is not None and scoped["ok"] is True, scoped
+    # The scope alone grants nothing: ordinary tools stay denied until ready.
+    assert_decision(host, dispatch(host, native_event(host, case, "PreToolUse")), False)
     # Readiness still requires the explicit read, acknowledge and ready cycle.
     read = lifecycle_call(host, case, shell, {**base, "operation": "read", "request_id": "r"})
     assert read is not None and read["ok"] is True, read
@@ -1229,9 +1235,49 @@ def test_native_coordinator_self_refresh_rejects_widened_scope(
         "target_participant": target,
         "packet": packet,
     }
+    state_file = case.root / ".task/.control/issues/TEST-1/state.json"
+    before = state_file.read_bytes()
     assert lifecycle_call(host, case, shell, scope, admitted=False) is None
     # Committed state is unchanged and ordinary tools remain denied as stale.
-    assert case.state()["revision"] == state["revision"]
+    assert state_file.read_bytes() == before
     denied = dispatch(host, native_event(host, case, "PreToolUse"))
     assert_decision(host, denied, False)
     assert "SOURCE_STALE" in str(denied)
+
+
+def test_native_self_refresh_from_prior_read_requires_removing_available(
+    native: NativeCase,
+) -> None:
+    """A prior read result's references work for self-refresh only without ``available``.
+
+    Args:
+        native: Host-specific disposable repository fixture.
+
+    Raises:
+        AssertionError: Read references are admitted with their computed field, or
+            rejected after it is removed.
+    """
+    # Keep the references from a successful read while the coordinator is still ready.
+    host, case, base, shell = started_coordinator(native)
+    read = lifecycle_call(host, case, shell, {**base, "operation": "read", "request_id": "r0"})
+    assert read is not None and read["ok"] is True, read
+    # Strand the coordinator, then refresh the AGENTS.md digest in those references.
+    (case.root / "AGENTS.md").write_text("# Rules\n\nEdited by the coordinator.\n")
+    digest = core.sha((case.root / "AGENTS.md").read_bytes())
+    references = [
+        {**ref, "sha256": digest} if ref["locator"].endswith("AGENTS.md") else ref
+        for ref in read["references"]
+    ]
+    scope = {
+        **base,
+        "operation": "scope",
+        "request_id": "from-read",
+        "expected_revision": case.state()["revision"],
+        "target_participant": case.base["coordinator"],
+    }
+    # The computed availability field is not part of a packet reference.
+    assert lifecycle_call(host, case, shell, {**scope, "packet": references}, False) is None
+    # Removing it yields exactly the committed shape with refreshed digests.
+    stripped = [{k: v for k, v in ref.items() if k != "available"} for ref in references]
+    scoped = lifecycle_call(host, case, shell, {**scope, "packet": stripped})
+    assert scoped is not None and scoped["ok"] is True, scoped

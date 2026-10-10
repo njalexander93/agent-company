@@ -489,7 +489,7 @@ def test_recovery_message_preserves_exact_diagnostic_without_task_content() -> N
         (
             "SOURCE_STALE",
             "claude-code",
-            ["Coordinator:", "self-refresh scope", "own key", "Reader:", "scope"],
+            ["Coordinator:", "issue-level diagnose", "self-refresh scope", "own key", "Reader:"],
         ),
         *[
             ("NOT_READY", host, ["run read, then acknowledge", "packet_digest", "then ready"])

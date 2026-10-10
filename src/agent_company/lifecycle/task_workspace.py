@@ -1810,7 +1810,7 @@ def operate(store: Store, issue: Issue, request: JSONObject) -> JSONObject:
             return result
     # Return issue presence and storage state without changing participation.
     if operation == "diagnose":
-        return {
+        diagnosis: JSONObject = {
             "ok": True,
             "code": "PRESENT" if state else "ABSENT",
             "repo_id": store.registration["repo_id"],
@@ -1818,6 +1818,12 @@ def operate(store: Store, issue: Issue, request: JSONObject) -> JSONObject:
             "revision": state["revision"] if state else None,
             "storage": state["storage"] if state else "absent",
         }
+        member = state["participants"].get(key) if state else None
+        # Expose a recorded caller's committed packet exactly as stored, so a coordinator
+        # stranded at SOURCE_STALE can build its digest-only self-refresh scope.
+        if member is not None and member.get("packet") is not None:
+            diagnosis["packet"] = copy.deepcopy(member["packet"])
+        return diagnosis
     # Read the existing session binding; never infer it from the prompt.
     binding = store.binding()
     # Prevent attachment operations from reusing another issue binding.

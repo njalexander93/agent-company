@@ -242,12 +242,14 @@ def test_read_returns_only_assigned_matching_references_without_commit() -> None
 
 
 def test_diagnose_reports_absent_and_present_issue_without_binding_read() -> None:
-    """Diagnosis reveals only committed issue presence and storage state."""
+    """Diagnosis reveals committed presence, storage and only the caller's own packet."""
     # Create a modeled store and issue at the active revision.
     store, issue = MemoryStore(), MemoryIssue()
+    before = copy.deepcopy(issue.state)
+    key = core.participant_key(base_request("diagnose"))
     # Dispatch the diagnose request against the modeled issue.
     result = core.operate(store, issue, base_request("diagnose"))  # type: ignore[arg-type]
-    # Confirm the exact participant and issue report a present binding.
+    # A recorded participant also receives its committed packet exactly as stored.
     assert result == {
         "ok": True,
         "code": "PRESENT",
@@ -255,7 +257,17 @@ def test_diagnose_reports_absent_and_present_issue_without_binding_read() -> Non
         "issue_id": "AGENT-30",
         "revision": 7,
         "storage": "present",
+        "packet": before["participants"][key]["packet"],
     }
+    assert all("available" not in ref for ref in result["packet"])
+    # The returned packet is a copy; changing it cannot alter committed state.
+    result["packet"][0]["sha256"] = "0" * 64
+    assert issue.state == before
+    # A session that is not a recorded participant gets no packet.
+    other = core.operate(  # type: ignore[arg-type]
+        store, issue, base_request("diagnose", session_id="other-session")
+    )
+    assert "packet" not in other and other["code"] == "PRESENT"
     # Model an absent issue record even though the store wrapper exists.
     issue.state = {}
     # Dispatch the diagnose request against the modeled issue.

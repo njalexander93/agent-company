@@ -83,9 +83,11 @@ local lifecycle integration, not proposal approval.
    `diagnose` in its pre-registration shape, or in its issue-level shape with
    `repo_id`, `issue_id` and optional `binding_generation` for the issue in its
    recorded assignment. Both shapes are read-only and accept no other fields.
+   For a recorded participant with a packet, the issue-level result also returns
+   `packet`, its committed reference list exactly as stored.
    The issue coordinator may also run one `scope` before readiness: a self-refresh
    whose `target_participant` is its own key and whose `packet` repeats its current
-   packet with the same references in the same order, changing only each `sha256`
+   packet (the issue-level `diagnose` `packet`) with the same references in the same order, changing only each `sha256`
    to a digest, with no `owned_paths` and no other fields. It recovers a coordinator
    whose own governing source changed (`SOURCE_STALE`). The core then clears the
    acknowledgment, so readiness still needs `read`, `acknowledge` with the returned
