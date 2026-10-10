@@ -365,54 +365,87 @@ class LifecycleTests(Fixture):
         )
         self.assertEqual(reader_read["code"], "SOURCE_STALE")
 
-    def test_T07c_session_binding_conflict_and_rebind_precondition(self) -> None:
-        """Pin that a bound session cannot start another issue and rebind needs an assignment.
+    def test_T07c_session_binding_conflict_and_rebind_create(self) -> None:
+        """Pin that only rebind moves a bound session, creating an absent target.
 
         Raises:
             AssertionError: An asserted lifecycle or boundary invariant does not hold.
         """
         # Bind the coordinator session to TEST-1 and create TEST-2 from another session.
         self.create()
+        key = self.base["coordinator"]
         other = {"issue_id": "TEST-2", "issue_uuid": "second"}
         second = self.req("create", session_id="second", binding_generation=None, **other)
         second["coordinator"] = w.participant_key(second)
         self.require_ok(w.execute(second))
-        # Every attachment-style operation on another issue reports the existing binding.
+        # Every attachment-style operation on another issue still reports the binding.
         for operation in ["create", "attach", "resume", "join"]:
             request = self.req(operation, expected_revision=0, **other)
             # Creation names its own coordinator; the binding check precedes it.
             if operation == "create":
-                request["coordinator"] = self.base["coordinator"]
+                request["coordinator"] = key
             self.assertEqual(w.execute(request)["code"], "BINDING_CONFLICT", operation)
-        # Rebinding requires the target issue to already assign this participant.
+        absent = self.req("create", issue_id="TEST-3", issue_uuid="third", coordinator=key)
+        self.assertEqual(w.execute(absent)["code"], "BINDING_CONFLICT")
+        # Rebinding to an existing target still requires an assignment for this participant.
         rebind = {
             "new_issue_id": "TEST-2",
             "new_binding_generation": 1,
             "evidence": self.evidence(),
+            "issue_uuid": "second",
         }
         self.assertEqual(w.execute(self.req("rebind", **rebind))["code"], "SCOPE_MISSING")
+        mismatch = self.req("rebind", **rebind | {"issue_uuid": "wrong"})
+        self.assertEqual(w.execute(mismatch)["code"], "ISSUE_MISMATCH")
+        self.assertEqual(self.state()["participants"][key]["status"], "attached")
+        # Creating an absent target requires its provider identity and evidence.
+        create = {"new_issue_id": "TEST-3", "evidence": self.evidence(), "issue_uuid": "third"}
+        missing_uuid = self.req("rebind", **create | {"issue_uuid": None})
+        self.assertEqual(w.execute(missing_uuid)["code"], "INVALID_REQUEST")
+        missing_evidence = self.req("rebind", **create | {"evidence": None})
+        self.assertEqual(w.execute(missing_evidence)["code"], "EVIDENCE_REQUIRED")
+        self.assertFalse((self.root / ".task/TEST-3").exists())
+        # Rebind-create makes the caller the new coordinator and fences the old binding.
+        roadmap = (self.root / ".task/TEST-1/roadmap.md").read_bytes()
+        moved = self.require_ok(w.execute(self.req("rebind", **create)))
+        self.assertEqual((moved["issue_id"], moved["binding_generation"]), ("TEST-3", 1))
+        target = json.loads((self.root / ".task/.control/issues/TEST-3/state.json").read_text())
         self.assertEqual(
-            self.state()["participants"][self.base["coordinator"]]["status"], "attached"
+            (target["coordinator"], target["owners"], target["issue_uuid"]),
+            (key, {"roadmap.md": key}, "third"),
         )
-        # After the target coordinator assigns a packet, the same rebind succeeds.
-        target = json.loads((self.root / ".task/.control/issues/TEST-2/state.json").read_text())
+        self.assertEqual(target["participants"][key]["status"], "attached")
+        self.assertIn(b"TEST-3", (self.root / ".task/TEST-3/roadmap.md").read_bytes())
+        # The old issue keeps its payload and coordinator; only its participant detaches.
+        old = self.state()
+        self.assertEqual(
+            (old["coordinator"], old["participants"][key]["status"]), (key, "detached")
+        )
+        self.assertEqual((self.root / ".task/TEST-1/roadmap.md").read_bytes(), roadmap)
+        binding = json.loads((self.root / ".task/.bindings" / (key + ".json")).read_text())
+        self.assertEqual(binding["issue_id"], "TEST-3")
+        # The moved session is now fenced from the old issue's attachment routes.
+        resume_old = self.req("resume", binding_generation=old["participants"][key]["generation"])
+        self.assertEqual(w.execute(resume_old)["code"], "BINDING_CONFLICT")
+        # After the target coordinator assigns a packet, rebind to the existing TEST-2 works.
+        assigned = json.loads((self.root / ".task/.control/issues/TEST-2/state.json").read_text())
         self.require_ok(
             w.execute(
                 self.req(
                     "scope",
                     session_id="second",
                     binding_generation=1,
-                    expected_revision=target["revision"],
-                    target_participant=self.base["coordinator"],
+                    expected_revision=assigned["revision"],
+                    target_participant=key,
                     packet=[],
                     **other,
                 )
             )
         )
-        self.require_ok(w.execute(self.req("rebind", **rebind)))
-        self.assertEqual(
-            self.state()["participants"][self.base["coordinator"]]["status"], "detached"
-        )
+        onward = self.req("rebind", issue_id="TEST-3", binding_generation=1, **rebind)
+        self.require_ok(w.execute(onward))
+        third = json.loads((self.root / ".task/.control/issues/TEST-3/state.json").read_text())
+        self.assertEqual(third["participants"][key]["status"], "detached")
 
     def test_T08_active_in_review_pending_retained(self) -> None:
         """Retain active, pending-tool and in-review workspaces.

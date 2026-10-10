@@ -186,6 +186,10 @@ def automatic_attach(event: core.JSONObject, identifier: str, host: str) -> None
 def prompt(event: core.JSONObject, host: str, attempt_attach: bool = False) -> core.JSONObject:
     """Record one explicit Task line and attempt only its assigned workspace setup.
 
+    On a ticket-first host, a bound session's Task line for another issue records that
+    issue as a pending assignment; the binding moves only when the verified ticket read
+    runs the startup rebind, so a failed read leaves the old binding in place.
+
     Args:
         event: Observed host hook input, including the actual session and tool identities.
         host: Explicit adapter identity; never taken from untrusted tool arguments.
@@ -222,15 +226,39 @@ def prompt(event: core.JSONObject, host: str, attempt_attach: bool = False) -> c
     ):
         # Derive the assignment key from the explicit host/session identity.
         key = core.participant_key(request)
-        # Reject implicit task switches in either the live binding or the recorded assignment.
-        for name in (key + ".json", key + ".assignment.json"):
-            # Validate any existing entry before reusing or replacing it.
-            if bindings.exists(name) and bindings.json(name)["issue_id"] != identifier:
-                return {
-                    "decision": "block",
-                    "reason": "BINDING_CONFLICT: Explicit rebind is required.",
-                }
+        # Read the live binding and the recorded Task identity, either possibly absent.
+        binding = bindings.json(key + ".json") if bindings.exists(key + ".json") else None
+        recorded = (
+            bindings.json(key + ".assignment.json")
+            if bindings.exists(key + ".assignment.json")
+            else None
+        )
+        # An unbound session never replaces its recorded Task identity, and the legacy
+        # preassigned route has no verified-read rebind for a bound session.
+        if (binding is None and recorded is not None and recorded["issue_id"] != identifier) or (
+            attempt_attach and binding is not None and binding["issue_id"] != identifier
+        ):
+            return {
+                "decision": "block",
+                "reason": "BINDING_CONFLICT: Explicit rebind is required.",
+            }
+        # A bound session's Task line replaces only its pending assignment: the binding
+        # moves after the verified ticket read, so drop a lookup correlation for another
+        # issue that could otherwise refuse this issue's read.
+        lookup = key + ".lookup.json"
+        if (
+            binding is not None
+            and bindings.exists(lookup)
+            and bindings.json(lookup).get("id") != identifier
+        ):
+            bindings.unlink(lookup)
         bindings.put(key + ".assignment.json", {"issue_id": identifier})
+        # Name the bound issue this Task line moves away from, for the setup context.
+        moving = (
+            binding["issue_id"]
+            if binding is not None and binding["issue_id"] != identifier
+            else None
+        )
         # Ticket-first hosts retain a marker until the provider read completes.
         if not attempt_attach:
             bindings.put(key + ".lookup-required.json", {"issue_id": identifier})
@@ -243,6 +271,12 @@ def prompt(event: core.JSONObject, host: str, attempt_attach: bool = False) -> c
             "additionalContext": (
                 "Task identity recorded. Read the requested Linear ticket first. "
                 "Then complete scoped workspace setup and verify readiness."
+                + (
+                    f" The verified read rebinds this session from {moving}, which stays "
+                    f"preserved; a new Task: {moving} line returns to it."
+                    if moving is not None
+                    else ""
+                )
                 if not attempt_attach
                 else "Task identity recorded. Explicitly assigned workspace setup was "
                 "attempted. Read and acknowledge the permitted packet before task "
@@ -898,6 +932,49 @@ def coordinator_self_refresh(request: core.JSONObject, event: core.JSONObject) -
     return True
 
 
+def rebind_admitted(
+    request: core.JSONObject, event: core.JSONObject, assignment: core.JSONObject
+) -> bool:
+    """Bind an explicit rebind's target to the session's recorded Task identity.
+
+    A Task line for another issue records that issue as the session's assignment while
+    the binding still names the old one; that recorded target may be rebound to, and
+    created if absent. A rebind from the assigned issue keeps the earlier rule and is
+    admitted only toward a target that already exists, so it never creates an issue
+    the session was not explicitly given. A subagent never rebinds.
+
+    Args:
+        request: Decoded rebind request whose session, host and worktree already match.
+        event: Observed hook envelope; a normalized subagent carries ``child``.
+        assignment: The session's recorded Task assignment.
+
+    Returns:
+        Whether the request's old and new issues fit the recorded assignment.
+
+    Raises:
+        core.WorkspaceError: If the target issue ID or registered store is invalid.
+        OSError: If the issue control directory cannot be inspected.
+        KeyError: If the request lacks its issue, repository or target fields.
+    """
+    # A subagent holds a coordinator-scoped assignment and cannot move a binding.
+    if event.get("child") is True:
+        return False
+    # Validate the target ID; the recorded Task identity authorizes it, even if absent.
+    target = core.issue_id(request["new_issue_id"])
+    if target == assignment["issue_id"]:
+        return True
+    # Otherwise only a rebind away from the assigned issue toward an existing target.
+    if request["issue_id"] != assignment["issue_id"]:
+        return False
+    # Inspect the target's control directory read-only: no lock and no recovery.
+    with core.Store(request) as store:
+        # An absent control directory or state file means the target does not exist.
+        if not store.issues.exists(target):
+            return False
+        with store.issues.child(target) as control:
+            return bool(control.exists("state.json"))
+
+
 def canonical_bootstrap(
     event: core.JSONObject,
     command: object,
@@ -960,6 +1037,9 @@ def canonical_bootstrap(
             # Read the recorded assignment through the local binding directory.
             with local.child(".bindings") as bindings:
                 assignment = bindings.json(core.participant_key(request) + ".assignment.json")
+        # A rebind matches the assignment through its target or an existing destination.
+        if request["operation"] == "rebind":
+            return rebind_admitted(request, event, assignment)
         # An unassigned issue is denied before any issue store is opened.
         if request.get("issue_id") != assignment["issue_id"]:
             return False

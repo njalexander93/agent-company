@@ -170,14 +170,28 @@ the reviewed lifecycle CLI without registering that same local transaction as a
 pending external tool. Unknown bootstrap fields are rejected.
 
 A session binding names one issue. While it does, `create`, `attach`, `resume`
-and `join` for any other issue return `BINDING_CONFLICT`; a bound session cannot
-start a second issue directly. `rebind` takes the old issue/generation, `new_issue_id`, optional
-`new_binding_generation`, and evidence. The target must already exist with an
-explicit assignment for the caller, installed by the target's coordinator through
-`scope`; otherwise `rebind` returns `SCOPE_MISSING` and the old binding stays
-attached. It locks both issues in lexical order, fences old work and
-preserves the old payload. Pending operations block it. It does not create a
-new assignment or transfer coordinator ownership implicitly.
+and `join` for any other issue return `BINDING_CONFLICT`; a bound session starts
+or enters a second issue only through `rebind`. `rebind` takes the old
+issue/generation, `new_issue_id`, optional `new_binding_generation`, evidence, and
+`issue_uuid` naming the target. An existing target must already assign the caller
+(installed by the target's coordinator through `scope`) or hold the caller's earlier
+participation; otherwise `rebind` returns `SCOPE_MISSING` and the old binding stays
+attached. A supplied `issue_uuid` must match an existing target (`ISSUE_MISMATCH`).
+An absent target is created from the packaged template with the caller as
+coordinator; this requires `issue_uuid` and no unadopted payload directory.
+`rebind` locks both issues in lexical order, fences old work and preserves the old
+payload. Pending operations block it, and an old issue's coordinator moves only
+after its other participants have detached. It never transfers coordinator
+ownership of the old issue, and a subagent identity cannot rebind.
+
+On ticket-first hosts this happens automatically. A bound session submits a Task
+line for the other issue; the adapter records it as a pending assignment and leaves
+the binding alone. The verified ticket read then runs `rebind` (create when the
+issue is absent) with the ticket identity as evidence, followed by the usual
+packet read, acknowledgment and readiness. A failed read or refused rebind keeps
+the old binding; a Task line for the bound issue returns to it. The hook admits a
+manual `rebind` only toward the recorded Task issue, or away from it toward an issue
+that already has committed state.
 
 ### Transactions, events and collection
 

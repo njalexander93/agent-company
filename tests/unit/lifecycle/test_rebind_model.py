@@ -62,15 +62,19 @@ class Issues:
         """
         self.order = order
 
-    def child(self, identifier: str) -> Control:
-        """Open a selected issue control.
+    def child(self, identifier: str, create: bool = False) -> Control:
+        """Open a selected issue control, recording any creation request.
 
         Args:
             identifier: Issue or participant identifier used in this scenario.
+            create: Whether the caller may create an absent control directory.
 
         Returns:
             Fake child directory or issue context for the caller.
         """
+        # Record which control the rebind is allowed to create.
+        if create:
+            self.order.append("create:" + identifier)
         return Control(identifier, self.order)
 
 
@@ -102,6 +106,25 @@ class Bindings:
         self.data[name] = value
 
 
+class Payloads:
+    """Report which canonical issue payload directories already exist."""
+
+    def __init__(self) -> None:
+        """Start with no unadopted payload directory."""
+        self.present: set[str] = set()
+
+    def exists(self, identifier: str) -> bool:
+        """Check whether an issue payload directory exists.
+
+        Args:
+            identifier: Issue identifier whose payload directory is checked.
+
+        Returns:
+            Whether the modeled payload directory is present.
+        """
+        return identifier in self.present
+
+
 class Store:
     """Record views and binding writes across the two issues."""
 
@@ -111,6 +134,8 @@ class Store:
         self.order: list[str] = []
         self.issues = Issues(self.order)
         self.bindings = Bindings()
+        self.registration = {"repo_id": "repo"}
+        self.task = Payloads()
 
     def view(self, identifier: str) -> None:
         """Record the new issue view after commit.
@@ -170,7 +195,7 @@ class Issue:
     def commit(
         self,
         state: dict[str, Any],
-        _files: dict[str, bytes],
+        files: dict[str, bytes],
         _request: dict[str, Any],
         result: dict[str, Any],
         event_type: str,
@@ -179,7 +204,7 @@ class Issue:
 
         Args:
             state: Issue state used by this scenario.
-            _files: Unused files argument accepted by this fake.
+            files: Payload bytes retained as this issue's committed payload.
             _request: Unused request argument accepted by this fake.
             result: Response returned by the fake collaborator.
             event_type: Event type selected by the case.
@@ -189,8 +214,9 @@ class Issue:
         """
         self.store.order.append("commit:" + self.id)
         assert event_type == "rebind"
-        # Establish the issue state required by this transition.
+        # Establish the issue state and payload required by this transition.
         self.state = copy.deepcopy(state)
+        self.payload = dict(files)
         return {"ok": True, "code": "OK", **result}
 
 
@@ -478,3 +504,156 @@ def test_rebind_replay_can_finish_after_assignment_write_failure(
     # Confirm the new binding targets AGENT-31 after old retirement.
     assert core.rebind(store, request)["ok"] is True  # type: ignore[arg-type]
     assert store.bindings.data[assignment] == {"issue_id": "AGENT-31"}
+
+
+def absent_target(store: Store) -> tuple[Issue, Issue, str]:
+    """Replace the assigned target with an issue that has no workspace yet.
+
+    Args:
+        store: Store used to exercise lifecycle operations.
+
+    Returns:
+        The old issue, the absent target and the caller's participant key.
+    """
+    # Keep the coordinator old issue and model a target without committed state.
+    old, new, key = fixture_state(store)
+    new.state = None  # type: ignore[assignment]
+    return old, new, key
+
+
+def test_rebind_creates_absent_target_with_caller_as_coordinator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Create the target from the template, then fence the old binding as usual.
+
+    Args:
+        monkeypatch: Pytest fixture used to replace the dependency under test.
+    """
+    # Record a Task assignment that already names the absent target.
+    store = Store()
+    old, new, key = absent_target(store)
+    assignment = key + ".assignment.json"
+    store.bindings.data[assignment] = {"issue_id": "AGENT-31"}
+    monkeypatch.setattr(core, "Issue", Issue)
+    # Rebind with the target's provider identity and the verified read as evidence.
+    result = core.rebind(store, rebind_request(issue_uuid="target-uuid"))  # type: ignore[arg-type]
+    # The caller coordinates the new issue; the old participant only detaches.
+    assert result["participant_id"] == key
+    assert new.state["coordinator"] == key
+    assert new.state["owners"] == {"roadmap.md": key}
+    assert new.state["issue_uuid"] == "target-uuid"
+    assert new.state["participants"][key]["status"] == "attached"
+    assert b"AGENT-31" in new.payload["roadmap.md"]
+    assert new.payload["events.jsonl"] == b""
+    assert old.state["coordinator"] == key
+    assert old.state["participants"][key]["status"] == "detached"
+    # Only the target control may be created; old retirement precedes publication.
+    assert "create:AGENT-31" in store.order and "create:AGENT-30" not in store.order
+    assert store.order.index("commit:AGENT-30") < store.order.index("commit:AGENT-31")
+    assert store.order.index("commit:AGENT-31") < store.order.index("save-binding")
+    assert store.bindings.data[assignment] == {"issue_id": "AGENT-31"}
+
+
+@pytest.mark.parametrize(
+    ("changes", "payload", "code"),
+    [
+        ({}, False, "INVALID_REQUEST"),
+        ({"issue_uuid": "target-uuid", "evidence": None}, False, "EVIDENCE_REQUIRED"),
+        ({"issue_uuid": "target-uuid"}, True, "ADOPTION_REQUIRED"),
+        ({"issue_uuid": "target-uuid", "session_id": "session/agent/a1"}, False, "NOT_OWNER"),
+    ],
+)
+def test_rebind_create_refuses_incomplete_requests_without_commit(
+    monkeypatch: pytest.MonkeyPatch,
+    changes: dict[str, object],
+    payload: bool,
+    code: str,
+) -> None:
+    """Refuse creation without identity, evidence, an unused payload path or root caller.
+
+    Args:
+        monkeypatch: Pytest fixture used to replace the dependency under test.
+        changes: Request fields overridden for this case.
+        payload: Whether an unadopted target payload directory already exists.
+        code: Expected public failure code.
+    """
+    # Model the absent target and any unadopted payload directory.
+    store = Store()
+    old, new, key = absent_target(store)
+    # Add the unadopted payload directory only for the adoption case.
+    if payload:
+        store.task.present.add("AGENT-31")
+    monkeypatch.setattr(core, "Issue", Issue)
+    # Reject the request before either issue changes.
+    with pytest.raises(core.WorkspaceError) as captured:
+        core.rebind(store, rebind_request(**changes))  # type: ignore[arg-type]
+    assert captured.value.code == code
+    assert new.state is None
+    assert old.state["participants"][key]["status"] == "ready"
+    assert not any(item.startswith("commit:") for item in store.order)
+
+
+def test_rebind_create_is_blocked_by_pending_old_work(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep the old binding and create nothing while old work is unresolved.
+
+    Args:
+        monkeypatch: Pytest fixture used to replace the dependency under test.
+    """
+    # Leave one unresolved tool on the old participant.
+    store = Store()
+    old, new, key = absent_target(store)
+    old.state["participants"][key]["pending"] = {"tool-1": {"status": "pending"}}
+    monkeypatch.setattr(core, "Issue", Issue)
+    # Reject the rebind before any commit.
+    with pytest.raises(core.WorkspaceError) as captured:
+        core.rebind(store, rebind_request(issue_uuid="target-uuid"))  # type: ignore[arg-type]
+    assert captured.value.code == "PENDING_OPERATION"
+    assert new.state is None
+    assert not any(item.startswith("commit:") for item in store.order)
+
+
+def test_rebind_create_waits_for_old_coordinator_participants_to_detach(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A coordinator never leaves attached participants behind implicitly.
+
+    Args:
+        monkeypatch: Pytest fixture used to replace the dependency under test.
+    """
+    # Attach a reader to the old issue under the moving coordinator.
+    store = Store()
+    old, new, _key = absent_target(store)
+    old.state["participants"]["reader"] = {"generation": 1, "status": "ready", "pending": {}}
+    monkeypatch.setattr(core, "Issue", Issue)
+    # Reject the rebind before any commit.
+    with pytest.raises(core.WorkspaceError) as captured:
+        core.rebind(store, rebind_request(issue_uuid="target-uuid"))  # type: ignore[arg-type]
+    assert captured.value.code == "PENDING_OPERATION"
+    assert new.state is None
+    assert not any(item.startswith("commit:") for item in store.order)
+
+
+def test_rebind_existing_target_rejects_other_provider_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A supplied issue UUID must match the existing target's recorded identity.
+
+    Args:
+        monkeypatch: Pytest fixture used to replace the dependency under test.
+    """
+    # Record the existing target's provider identity.
+    store = Store()
+    old, new, key = fixture_state(store)
+    new.state["issue_uuid"] = "target-uuid"
+    monkeypatch.setattr(core, "Issue", Issue)
+    # Reject a different identity before either issue changes.
+    with pytest.raises(core.WorkspaceError) as captured:
+        core.rebind(store, rebind_request(issue_uuid="other-uuid"))  # type: ignore[arg-type]
+    assert captured.value.code == "ISSUE_MISMATCH"
+    assert old.state["participants"][key]["status"] == "ready"
+    assert not any(item.startswith("commit:") for item in store.order)
+    # The matching identity keeps the existing assignment rule and succeeds.
+    assert core.rebind(store, rebind_request(issue_uuid="target-uuid"))["ok"] is True  # type: ignore[arg-type]
+    assert "create:AGENT-31" in store.order

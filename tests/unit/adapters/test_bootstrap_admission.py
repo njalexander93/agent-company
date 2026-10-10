@@ -613,3 +613,164 @@ def test_unready_self_refresh_for_unassigned_issue_opens_no_store(
     )
     # The assignment check alone denies the foreign-issue self-refresh.
     assert admitted_unready(refresh(refreshed(), issue_id="AGENT-31")) is False
+
+
+def rebind(old: str, new: str, **extra: object) -> dict[str, Any]:
+    """Build a rebind request moving the session from one issue to another.
+
+    Args:
+        old: Issue the session's binding names.
+        new: Target issue of the rebind.
+        extra: Additional or replacement request fields.
+
+    Returns:
+        A rebind request with the old generation and synthetic evidence.
+    """
+    fields: dict[str, object] = {
+        "repo_id": "repo",
+        "issue_id": old,
+        "binding_generation": 4,
+        "new_issue_id": new,
+        "evidence": [{"id": "ticket-read", "locator": "linear-issue:u", "sha256": "a" * 64}],
+    }
+    return base("rebind", **{**fields, **extra})
+
+
+class TargetIssues:
+    """Model the issues directory with a chosen set of committed targets."""
+
+    def __init__(self, committed: set[str], opened: list[str]) -> None:
+        """Hold the committed issue IDs and record each inspection.
+
+        Args:
+            committed: Issue IDs whose control directory holds a committed state.
+            opened: Shared log of inspected issue IDs.
+        """
+        self.committed = committed
+        self.opened = opened
+
+    def exists(self, identifier: str) -> bool:
+        """Report whether a control directory exists for the issue.
+
+        Args:
+            identifier: Issue ID being inspected.
+
+        Returns:
+            Whether the modeled control directory exists.
+        """
+        self.opened.append(identifier)
+        return identifier in self.committed
+
+    def child(self, identifier: str) -> IssueControl:
+        """Open an existing issue control holding a committed state file.
+
+        Args:
+            identifier: Issue ID whose control directory is opened.
+
+        Returns:
+            A control node serving an empty committed state.
+        """
+        assert identifier in self.committed
+        return IssueControl({})
+
+
+def install_targets(monkeypatch: pytest.MonkeyPatch, committed: set[str]) -> list[str]:
+    """Bind the session's assignment to AGENT-30 and model committed target issues.
+
+    Args:
+        monkeypatch: Replaces repository, binding and store boundaries.
+        committed: Issue IDs that already have committed state.
+
+    Returns:
+        The log of issue IDs the hook inspected.
+    """
+    # Serve the AGENT-30 assignment and a store whose issues directory is modeled.
+    monkeypatch.setattr(common.core, "repository", lambda _path: (CHECKOUT, None, [CHECKOUT]))
+    monkeypatch.setattr(common.core.Directory, "absolute", lambda _path: AssignmentDirectory())
+    opened: list[str] = []
+
+    class TargetStore(IssueControl):
+        """Model a registered store exposing only the issues directory."""
+
+        def __init__(self, _request: dict[str, Any]) -> None:
+            """Accept the rebind request as the core Store would.
+
+            Args:
+                _request: Decoded rebind request, unused by this fake.
+            """
+            super().__init__({})
+            self.issues = TargetIssues(committed, opened)
+
+    monkeypatch.setattr(common.core, "Store", TargetStore)
+    return opened
+
+
+@pytest.mark.parametrize("ready", [False, True])
+def test_rebind_to_recorded_task_target_is_admitted_without_store_reads(
+    monkeypatch: pytest.MonkeyPatch, ready: bool
+) -> None:
+    """A rebind whose target is the recorded Task issue is admitted, including creation.
+
+    Args:
+        monkeypatch: Replaces repository, binding and store boundaries.
+        ready: Whether ordinary readiness was already established.
+    """
+    # The assignment names AGENT-30 while the binding still names AGENT-29.
+    opened = install_targets(monkeypatch, set())
+    event = {"cwd": str(CHECKOUT), "session_id": "session"}
+
+    def admitted(request: dict[str, Any]) -> bool:
+        """Evaluate one rebind command through the canonical parser.
+
+        Args:
+            request: Lifecycle request encoded into the shell command.
+
+        Returns:
+            Whether the hook would admit the command.
+        """
+        command = common.bootstrap_command(request, "codex")
+        return common.canonical_bootstrap(event, command, "codex", ready=ready)
+
+    # The create variant's target identity and generation fields are admitted.
+    assert admitted(rebind("AGENT-29", "AGENT-30")) is True
+    assert admitted(rebind("AGENT-29", "AGENT-30", issue_uuid="uuid")) is True
+    assert admitted(rebind("AGENT-29", "AGENT-30", new_binding_generation=2)) is True
+    assert opened == []
+
+
+def test_rebind_rejects_unbootstrapped_fields_and_child_callers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The rebind shape stays exact and a subagent never moves a binding.
+
+    Args:
+        monkeypatch: Replaces repository, binding and store boundaries.
+    """
+    # The recorded Task target would otherwise admit each request.
+    install_targets(monkeypatch, set())
+    for extra in [{"coordinator": "key"}, {"packet": []}, {"owned_paths": []}]:
+        # A caller cannot name a coordinator or packet through the rebind exception.
+        assert admitted_unready(rebind("AGENT-29", "AGENT-30", **extra)) is False, extra
+    child = {"cwd": str(CHECKOUT), "session_id": "session", "child": True}
+    command = common.bootstrap_command(rebind("AGENT-29", "AGENT-30"), "codex")
+    assert common.canonical_bootstrap(child, command, "codex", ready=False) is False
+    assert common.canonical_bootstrap(child, command, "codex", ready=True) is False
+
+
+def test_rebind_from_assigned_issue_requires_existing_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Leaving the assigned issue is admitted only toward a committed target.
+
+    Args:
+        monkeypatch: Replaces repository, binding and store boundaries.
+    """
+    # Only AGENT-31 already has committed state.
+    opened = install_targets(monkeypatch, {"AGENT-31"})
+    assert admitted_unready(rebind("AGENT-30", "AGENT-31")) is True
+    assert admitted_unready(rebind("AGENT-30", "AGENT-32")) is False
+    assert opened == ["AGENT-31", "AGENT-32"]
+    # An unrelated old issue or a malformed target never opens the store.
+    assert admitted_unready(rebind("AGENT-28", "AGENT-31")) is False
+    assert admitted_unready(rebind("AGENT-30", "../AGENT-31")) is False
+    assert opened == ["AGENT-31", "AGENT-32"]

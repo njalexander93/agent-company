@@ -232,11 +232,48 @@ def _initial_packet(checkout: Path, main: Path, issue_id: str, reader: str) -> l
     return packet
 
 
+def _session_binding(base: core.JSONObject) -> core.JSONObject | None:
+    """Read the session's persisted issue binding from the registered store.
+
+    Args:
+        base: Registered request carrying the repository, host and session identity.
+
+    Returns:
+        The binding with its issue ID and generation, or None for an unbound session.
+
+    Raises:
+        core.WorkspaceError: If the store or binding fails validation.
+        OSError: If the binding store cannot be read.
+    """
+    with core.Store(base) as store:
+        return store.binding()
+
+
+def _ticket_evidence(issue: core.JSONObject) -> list[core.EvidenceRef]:
+    """Name the verified ticket read as the evidence for moving a session binding.
+
+    Args:
+        issue: Verified issue with shorthand ID and immutable UUID.
+
+    Returns:
+        One reference to the provider identity, digesting only its ID and UUID.
+    """
+    return [
+        {
+            "id": "ticket-read",
+            "locator": "linear-issue:" + issue["uuid"],
+            "sha256": core.sha(core.canonical({"id": issue["id"], "uuid": issue["uuid"]})),
+        }
+    ]
+
+
 def start(event: core.JSONObject, issue: core.JSONObject, host: str = "codex") -> core.JSONObject:
-    """Register or resume the actual session, then read and acknowledge its packet.
+    """Register, resume or rebind the actual session, then read and acknowledge its packet.
 
     The caller must have verified the direct foreground provider result with ``ticket``.
-    Existing coordinator, packet, roadmap, and approval remain unchanged.
+    Existing coordinator, packet, roadmap, and approval remain unchanged. A session
+    bound to another issue moves its binding through ``rebind`` (creating an absent
+    target with this session as coordinator); the old issue is fenced and preserved.
 
     Args:
         event: Observed native session and checkout identity.
@@ -273,9 +310,26 @@ def start(event: core.JSONObject, issue: core.JSONObject, host: str = "codex") -
     base["repo_id"] = registered["repo_id"]
     diagnosis = _call({**base, "operation": "diagnose"})
     key = core.participant_key(base)
-    # A new issue binds this initiating session as coordinator and installs sources.
+    # Read the session's binding before choosing how this issue is entered.
+    bound = _session_binding(base)
+    rebind: core.JSONObject | None = None
+    # A session bound to another issue moves only through the core rebind, carrying the
+    # verified ticket read as evidence; a failure leaves the old binding in place.
+    if bound is not None and bound["issue_id"] != identifier:
+        rebind = {
+            **base,
+            "operation": "rebind",
+            "issue_id": bound["issue_id"],
+            "binding_generation": bound["binding_generation"],
+            "new_issue_id": identifier,
+            "evidence": _ticket_evidence(issue),
+        }
+    # A new issue binds this initiating session as coordinator and installs sources;
+    # a session bound elsewhere creates it through rebind instead of create.
     if diagnosis["code"] == "ABSENT":
-        attached = _call({**base, "operation": "create", "coordinator": key})
+        attached = _call(
+            rebind if rebind is not None else {**base, "operation": "create", "coordinator": key}
+        )
         base["binding_generation"] = attached["binding_generation"]
         revision = _call({**base, "operation": "diagnose"})["revision"]
         _call(
@@ -305,13 +359,26 @@ def start(event: core.JSONObject, issue: core.JSONObject, host: str = "codex") -
             # Carry forward the participant’s current binding generation.
             if participant:
                 base["binding_generation"] = participant["generation"]
-        attached = _call(
-            {
-                **base,
-                "operation": "join" if needs_join else "resume",
-                **({"expected_revision": state["revision"]} if needs_join else {}),
-            }
-        )
+        # A session bound elsewhere attaches through rebind, which still requires an
+        # assignment, coordinator role or earlier participation; it never joins implicitly.
+        if rebind is not None:
+            attached = _call(
+                {
+                    **rebind,
+                    **(
+                        {"new_binding_generation": participant["generation"]} if participant else {}
+                    ),
+                }
+            )
+        else:
+            # Resume an existing participant or join as a new roadmap-only reader.
+            attached = _call(
+                {
+                    **base,
+                    "operation": "join" if needs_join else "resume",
+                    **({"expected_revision": state["revision"]} if needs_join else {}),
+                }
+            )
         base["binding_generation"] = attached["binding_generation"]
         # Reload committed state after join or resume under the issue lock.
         with core.Store(base) as store, store.issues.child(identifier) as control, control.lock():

@@ -70,7 +70,13 @@ local lifecycle integration, not proposal approval.
    only configured `get_issue` schemas, and `Read` or a plain `cat` of exactly
    `<checkout>/docs/runtime/contributor-workflow.md` or `<checkout>/AGENTS.md`.
    These calls get no lifecycle decision and write nothing, so the selected
-   ticket read remains the first issue-provider operation.
+   ticket read remains the first issue-provider operation. A session already bound
+   to another issue may submit a Task line too: the adapter records the new issue as
+   a pending assignment and the binding stays on the old issue until the verified
+   read moves it (step 5). If that read or the move fails, the old binding remains;
+   a Task line for the bound issue returns to it and drops the unfinished switch's
+   lookup correlation. The legacy preassigned attach route still refuses a switch
+   with `BINDING_CONFLICT`.
 4. Recover with `agent_company.adapters.common.bootstrap_command(request, host)`
    from the intended worktree's Poetry environment. On POSIX and Claude's Bash
    tool it emits the exact `shlex.join` lifecycle invocation. Native Windows
@@ -98,6 +104,10 @@ local lifecycle integration, not proposal approval.
    `packet_digest`, then `ready`. A scope that repeats unchanged digests is
    accepted and bumps the revision but does not restore readiness; the failed
    `read` lists the changed references in `stale`. The rule is shared by every native host.
+   An explicit `rebind` (`new_issue_id`, optional `new_binding_generation`,
+   `evidence`, and `issue_uuid` naming the target) is admitted when its
+   `new_issue_id` is the recorded Task issue, or when it leaves the recorded issue
+   for a target that already has committed state. A subagent never runs it.
 5. A successful matching issue-read completion invokes the shared startup orchestrator. It derives the
    main worktree from Git, registers or resumes, creates a new issue with the observed
    master as coordinator, installs an initial reader packet, reads its source bytes,
@@ -108,6 +118,14 @@ local lifecycle integration, not proposal approval.
    then runs the admitted `read` and `acknowledge` bootstrap commands; the next
    covered tool verifies readiness. Reader packets are unchanged. Out-of-band edits
    remain conflicts.
+   When the session's binding names another issue, the orchestrator moves it with
+   core `rebind` instead of `create`, `resume` or `join`, citing the verified ticket
+   identity as evidence. An absent issue is created with the session as coordinator.
+   An existing issue still needs an assignment for the session or its own earlier
+   participation, otherwise `SCOPE_MISSING`. Pending work on the old participant, or
+   participants still attached to an old issue it coordinates, refuse the move with
+   `PENDING_OPERATION`. The old issue keeps its payload and coordinator; only this
+   participant is detached.
    Governing files come from the selected checkout; task bytes come from the main
    worktree's canonical issue directory. A new session without an assignment
    joins as a roadmap-only reader; it cannot replace another coordinator or edit

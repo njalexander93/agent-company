@@ -1854,6 +1854,25 @@ def finish_cleanup(issue: Issue) -> None:
     issue.state = state
 
 
+def initial_payload(identifier: str) -> PayloadFiles:
+    """Build the packaged starting payload for a newly created issue workspace.
+
+    Args:
+        identifier: Validated issue ID substituted into the roadmap template.
+
+    Returns:
+        The template roadmap bytes and an empty event stream.
+
+    Raises:
+        OSError: If the packaged roadmap template cannot be read.
+    """
+    template = resources.files("agent_company").joinpath("resources/task_workspace/roadmap.md")
+    return {
+        "roadmap.md": template.read_text().replace("{{issue_id}}", identifier).encode(),
+        "events.jsonl": b"",
+    }
+
+
 def operate(store: Store, issue: Issue, request: JSONObject) -> JSONObject:
     """Dispatch one issue request under the caller-held binding and issue locks.
 
@@ -1952,13 +1971,7 @@ def operate(store: Store, issue: Issue, request: JSONObject) -> JSONObject:
             state["seq"], state["head"] = validate_history(files)
         else:
             # Initialize from the packaged roadmap and start an empty event stream.
-            template = resources.files("agent_company").joinpath(
-                "resources/task_workspace/roadmap.md"
-            )
-            files = {
-                "roadmap.md": template.read_text().replace("{{issue_id}}", issue.id).encode(),
-                "events.jsonl": b"",
-            }
+            files = initial_payload(issue.id)
         result = attach(state, request)
         # Publish this lifecycle result through the recoverable transaction.
         result = issue.commit(state, files, request, result, operation)
@@ -2652,6 +2665,13 @@ def operate(store: Store, issue: Issue, request: JSONObject) -> JSONObject:
 def rebind(store: Store, request: JSONObject) -> JSONObject:
     """Move one explicit session binding while fencing and preserving its old issue.
 
+    ``issue_id`` and ``binding_generation`` name the old binding; ``issue_uuid`` names
+    the target's provider identity. An existing target keeps its assignment rule: it
+    must already assign the caller or name it coordinator. An absent target is
+    created from the packaged template with the caller as its coordinator, which
+    requires ``issue_uuid``. Either way the old participant is detached and the old
+    payload and coordinator ownership stay unchanged.
+
     Args:
         store: Validated shared repository Store.
         request: Versioned lifecycle request with explicit repository, issue and session identities.
@@ -2660,31 +2680,34 @@ def rebind(store: Store, request: JSONObject) -> JSONObject:
         The target participant binding result.
 
     Raises:
-        WorkspaceError: If target assignment, generations, pending work or retry identity conflicts.
+        WorkspaceError: If target assignment or identity, generations, pending work,
+            caller kind or retry identity conflicts, or an unadopted target payload exists.
         OSError: If either issue or binding cannot be persisted.
     """
     # Validate distinct old and target issue identities before rebinding.
     old_id, new_id = issue_id(request["issue_id"]), issue_id(request["new_issue_id"])
     require(old_id != new_id, "BINDING_CONFLICT")
+    # A subagent holds only a coordinator-scoped assignment; it never moves a binding.
+    require("/agent/" not in token(request["session_id"]), "NOT_OWNER")
     key = participant_key(request)
     evidence(request.get("evidence"))
     # Manage both issue-lock lifetimes as one ordered rebinding operation.
     with ExitStack() as stack:
         controls = {}
-        # Lock both issues in stable order before retiring the old binding or attaching the new one.
+        # Lock both issues in stable order; only the target's control may be created here.
         for identifier in sorted([old_id, new_id]):
-            control = stack.enter_context(store.issues.child(identifier))
+            control = stack.enter_context(store.issues.child(identifier, identifier == new_id))
             stack.enter_context(control.lock())
             controls[identifier] = control
         old, new = Issue(store, controls[old_id], old_id), Issue(store, controls[new_id], new_id)
         old.recover()
         new.recover()
-        require(old.state and new.state, "RECOVERY_REQUIRED")
-        old_files, new_files = old.files(), new.files()
-        old_state, new_state_value = (
-            copy.deepcopy(old.committed_state()),
-            copy.deepcopy(new.committed_state()),
-        )
+        require(old.state, "RECOVERY_REQUIRED")
+        creating = not new.state
+        old_files = old.files()
+        old_state = copy.deepcopy(old.committed_state())
+        # Require the caller's current old participation with no unresolved work; a
+        # coordinator leaves only after every other participant has detached.
         member = old_state["participants"].get(key)
         require(member and member["generation"] == request["binding_generation"], "STALE_BINDING")
         assert member is not None  # Established by the generation guard above.
@@ -2704,7 +2727,23 @@ def rebind(store: Store, request: JSONObject) -> JSONObject:
             "old_issue_id": old_id,
             "binding_generation": request.get("new_binding_generation"),
         }
-        previous = new_state_value["requests"].get(sha(request["request_id"].encode()))
+        previous: RequestRecord | None = None
+        # Create an absent target only from its provider identity and an unused payload path.
+        if creating:
+            require(isinstance(request.get("issue_uuid"), str), "INVALID_REQUEST")
+            require(not store.task.exists(new_id), "ADOPTION_REQUIRED")
+            new_state_value = new_state(store, {**target_request, "coordinator": key})
+            new_files = initial_payload(new_id)
+        else:
+            # An existing target must match any supplied provider identity.
+            new_files = new.files()
+            new_state_value = copy.deepcopy(new.committed_state())
+            require(
+                not request.get("issue_uuid")
+                or request["issue_uuid"] == new_state_value["issue_uuid"],
+                "ISSUE_MISMATCH",
+            )
+            previous = new_state_value["requests"].get(sha(request["request_id"].encode()))
         # Replay only an identical request; a reused ID with different content is a conflict.
         if previous:
             require(previous["digest"] == sha(canonical(target_request)), "REQUEST_CONFLICT")

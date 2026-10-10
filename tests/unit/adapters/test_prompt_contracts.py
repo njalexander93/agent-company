@@ -210,7 +210,7 @@ def test_prompt_native_host_attempts_only_explicit_assignment_setup(
 def test_prompt_refuses_switch_from_existing_assignment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Preserve the old assignment until explicit rebind authority is used.
+    """An unbound session never replaces its recorded Task identity.
 
     Args:
         monkeypatch: Pytest fixture that isolates external state for this case.
@@ -222,6 +222,105 @@ def test_prompt_refuses_switch_from_existing_assignment(
     result = common.prompt(event, "codex", attempt_attach=False)
     assert result["decision"] == "block"
     assert data[BINDINGS] == {key + ".assignment.json": {"issue_id": "AGENT-30"}}
+
+
+def test_prompt_records_pending_switch_for_bound_session_without_touching_binding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A bound session's Task line for another issue waits for the verified read.
+
+    Args:
+        monkeypatch: Pytest fixture that isolates external state for this case.
+    """
+    data = setup_prompt(monkeypatch)
+    key = core.participant_key({"host": "claude-code", "session_id": "session"})
+    binding = {"issue_id": "AGENT-30", "binding_generation": 3}
+    data[BINDINGS] = {
+        key + ".json": binding,
+        key + ".assignment.json": {"issue_id": "AGENT-30"},
+        key + ".lookup.json": {"id": "AGENT-30", "tool_id": "old", "completed": True},
+    }
+    event = {"cwd": str(ROOT), "session_id": "session", "prompt": "Task: AGENT-31"}
+    result = common.prompt(event, "claude-code")
+    # The binding stays on the old issue; only the pending assignment and gate move.
+    assert data[BINDINGS] == {
+        key + ".json": binding,
+        key + ".assignment.json": {"issue_id": "AGENT-31"},
+        key + ".lookup-required.json": {"issue_id": "AGENT-31"},
+    }
+    context = result["hookSpecificOutput"]["additionalContext"]
+    assert "Read the requested Linear ticket first" in context
+    assert "rebinds this session from AGENT-30" in context
+
+
+def test_prompt_returns_to_bound_issue_after_unfinished_switch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed switch read never strands the session: its bound Task line is admitted.
+
+    Args:
+        monkeypatch: Pytest fixture that isolates external state for this case.
+    """
+    data = setup_prompt(monkeypatch)
+    key = core.participant_key({"host": "codex", "session_id": "session"})
+    binding = {"issue_id": "AGENT-30", "binding_generation": 3}
+    # Model a recorded switch to AGENT-31 whose startup completed with a failure.
+    data[BINDINGS] = {
+        key + ".json": binding,
+        key + ".assignment.json": {"issue_id": "AGENT-31"},
+        key + ".lookup-required.json": {"issue_id": "AGENT-31"},
+        key + ".lookup.json": {"id": "AGENT-31", "tool_id": "read-1", "completed": True},
+    }
+    event = {"cwd": str(ROOT), "session_id": "session", "prompt": "Task: AGENT-30"}
+    result = common.prompt(event, "codex", attempt_attach=False)
+    assert "decision" not in result
+    assert data[BINDINGS] == {
+        key + ".json": binding,
+        key + ".assignment.json": {"issue_id": "AGENT-30"},
+        key + ".lookup-required.json": {"issue_id": "AGENT-30"},
+    }
+    assert "rebinds" not in result["hookSpecificOutput"]["additionalContext"]
+
+
+def test_prompt_keeps_matching_lookup_correlation_for_repeated_switch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Repeating the pending Task line keeps that issue's own retry correlation.
+
+    Args:
+        monkeypatch: Pytest fixture that isolates external state for this case.
+    """
+    data = setup_prompt(monkeypatch)
+    key = core.participant_key({"host": "codex", "session_id": "session"})
+    retry = {"id": "AGENT-31", "tool_id": "read-1", "completed": True}
+    data[BINDINGS] = {
+        key + ".json": {"issue_id": "AGENT-30", "binding_generation": 3},
+        key + ".assignment.json": {"issue_id": "AGENT-31"},
+        key + ".lookup-required.json": {"issue_id": "AGENT-31"},
+        key + ".lookup.json": retry,
+    }
+    event = {"cwd": str(ROOT), "session_id": "session", "prompt": "Task: AGENT-31"}
+    common.prompt(event, "codex", attempt_attach=False)
+    assert data[BINDINGS][key + ".lookup.json"] == retry
+
+
+def test_prompt_legacy_attach_refuses_switch_for_bound_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The preassigned attach route has no verified read, so it never switches issues.
+
+    Args:
+        monkeypatch: Pytest fixture that isolates external state for this case.
+    """
+    data = setup_prompt(monkeypatch)
+    monkeypatch.setattr(common, "automatic_attach", lambda *_args: pytest.fail("attach"))
+    key = core.participant_key({"host": "claude-code", "session_id": "session"})
+    before = {key + ".json": {"issue_id": "AGENT-30", "binding_generation": 3}}
+    data[BINDINGS] = dict(before)
+    event = {"cwd": str(ROOT), "session_id": "session", "prompt": "Task: AGENT-31"}
+    result = common.prompt(event, "claude-code", attempt_attach=True)
+    assert result["decision"] == "block"
+    assert data[BINDINGS] == before
 
 
 def test_automatic_attach_does_not_create_unregistered_workspace(
