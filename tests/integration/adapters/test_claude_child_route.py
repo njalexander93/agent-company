@@ -572,3 +572,224 @@ def test_cursor_subagent_start_is_unchanged(case: Fixture) -> None:
     )
     assert response["permission"] == "deny"
     assert "HOST_UNSUPPORTED_CHILD_IDENTITY" in response["user_message"]
+
+
+def parent_read(case: Fixture, tool_id: str) -> JsonObject:
+    """Build a parent Read PreToolUse envelope whose tool-start advances the revision.
+
+    Args:
+        case: Disposable repository fixture.
+        tool_id: Native tool-use ID of the parent's call.
+
+    Returns:
+        A parent Read tool event for the issue roadmap.
+    """
+    return event(
+        case,
+        "PreToolUse",
+        tool_name="Read",
+        tool_use_id=tool_id,
+        tool_input={"file_path": str(case.root / ".task/TEST-1/roadmap.md")},
+    )
+
+
+def drift_before(
+    case: Fixture, monkeypatch: pytest.MonkeyPatch, operation: str
+) -> list[JsonObject]:
+    """Advance the issue revision once, just before the child's first call of an operation.
+
+    This reproduces a concurrent hook process (the parent's own tool-start) committing
+    between the adapter's state read and its revision-bearing child request.
+
+    Args:
+        case: Disposable repository fixture.
+        monkeypatch: Replaces the shared core dispatcher for the test.
+        operation: Core operation whose first call is preceded by the drift.
+
+    Returns:
+        The live list of the child's core results for that operation, in call order.
+    """
+    original = core.execute
+    results: list[JsonObject] = []
+
+    def execute(request: JsonObject) -> JsonObject:
+        """Dispatch to the real core, committing a parent tool-start before the first child match.
+
+        Args:
+            request: Lifecycle request from the adapter.
+
+        Returns:
+            The real core result.
+        """
+        # Only the child's selected operation is observed; everything else passes through.
+        if request.get("operation") != operation or request.get("session_id") != CHILD:
+            return original(request)
+        # The first matching call sees a revision another hook has just advanced.
+        if not results:
+            assert not denied(claude.handle(parent_read(case, "parent-drift")))
+        result = original(request)
+        results.append(result)
+        return result
+
+    monkeypatch.setattr(core, "execute", execute)
+    return results
+
+
+def test_child_join_retries_after_revision_drift(
+    case: Fixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Join the child on a fresh revision after a concurrent commit conflicts the first join.
+
+    Args:
+        case: Disposable repository fixture.
+        monkeypatch: Injects the revision drift before the first join.
+    """
+    # The first join fails on the drifted revision; the retry re-reads and succeeds.
+    joins = drift_before(case, monkeypatch, "join")
+    response = start_child(case)
+    assert [result["code"] for result in joins] == ["REVISION_CONFLICT", "OK"]
+    # The child still ends ready on its own packet and the drift call stays the parent's.
+    context = response["hookSpecificOutput"]["additionalContext"]
+    assert context.startswith("TASK_WORKSPACE_CHILD_READY: participant " + key(CHILD))
+    state = case.state()
+    assert state["participants"][key(CHILD)]["status"] == "ready"
+    assert "parent-drift" in state["participants"][case.base["coordinator"]]["pending"]
+
+
+def test_child_acknowledge_tolerates_revision_drift(
+    case: Fixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Acknowledge the child's packet despite a commit between its read and acknowledge.
+
+    The core checks only the packet digest on acknowledge, so real drift succeeds at
+    once; a refused first acknowledgment is retried once after a fresh read.
+
+    Args:
+        case: Disposable repository fixture.
+        monkeypatch: Injects the drift and one refused acknowledgment.
+    """
+    # A parent commit before the child's acknowledge leaves the digest valid.
+    acknowledgments = drift_before(case, monkeypatch, "acknowledge")
+    original = core.execute
+    refused: list[str] = []
+
+    def execute(request: JsonObject) -> JsonObject:
+        """Refuse the child's first acknowledgment with a conflict, then delegate.
+
+        Args:
+            request: Lifecycle request from the adapter.
+
+        Returns:
+            One conflict refusal, otherwise the drift-injecting dispatcher's result.
+        """
+        # Only the child's first acknowledgment is refused; later calls pass through.
+        if request.get("operation") == "acknowledge" and request["session_id"] == CHILD:
+            if not refused:
+                refused.append(request["request_id"])
+                return {"ok": False, "code": "REVISION_CONFLICT"}
+        return original(request)
+
+    monkeypatch.setattr(core, "execute", execute)
+    # The adapter reads again, acknowledges the fresh packet and ends ready.
+    response = start_child(case)
+    assert len(refused) == 1
+    assert [result["code"] for result in acknowledgments] == ["OK"]
+    assert "TASK_WORKSPACE_CHILD_READY" in response["hookSpecificOutput"]["additionalContext"]
+    state = case.state()
+    assert state["participants"][key(CHILD)]["status"] == "ready"
+    assert "parent-drift" in state["participants"][case.base["coordinator"]]["pending"]
+
+
+@pytest.mark.parametrize(
+    ("code", "budget", "attempts"),
+    [
+        ("REVISION_CONFLICT", 60.0, common.CHILD_JOIN_ATTEMPTS),
+        ("BUSY", 60.0, common.CHILD_JOIN_ATTEMPTS),
+        ("REVISION_CONFLICT", 0.0, 1),
+        ("ISSUE_MISMATCH", 60.0, 1),
+    ],
+)
+def test_child_join_failure_after_bounded_retries_leaves_child_unbound(
+    case: Fixture,
+    monkeypatch: pytest.MonkeyPatch,
+    code: str,
+    budget: float,
+    attempts: int,
+) -> None:
+    """Report the join code advisorily when retries, budget or a non-retryable code end it.
+
+    Args:
+        case: Disposable repository fixture.
+        monkeypatch: Forces every join to fail and removes backoff delays.
+        code: Diagnostic every join attempt returns.
+        budget: Retry budget in seconds for this case.
+        attempts: Expected number of join attempts.
+    """
+    # Every join fails with the given code; other core calls run for real.
+    original = core.execute
+    joins: list[str] = []
+
+    def execute(request: JsonObject) -> JsonObject:
+        """Refuse every join and pass every other request to the real core.
+
+        Args:
+            request: Lifecycle request from the adapter.
+
+        Returns:
+            A refusal for joins, otherwise the real core result.
+        """
+        # Record each join attempt and refuse it; other operations reach the real core.
+        if request.get("operation") == "join":
+            joins.append(str(request["expected_revision"]))
+            return {"ok": False, "code": code}
+        return original(request)
+
+    monkeypatch.setattr(core, "execute", execute)
+    monkeypatch.setattr(common, "CHILD_JOIN_BUDGET_SECONDS", budget)
+    monkeypatch.setattr(common.time, "sleep", lambda seconds: None)
+    # SubagentStart cannot block: it advises with the code after the bounded attempts.
+    response = start_child(case)
+    assert len(joins) == attempts
+    assert set(response) == {"systemMessage"}
+    assert code in response["systemMessage"]
+    # The child holds no participant or binding, so its first tool is denied.
+    assert key(CHILD) not in case.state()["participants"]
+    tool = claude.handle(read_call(case, "PreToolUse", "child-read"))
+    assert denied(tool)
+    assert "BINDING_MISSING" in tool["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_sequential_children_each_end_ready_under_their_own_keys(case: Fixture) -> None:
+    """Join two children of one ready parent and settle each child's call under its own key.
+
+    Args:
+        case: Disposable repository fixture.
+    """
+    # The ready parent issues two foreground Agent calls, each pending under its own ID.
+    case.ready()
+    for call in ("agent-call", "agent-call-2"):
+        dispatch = event(
+            case,
+            "PreToolUse",
+            tool_name="Agent",
+            tool_use_id=call,
+            tool_input={"description": "step", "prompt": "fixture"},
+        )
+        assert not denied(claude.handle(dispatch))
+    # Each SubagentStart joins its own child and makes it ready.
+    second = PARENT + "/agent/agent-2"
+    for agent in (AGENT, "agent-2"):
+        response = claude.handle(event(case, "SubagentStart", child=True, agent_id=agent))
+        assert "TASK_WORKSPACE_CHILD_READY" in response["hookSpecificOutput"]["additionalContext"]
+    state = case.state()
+    assert state["participants"][key(CHILD)]["status"] == "ready"
+    assert state["participants"][key(second)]["status"] == "ready"
+    # Each child's Read is pending and settled only under that child's participant.
+    for agent, session, tool_id in ((AGENT, CHILD, "read-1"), ("agent-2", second, "read-2")):
+        assert not denied(claude.handle(read_call(case, "PreToolUse", tool_id, agent_id=agent)))
+        members = case.state()["participants"]
+        assert list(members[key(session)]["pending"]) == [tool_id]
+        assert tool_id not in members[case.base["coordinator"]]["pending"]
+        done = read_call(case, "PostToolUse", tool_id, agent_id=agent, tool_response={"ok": 1})
+        claude.handle(done)
+        assert case.state()["participants"][key(session)]["pending"] == {}

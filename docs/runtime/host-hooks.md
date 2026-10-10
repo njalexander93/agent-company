@@ -321,6 +321,31 @@ owned `context/` paths. `SubagentStop` records an observation and never detaches
 field links a `SubagentStart` to a specific `Agent` call, so the check is "some admitted
 parent `Agent` call is pending", not an exact pairing.
 
+A second local Desktop session (AGENT-34 round 2, 2026-10-10, macOS, hooks enabled)
+showed the route failing under concurrency: a ready parent issued three `Agent` calls
+within six seconds; all three were admitted as pending work, but only one child was
+joined. The other two never received a binding, so every one of their tool calls,
+including `SubagentHandback`, was denied with `BINDING_MISSING` and their reports were
+lost. A single `Agent` call afterwards worked. The likely cause is concurrent hook
+processes (sibling `SubagentStart` joins and the parent's own tool events) advancing the
+issue revision between the adapter's state read and the child's `join`, or lock waits
+exhausting the 2-second runner deadline. `SubagentStart` fires once and cannot block,
+so a child that misses its join cannot recover: the parent must dispatch a fresh
+subagent. The adapter therefore re-reads the committed revision immediately before each
+`join` attempt and retries `REVISION_CONFLICT` and `BUSY` up to 8 times within a
+1-second budget that leaves room inside the runner deadline. If the join still fails,
+the advisory `systemMessage` names the last code and the child stays unbound. The core
+checks only the packet digest on `acknowledge`, so revision drift between the child's
+`read` and `acknowledge` does not refuse it; a refused `REVISION_CONFLICT` is retried
+once after a fresh `read`. The retry is covered by synthetic tests only; it has not yet
+been observed with concurrent live `Agent` calls.
+
+The same session also showed that this Desktop build's `Agent` tool has no
+`run_in_background` parameter: a supplied `run_in_background: "true"` string reached
+the hook as an ordinary foreground call and was admitted. The denial of a boolean
+`true` stays in the adapter but is unexercised on this host. An `Agent` call with
+`isolation: "worktree"` was denied as designed.
+
 Claude discards `systemMessage` and `continue` from both compaction events.
 [PreCompact](https://code.claude.com/docs/en/hooks#precompact) supports blocking, but this
 adapter adds no compaction blocking policy.

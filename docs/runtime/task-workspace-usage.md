@@ -130,8 +130,10 @@ round trip. See the [host guide](host-hooks.md) for current adapter contracts an
 child/spawn restrictions; unverified child identities do not inherit readiness. A
 Claude `Agent`-tool subagent of a ready parent receives its own reader binding at
 `SubagentStart` and reports its participant key and packet digest in the hook
-context; this route is restricted, observed in one local Desktop session and
-unverified on other hosts (see the host guide).
+context; this route is restricted, observed in local Desktop sessions and
+unverified on other hosts (see the host guide). A child that receives no binding at
+`SubagentStart` cannot recover, because that event fires once; the parent dispatches a
+fresh subagent instead.
 
 The pre-readiness command allowlist is operation-specific. It includes the
 original `diagnose/register/bind/adopt/resume/restore` routes plus scoped `read` and

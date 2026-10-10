@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shlex
+import time
 import uuid
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -1332,6 +1333,12 @@ def native_post(event: core.JSONObject, host: str, failed: bool) -> None:
 
 
 AGENT_CALL_LIMIT = 16
+# Concurrent hook processes (sibling SubagentStart joins, the parent's own tool events)
+# advance the issue revision between a state read and the child's join. The join is
+# retried on a fresh revision within a budget that leaves the runner deadline room.
+CHILD_JOIN_ATTEMPTS = 8
+CHILD_JOIN_BUDGET_SECONDS = 1.0
+CHILD_RETRY_CODES = frozenset({"REVISION_CONFLICT", "BUSY"})
 
 
 def _agent_calls_name(event: core.JSONObject, host: str) -> str:
@@ -1380,8 +1387,119 @@ def record_agent_call(event: core.JSONObject, host: str) -> None:
         bindings.put(name, {"tool_ids": calls[-AGENT_CALL_LIMIT:]})
 
 
+def _issue_state(parent: core.JSONObject) -> core.WorkspaceState:
+    """Read the parent issue's committed state after recovering any staged transaction.
+
+    Args:
+        parent: Verified parent lifecycle request carrying repository and issue identity.
+
+    Returns:
+        The committed issue control state at its current revision.
+
+    Raises:
+        core.WorkspaceError: If the store or issue cannot be opened.
+        OSError: If issue state cannot be accessed.
+    """
+    # Hold the issue lock only for recovery and the committed read.
+    identifier = parent["issue_id"]
+    with core.Store(parent) as store, store.issues.child(identifier) as control, control.lock():
+        issue = core.Issue(store, control, identifier)
+        issue.recover()
+        return issue.committed_state()
+
+
+def _join_child(
+    event: core.JSONObject, host: str, parent: core.JSONObject, deadline: float
+) -> None:
+    """Join the child as a reader, re-reading the issue revision before every attempt.
+
+    Args:
+        event: Identity-validated SubagentStart envelope for the child.
+        host: Explicit adapter identity.
+        parent: Verified ready parent lifecycle request.
+        deadline: Monotonic time after which no further join attempt starts.
+
+    Raises:
+        core.WorkspaceError: With the last join code when attempts or the budget run out,
+            or immediately for a code that a fresh revision cannot resolve.
+    """
+    # The child's own participant key tells whether an earlier attempt already joined it.
+    child_key = core.participant_key({"host": host, "session_id": event["session_id"]})
+    for attempt in range(CHILD_JOIN_ATTEMPTS):
+        # Read the revision immediately before the join; an existing member needs none.
+        state = _issue_state(parent)
+        if child_key in state["participants"]:
+            return
+        joined = core.execute(
+            {
+                "schema_version": 1,
+                "operation": "join",
+                "request_id": str(uuid.uuid4()),
+                "worktree": event["cwd"],
+                "host": host,
+                "session_id": event["session_id"],
+                "repo_id": parent["repo_id"],
+                "issue_id": parent["issue_id"],
+                "issue_uuid": state["issue_uuid"],
+                "expected_revision": state["revision"],
+            }
+        )
+        if joined["ok"]:
+            return
+        # Retry only revision drift or contention, while attempts and budget remain.
+        final = attempt == CHILD_JOIN_ATTEMPTS - 1 or time.monotonic() >= deadline
+        if joined["code"] not in CHILD_RETRY_CODES or final:
+            raise core.WorkspaceError(joined["code"])
+        # Back off briefly so the competing hook process can commit and release locks.
+        time.sleep(min(0.02 * (attempt + 1), max(0.0, deadline - time.monotonic())))
+
+
+def _ready_child(event: core.JSONObject, host: str) -> str:
+    """Read, acknowledge and verify the child's own packet, tolerating one revision drift.
+
+    Args:
+        event: Identity-validated SubagentStart envelope for the joined child.
+        host: Explicit adapter identity.
+
+    Returns:
+        The digest of the packet the child acknowledged.
+
+    Raises:
+        core.WorkspaceError: If read, acknowledge or ready fails for the child.
+        OSError: If binding or issue state cannot be accessed.
+    """
+    # Resolve the child's own binding, created by its join, for every lifecycle call.
+    child = request_for(event, "read", host)
+    for attempt in range(2):
+        # Acknowledge exactly the revision and digest the preceding read returned.
+        read = core.execute({**child, "request_id": str(uuid.uuid4())})
+        core.require(read["ok"], read["code"])
+        acknowledged = core.execute(
+            {
+                **child,
+                "operation": "acknowledge",
+                "request_id": str(uuid.uuid4()),
+                "expected_revision": read["revision"],
+                "packet_digest": read["packet_digest"],
+            }
+        )
+        if acknowledged["ok"]:
+            break
+        # Another hook advanced the revision after the read: read again once.
+        if acknowledged["code"] != "REVISION_CONFLICT" or attempt == 1:
+            raise core.WorkspaceError(acknowledged["code"])
+    # Readiness takes no revision, so it is verified once after the acknowledgment.
+    ready = core.execute({**child, "operation": "ready", "request_id": str(uuid.uuid4())})
+    core.require(ready["ok"], ready["code"])
+    return str(read["packet_digest"])
+
+
 def child_start(event: core.JSONObject, host: str) -> str:
     """Join a Claude subagent as its own reader when its ready parent awaits an Agent call.
+
+    SubagentStart fires once and cannot block, so a child that misses its join has no
+    later recovery. The join and the acknowledgment therefore tolerate the revision
+    drift caused by concurrent hook processes, within a bounded budget.
 
     Args:
         event: Identity-validated SubagentStart envelope marked as a child.
@@ -1392,9 +1510,12 @@ def child_start(event: core.JSONObject, host: str) -> str:
 
     Raises:
         core.WorkspaceError: If the event is not a child, the parent binding is not
-            ready, no admitted parent Agent call is pending, or a lifecycle step fails.
+            ready, no admitted parent Agent call is pending, or a lifecycle step fails
+            (including a join still in conflict after its bounded retries).
         OSError: If binding or issue state cannot be accessed.
     """
+    # Start the retry budget at entry so the whole hook stays inside the runner deadline.
+    deadline = time.monotonic() + CHILD_JOIN_BUDGET_SECONDS
     # Only a normalized Claude child carries the parent session it runs under.
     core.require(event.get("child") is True, "HOST_UNSUPPORTED_CHILD_IDENTITY")
     parent_event = {**event, "session_id": event["parent_session_id"]}
@@ -1403,12 +1524,8 @@ def child_start(event: core.JSONObject, host: str) -> str:
     result = core.execute(parent)
     core.require(result["ok"], result["code"])
     identifier = parent["issue_id"]
-    # Read committed issue state for the parent's pending work and the join fields.
-    with core.Store(parent) as store, store.issues.child(identifier) as control, control.lock():
-        issue = core.Issue(store, control, identifier)
-        issue.recover()
-        state = issue.committed_state()
     # Derive the parent's pending call IDs and the child's own participant key.
+    state = _issue_state(parent)
     pending = set(state["participants"][core.participant_key(parent)]["pending"])
     child_key = core.participant_key({"host": host, "session_id": event["session_id"]})
     root, _, _ = core.repository(event["cwd"])
@@ -1427,42 +1544,12 @@ def child_start(event: core.JSONObject, host: str) -> str:
         if bindings.exists(assignment):
             core.require(bindings.json(assignment)["issue_id"] == identifier, "BINDING_CONFLICT")
         bindings.put(assignment, {"issue_id": identifier})
-    # A new child joins with the core-chosen roadmap-only packet for the parent's issue.
-    if child_key not in state["participants"]:
-        joined = core.execute(
-            {
-                "schema_version": 1,
-                "operation": "join",
-                "request_id": str(uuid.uuid4()),
-                "worktree": event["cwd"],
-                "host": host,
-                "session_id": event["session_id"],
-                "repo_id": parent["repo_id"],
-                "issue_id": identifier,
-                "issue_uuid": state["issue_uuid"],
-                "expected_revision": state["revision"],
-            }
-        )
-        core.require(joined["ok"], joined["code"])
-    # Read, acknowledge and verify the child's own packet under its own binding.
-    child = request_for(event, "read", host)
-    read = core.execute(child)
-    core.require(read["ok"], read["code"])
-    acknowledged = core.execute(
-        {
-            **child,
-            "operation": "acknowledge",
-            "request_id": str(uuid.uuid4()),
-            "expected_revision": read["revision"],
-            "packet_digest": read["packet_digest"],
-        }
-    )
-    core.require(acknowledged["ok"], acknowledged["code"])
-    ready = core.execute({**child, "operation": "ready", "request_id": str(uuid.uuid4())})
-    core.require(ready["ok"], ready["code"])
+    # Join with the core-chosen roadmap-only packet, then make the child ready on it.
+    _join_child(event, host, parent, deadline)
+    digest = _ready_child(event, host)
     # Report identifiers and digests only; task text stays in the packet sources.
     return (
-        f"TASK_WORKSPACE_CHILD_READY: participant {child_key}; packet {read['packet_digest']}. "
+        f"TASK_WORKSPACE_CHILD_READY: participant {child_key}; packet {digest}. "
         "This subagent holds its own reader binding for the parent's issue. Read the packet "
         "through the lifecycle read operation, write only paths the coordinator scopes to "
         "this participant, and do not start nested Agent calls."
