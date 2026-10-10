@@ -183,8 +183,8 @@ def automatic_attach(event: core.JSONObject, identifier: str, host: str) -> None
             raise core.WorkspaceError(result["code"])
 
 
-def prompt(event: core.JSONObject, host: str, attempt_attach: bool = False) -> core.JSONObject:
-    """Record one explicit Task line and attempt only its assigned workspace setup.
+def prompt(event: core.JSONObject, host: str) -> core.JSONObject:
+    """Record one explicit Task line and leave setup to the verified ticket read.
 
     On a ticket-first host, a bound session's Task line for another issue records that
     issue as a pending assignment; the binding moves only when the verified ticket read
@@ -193,13 +193,12 @@ def prompt(event: core.JSONObject, host: str, attempt_attach: bool = False) -> c
     Args:
         event: Observed host hook input, including the actual session and tool identities.
         host: Explicit adapter identity; never taken from untrusted tool arguments.
-        attempt_attach: Whether to use the legacy preassigned setup after recording Task.
 
     Returns:
         An empty response, prompt denial or bounded setup context.
 
     Raises:
-        core.WorkspaceError: If workspace registration or setup fails.
+        core.WorkspaceError: If the checkout or binding directory is invalid.
         OSError: If assignment persistence fails.
     """
     # Extract only explicit Task lines from the submitted prompt.
@@ -233,11 +232,8 @@ def prompt(event: core.JSONObject, host: str, attempt_attach: bool = False) -> c
             if bindings.exists(key + ".assignment.json")
             else None
         )
-        # An unbound session never replaces its recorded Task identity, and the legacy
-        # preassigned route has no verified-read rebind for a bound session.
-        if (binding is None and recorded is not None and recorded["issue_id"] != identifier) or (
-            attempt_attach and binding is not None and binding["issue_id"] != identifier
-        ):
+        # An unbound session never replaces its recorded Task identity.
+        if binding is None and recorded is not None and recorded["issue_id"] != identifier:
             return {
                 "decision": "block",
                 "reason": "BINDING_CONFLICT: Explicit rebind is required.",
@@ -259,12 +255,8 @@ def prompt(event: core.JSONObject, host: str, attempt_attach: bool = False) -> c
             if binding is not None and binding["issue_id"] != identifier
             else None
         )
-        # Ticket-first hosts retain a marker until the provider read completes.
-        if not attempt_attach:
-            bindings.put(key + ".lookup-required.json", {"issue_id": identifier})
-    # Attempt setup using only the recorded startup assignment or existing packet.
-    if attempt_attach:
-        automatic_attach(event, identifier, host)
+        # Every host retains a marker until the provider read completes.
+        bindings.put(key + ".lookup-required.json", {"issue_id": identifier})
     return {
         "hookSpecificOutput": {
             "hookEventName": "UserPromptSubmit",
@@ -277,10 +269,6 @@ def prompt(event: core.JSONObject, host: str, attempt_attach: bool = False) -> c
                     if moving is not None
                     else ""
                 )
-                if not attempt_attach
-                else "Task identity recorded. Explicitly assigned workspace setup was "
-                "attempted. Read and acknowledge the permitted packet before task "
-                "tools; use the lifecycle diagnostic route if setup is missing."
             ),
         }
     }
@@ -892,13 +880,8 @@ def coordinator_self_refresh(request: core.JSONObject, event: core.JSONObject) -
         OSError: If the store or committed state file cannot be read.
         KeyError: If the committed state lacks the coordinator or participant map.
     """
-    # Restrict the request to the self-refresh fields; owned paths are never refreshed.
-    if not set(request) <= COMMON_FIELDS | {"target_participant", "packet"} or not {
-        "repo_id",
-        "issue_id",
-        "target_participant",
-        "packet",
-    } <= set(request):
+    # The bootstrap field table already limits the fields; the refresh needs these four.
+    if not {"repo_id", "issue_id", "target_participant", "packet"} <= set(request):
         return False
     key = core.participant_key({"host": request["host"], "session_id": event["session_id"]})
     # The target must be the caller's own participant key.
@@ -1233,11 +1216,7 @@ def native_tool(event: core.JSONObject, host: str) -> str:
             "HOST_UNSUPPORTED_CHILD_IDENTITY",
         )
         # A background child outlives this call's synchronous correlation.
-        core.require(
-            args.get("run_in_background", False) is False
-            and not any(key in args for key in ("background", "is_background", "async")),
-            "HOST_UNSUPPORTED_BACKGROUND",
-        )
+        core.require(args.get("run_in_background", False) is False, "HOST_UNSUPPORTED_BACKGROUND")
         # An isolated child runs in another worktree that this binding does not cover.
         core.require(args.get("isolation") is None, "HOST_UNSUPPORTED_CHILD_IDENTITY")
         return tool

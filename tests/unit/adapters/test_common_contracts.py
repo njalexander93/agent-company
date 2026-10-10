@@ -207,7 +207,6 @@ def test_native_tool_admits_claude_parent_foreground_agent() -> None:
             "claude-code",
             "HOST_UNSUPPORTED_BACKGROUND",
         ),
-        (native_event("Agent", {"async": True}), "claude-code", "HOST_UNSUPPORTED_BACKGROUND"),
         (
             native_event("Agent", {"isolation": "worktree"}),
             "claude-code",

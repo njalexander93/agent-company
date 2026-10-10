@@ -75,8 +75,7 @@ local lifecycle integration, not proposal approval.
    a pending assignment and the binding stays on the old issue until the verified
    read moves it (step 5). If that read or the move fails, the old binding remains;
    a Task line for the bound issue returns to it and drops the unfinished switch's
-   lookup correlation. The legacy preassigned attach route still refuses a switch
-   with `BINDING_CONFLICT`.
+   lookup correlation.
 4. Recover with `agent_company.adapters.common.bootstrap_command(request, host)`
    from the intended worktree's Poetry environment. On POSIX and Claude's Bash
    tool it emits the exact `shlex.join` lifecycle invocation. Native Windows
@@ -435,14 +434,10 @@ Claude's host-level fail-open cases remain a boundary:
 the wrapper converts process failures to exit 2 and the Python deadline precedes the configured
 host timeout, but an externally killed or timed-out hook is not guaranteed enforcement.
 
-**Unverified fail-open hypothesis.** In the AGENT-32 Desktop session, `save_issue`,
-`list_users` and `list_comments` appeared to complete even though the adapter then denied
-every MCP tool after readiness. The code offers no admitting path for them. The only
-candidate found is host-side: the project hooks use `timeout: 10`, while the runner's
-own deadline is 2 seconds measured inside Python. If launcher start-up, Git and
-interpreter start-up plus lock waits exceed the host timeout, Claude Code discards the
-hook output and lets the `PreToolUse` call proceed unless the hook sets
-`"onFailure": "block"`. This is not established; retain the Desktop hook log or the
-transcript's tool-use IDs before relying on it. The recommended repair is explicit
-`onFailure` handling in the hook definitions, verified on an installed host. This change
-leaves both timeouts unchanged.
+**AGENT-32 observation.** In the AGENT-32 Desktop session, `save_issue`, `list_users`
+and `list_comments` completed although the adapter of that revision denied every MCP tool
+after readiness. The current revision admits exactly those operations on the configured
+connector (see the allowlist above), so the observation no longer points at a defect. A
+host-side timeout fail-open was considered as the cause but never established; the
+project hooks keep `timeout: 10` and the runner its 2-second deadline, and an explicit
+`onFailure` setting in the hook definitions remains unverified on an installed host.

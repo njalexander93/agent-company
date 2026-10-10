@@ -34,7 +34,15 @@ class LifecycleTests(Fixture):
             "session_id": "coordinator",
             "prompt": "Task: TEST-1",
         }
-        common.prompt(event, "codex", attempt_attach=True)
+        common.prompt(event, "codex")
+        # Stand in for the completed ticket read so the bootstrap route is reachable.
+        key = common.core.participant_key({"host": "codex", "session_id": "coordinator"})
+        with (
+            common.core.Directory.absolute(self.root) as worktree,
+            worktree.child(".task") as local,
+            local.child(".bindings") as bindings,
+        ):
+            bindings.unlink(key + ".lookup-required.json")
         request = self.req(
             "diagnose", repo_id=None, issue_id=None, issue_uuid=None, coordinator=None
         )
