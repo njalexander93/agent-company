@@ -1,6 +1,6 @@
 # Organizational baseline
 
-These are the framework's shared organizational rules for authority, sources, assurance, ownership, handoffs, planning, capacity and evidence. Every Role and Profile definition applies them. The documents describe governance; reading, publishing or loading them grants no execution authority.
+These are the framework's shared organizational rules for authority, sources, context, assurance, ownership, handoffs, planning, capacity and evidence. Every Role and Profile definition applies them. The documents describe governance; reading, publishing or loading them grants no execution authority.
 
 ## Purpose and revision
 
