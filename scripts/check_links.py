@@ -161,7 +161,8 @@ def markdown_files(paths: list[str]) -> tuple[list[Path], list[str]]:
         paths: Files or directories to scan.
 
     Returns:
-        Sorted Markdown files and a fault for each argument that does not exist.
+        Markdown files sorted by POSIX path text, which orders identically on every
+        platform, and a fault for each argument that does not exist.
     """
     files: set[Path] = set()
     faults: list[str] = []
@@ -177,7 +178,8 @@ def markdown_files(paths: list[str]) -> tuple[list[Path], list[str]]:
         else:
             # Report a missing argument instead of silently scanning less.
             faults.append(f"{path.as_posix()}:0: path not found")
-    return sorted(files), faults
+    # Sort by path text rather than Path objects, whose order is case-insensitive on Windows.
+    return sorted(files, key=Path.as_posix), faults
 
 
 def main(argv: list[str] | None = None) -> int:
