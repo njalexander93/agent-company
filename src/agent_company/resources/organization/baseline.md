@@ -31,7 +31,7 @@ For each required governing input:
 3. Pin the approved immutable revision or retain exact bytes with a verified content digest and retrieval route. A mutable branch/tag is insufficient. A digest without accessible retained content is insufficient.
 4. If content changes, retain the required version or reconcile the new version before relying on it. Missing, stale, inaccessible, ambiguous or conflicting inputs stop the dependent conclusion; identify the recovery owner or human decision needed.
 
-Use the [definition source-reference contract](../templates/definition-format.md#source-reference-contract) for authoring fields. Public framework rules resolve to framework repository sections at a pinned revision. Company-specific rules may use a Company-owned accessible register with the same fields. Register membership does not authorize reading every entry.
+Use the [definition source-reference contract](../templates/definition-format.md#source-reference-contract) for authoring fields. Public framework rules resolve to framework repository sections at a pinned revision, or to the released package version that carries them. Company-specific rules may use a Company-owned accessible register with the same fields. Register membership does not authorize reading every entry.
 
 ## Context and independent assurance
 

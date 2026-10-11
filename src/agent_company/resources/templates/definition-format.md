@@ -58,7 +58,7 @@ A source can be readable and correctly hashed yet lack governing authority. An a
 
 ## Source-reference contract
 
-Reference the public [baseline rules](../organization/baseline.md) and their exact framework repository revision. For Company-specific requirements, use an accessible Company-owned source register. Both use the fields below and the [source authority and retrieval rules](../organization/baseline.md#source-authority-and-retrieval).
+Reference the public [baseline rules](../organization/baseline.md) and their exact framework repository revision or the released package version that carries them. For Company-specific requirements, use an accessible Company-owned source register. Both use the fields below and the [source authority and retrieval rules](../organization/baseline.md#source-authority-and-retrieval).
 
 | Reference part | Required content |
 | --- | --- |

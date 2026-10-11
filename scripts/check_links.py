@@ -6,8 +6,10 @@ scheme. It resolves each remaining target against the containing file, requires
 every path component to match the on-disk name exactly so case-insensitive
 filesystems cannot hide a link that breaks elsewhere, and checks ``#fragment``
 anchors against headings slugged by GitHub's rules. It uses the standard library
-only and never contacts the network. Root-relative targets (``/path``) are not supported and
-report as missing files.
+only and never contacts the network. Root-relative targets (``/path``) are resolved
+against the filesystem root and normally report as missing files. Two masking limits
+follow GitHub rendering: an unterminated ``<!--`` and a literal fence marker inside an
+indented code block each mask the rest of the document.
 """
 
 from __future__ import annotations
@@ -18,8 +20,9 @@ from pathlib import Path
 from urllib.parse import unquote
 
 DEFAULT_PATHS = ("docs", "README.md", "src")
-# Any indentation is accepted so fences nested in list items are masked; an indented
-# code block cannot hold a live link either, so masking it as well is harmless.
+# Any indentation is accepted so fences nested in list items are masked. Limitation: a
+# literal fence marker inside an indented code block outside a list opens a fence that
+# masks the rest of the document, so links after it are not checked.
 FENCE = re.compile(r"^[ \t]*(`{3,}|~{3,})")
 INLINE_CODE = re.compile(r"(`+)(.+?)(?<!`)\1(?!`)")
 HEADING = re.compile(r"^ {0,3}#{1,6}(?:[ \t]+(.*?))?[ \t]*$")

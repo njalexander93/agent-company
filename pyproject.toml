@@ -5,6 +5,9 @@ description = "Agent Company definitions and local task workspace tooling"
 requires-python = ">=3.12,<3.15"
 dependencies = []
 
+[project.urls]
+Repository = "https://github.com/njalexander93/agent-company"
+
 [tool.poetry]
 packages = [{ include = "agent_company", from = "src" }]
 requires-poetry = "==2.4.2"
