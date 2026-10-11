@@ -130,6 +130,7 @@ def test_check_target_accepts_valid_files_anchors_and_external_targets(tmp_path:
     )
     source = tmp_path / "docs/a.md"
     cache: dict[Path, set[str]] = {}
+    listings: dict[Path, set[str]] = {}
     # Accept each valid target, naming the target if one is rejected.
     for target in (
         "https://example.com/x",
@@ -143,11 +144,15 @@ def test_check_target_accepts_valid_files_anchors_and_external_targets(tmp_path:
         "code.py#L1",
         "sub/my file.md",
     ):
-        assert check_links.check_target(source, target, cache) is None, target
-    # Anchors for both Markdown destinations were parsed once and cached.
+        assert check_links.check_target(source, target, cache, listings) is None, target
+    # Anchors for both Markdown destinations and each walked directory were cached once.
     assert cache == {
         (tmp_path / "docs/a.md").resolve(): {"title", "rules-v12", "rules-v12-1"},
         (tmp_path / "docs/sub/my file.md").resolve(): {"deep"},
+    }
+    assert listings == {
+        (tmp_path / "docs").resolve(): {"a.md", "code.py", "sub"},
+        (tmp_path / "docs/sub").resolve(): {"my file.md"},
     }
 
 
@@ -160,23 +165,122 @@ def test_check_target_reports_missing_files_and_unknown_anchors(tmp_path: Path) 
     tree(tmp_path, {"a.md": "# Only\n", "b.md": "# Other\n"})
     source = tmp_path / "a.md"
     cache: dict[Path, set[str]] = {}
+    listings: dict[Path, set[str]] = {}
     # A missing file is reported before any fragment is considered.
-    assert check_links.check_target(source, "gone.md", cache) == (
+    assert check_links.check_target(source, "gone.md", cache, listings) == (
         "broken link: gone.md (file not found)"
     )
-    assert check_links.check_target(source, "gone.md#only", cache) == (
+    assert check_links.check_target(source, "gone.md#only", cache, listings) == (
         "broken link: gone.md#only (file not found)"
     )
     # Bare and file-qualified fragments must name an existing heading.
-    assert check_links.check_target(source, "#missing", cache) == (
+    assert check_links.check_target(source, "#missing", cache, listings) == (
         "broken anchor: #missing (no heading #missing)"
     )
-    assert check_links.check_target(source, "b.md#only", cache) == (
+    assert check_links.check_target(source, "b.md#only", cache, listings) == (
         "broken anchor: b.md#only (no heading #only)"
     )
+    # A missing directory or a file used as a directory is reported as missing.
+    assert check_links.check_target(source, "gone/b.md", cache, listings) == (
+        "broken link: gone/b.md (file not found)"
+    )
+    assert check_links.check_target(source, "b.md/x.md", cache, listings) == (
+        "broken link: b.md/x.md (file not found)"
+    )
+    assert check_links.check_target(source, "b.md/../a.md", cache, listings) == (
+        "broken link: b.md/../a.md (file not found)"
+    )
     # Root-relative targets are unsupported and report as missing files.
-    assert check_links.check_target(source, "/a.md", cache) == (
+    assert check_links.check_target(source, "/a.md", cache, listings) == (
         "broken link: /a.md (file not found)"
+    )
+
+
+def test_links_skip_footnote_definitions() -> None:
+    """Treat ``[^label]:`` as footnote text rather than a reference destination."""
+    text = "Claim.[^1]\n\n[^1]: Some note text.\n[ref]: real.md\n"
+    assert check_links.links(text) == [(4, "real.md")]
+
+
+def test_links_ignore_html_comments_but_not_the_same_link_outside_them() -> None:
+    """Blank single- and multi-line comments while keeping later text on the line."""
+    text = "\n".join(
+        [
+            "<!-- [a](gone.md) --> [b](gone.md)",
+            "<!--",
+            "[c](gone.md)",
+            "--> [d](gone.md) <!-- [e](gone.md) -->",
+            "<!-- ```",
+            "[f](gone.md)",
+            "``` -->",
+            "[g](gone.md)",
+        ]
+    )
+    # Only links outside every comment survive, and a fence inside a comment stays inert.
+    assert check_links.links(text) == [(1, "gone.md"), (4, "gone.md"), (8, "gone.md")]
+    assert check_links.mask_code(text)[0] == " " * 22 + "[b](gone.md)"
+
+
+def test_links_ignore_fences_indented_inside_list_items() -> None:
+    """Mask a fence indented four or more spaces until its matching closing marker."""
+    text = "\n".join(
+        [
+            "1. Step one:",
+            "",
+            "        ```text",
+            "        [x](gone.md)",
+            "        ~~~",
+            "        ```",
+            "2. [after](real.md)",
+        ]
+    )
+    assert check_links.links(text) == [(7, "real.md")]
+
+
+def test_bracketed_destinations_with_spaces_are_checked(tmp_path: Path) -> None:
+    """Extract ``<...>`` destinations containing spaces and resolve them as written.
+
+    Args:
+        tmp_path: Disposable directory supplied by pytest for this case.
+    """
+    tree(tmp_path, {"a.md": "", "my file.md": "# Top\n"})
+    text = '[t](<my file.md>) [u](<no file.md> "Title") [v](<my file.md#top>)\n[r]: <my file.md>\n'
+    targets = check_links.links(text)
+    assert targets == [
+        (1, "my file.md"),
+        (1, "no file.md"),
+        (1, "my file.md#top"),
+        (2, "my file.md"),
+    ]
+    # The existing spaced name passes and the missing one is reported.
+    source = tmp_path / "a.md"
+    faults = [check_links.check_target(source, target, {}, {}) for _, target in targets]
+    assert faults == [None, "broken link: no file.md (file not found)", None, None]
+
+
+def test_check_target_reports_letter_case_mismatches_on_every_platform(tmp_path: Path) -> None:
+    """Require exact file and directory names even where the filesystem ignores case.
+
+    Args:
+        tmp_path: Disposable directory supplied by pytest for this case.
+    """
+    tree(tmp_path, {"a.md": "", "real.md": "# R\n", "docs/a.md": "", "docs/sub/b.md": ""})
+    source = tmp_path / "a.md"
+    cache: dict[Path, set[str]] = {}
+    listings: dict[Path, set[str]] = {}
+    # A wrongly cased file or directory component names the on-disk spelling.
+    assert check_links.check_target(source, "Real.md", cache, listings) == (
+        "broken link: Real.md (case mismatch; file is real.md)"
+    )
+    assert check_links.check_target(source, "Docs/a.md", cache, listings) == (
+        "broken link: Docs/a.md (case mismatch; directory is docs)"
+    )
+    # Exact names pass, including through current and parent directory steps.
+    for target in ("real.md#r", "docs/a.md", "docs/sub/../a.md", "./docs/sub/b.md"):
+        assert check_links.check_target(source, target, cache, listings) is None, target
+    assert (
+        check_links.check_target(tmp_path / "docs/sub/b.md", "../../Real.md", cache, listings)
+        == "broken link: ../../Real.md (case mismatch; file is real.md)"
     )
 
 

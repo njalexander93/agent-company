@@ -1,10 +1,12 @@
 """Verify relative links and heading anchors in the repository's Markdown files.
 
 The checker reads Markdown only from the named paths, ignores fenced and inline
-code, and skips targets that carry a URL scheme. It resolves each remaining
-target against the containing file and checks ``#fragment`` anchors against
-headings slugged by GitHub's rules. It uses the standard library only and never
-contacts the network. Root-relative targets (``/path``) are not supported and
+code, HTML comments and footnote definitions, and skips targets that carry a URL
+scheme. It resolves each remaining target against the containing file, requires
+every path component to match the on-disk name exactly so case-insensitive
+filesystems cannot hide a link that breaks elsewhere, and checks ``#fragment``
+anchors against headings slugged by GitHub's rules. It uses the standard library
+only and never contacts the network. Root-relative targets (``/path``) are not supported and
 report as missing files.
 """
 
@@ -16,30 +18,40 @@ from pathlib import Path
 from urllib.parse import unquote
 
 DEFAULT_PATHS = ("docs", "README.md", "src")
-FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+# Any indentation is accepted so fences nested in list items are masked; an indented
+# code block cannot hold a live link either, so masking it as well is harmless.
+FENCE = re.compile(r"^[ \t]*(`{3,}|~{3,})")
 INLINE_CODE = re.compile(r"(`+)(.+?)(?<!`)\1(?!`)")
 HEADING = re.compile(r"^ {0,3}#{1,6}(?:[ \t]+(.*?))?[ \t]*$")
 CLOSING_HASHES = re.compile(r"[ \t]+#+$")
-INLINE_LINK = re.compile(r"!?\[[^\]]*\]\(\s*<?([^\s<>()]*)>?(?:\s+(?:\"[^\"]*\"|'[^']*'))?\s*\)")
-REFERENCE = re.compile(r"^ {0,3}\[[^\]]+\]:\s*<?([^\s<>]+)>?")
+COMMENT_OPEN = "<!--"
+COMMENT_CLOSE = "-->"
+# A destination is either ``<...>``, which may contain spaces, or a bare run without them.
+INLINE_LINK = re.compile(
+    r"!?\[[^\]]*\]\(\s*(?:<([^<>\n]*)>|([^\s<>()]*))(?:\s+(?:\"[^\"]*\"|'[^']*'))?\s*\)"
+)
+# Labels starting with ``^`` are footnote definitions, whose text is not a destination.
+REFERENCE = re.compile(r"^ {0,3}\[(?!\^)[^\]]+\]:\s*(?:<([^<>\n]*)>|([^\s<>]+))")
 LINK_TEXT = re.compile(r"!?\[([^\]]*)\]\([^)]*\)")
 SLUG_DROP = re.compile(r"[^\w\- ]")
 SCHEME = re.compile(r"^(?:[A-Za-z][A-Za-z0-9+.\-]*:|//)")
 
 
 def mask_code(text: str) -> list[str]:
-    """Blank fenced code blocks and inline code spans while keeping line numbers.
+    """Blank fenced code, inline code spans and HTML comments while keeping positions.
 
     Args:
         text: Complete Markdown document.
 
     Returns:
-        One entry per source line; fenced lines become empty and inline code
-        spans become spaces of the same width.
+        One entry per source line; fenced lines become empty, while inline code
+        spans and HTML comment text, which may span lines, become spaces of the
+        same width.
     """
     masked: list[str] = []
     fence: str | None = None
-    # Walk lines in order while tracking whether a fence is open.
+    in_comment = False
+    # Walk lines in order while tracking whether a fence or a comment is open.
     for line in text.splitlines():
         match = FENCE.match(line)
         # Hide every line inside an open fence, including its closing marker.
@@ -48,13 +60,24 @@ def mask_code(text: str) -> list[str]:
             if match and match.group(1)[0] == fence[0] and len(match.group(1)) >= len(fence):
                 fence = None
             masked.append("")
-        # Open a new fence and hide its marker line.
-        elif match:
+            continue
+        # Open a new fence and hide its marker line unless a comment hides the marker.
+        if match and not in_comment:
             fence = match.group(1)
             masked.append("")
+            continue
         # Replace inline code spans so their contents cannot form links or headings.
-        else:
-            masked.append(INLINE_CODE.sub(lambda span: " " * len(span.group(0)), line))
+        line = INLINE_CODE.sub(lambda span: " " * len(span.group(0)), line)
+        # Blank each comment span, continuing one left open by an earlier line.
+        start = 0 if in_comment else line.find(COMMENT_OPEN)
+        while start != -1:
+            # A newly opened comment cannot close inside its own opening marker.
+            close = line.find(COMMENT_CLOSE, start if in_comment else start + len(COMMENT_OPEN))
+            stop = len(line) if close == -1 else close + len(COMMENT_CLOSE)
+            line = line[:start] + " " * (stop - start) + line[stop:]
+            in_comment = close == -1
+            start = -1 if in_comment else line.find(COMMENT_OPEN, stop)
+        masked.append(line)
     return masked
 
 
@@ -112,22 +135,33 @@ def links(text: str) -> list[tuple[int, str]]:
     found: list[tuple[int, str]] = []
     # Scan each code-masked line so code examples never yield targets.
     for number, line in enumerate(mask_code(text), 1):
-        # Collect inline links and images first.
-        found.extend((number, match.group(1)) for match in INLINE_LINK.finditer(line))
+        # Collect inline links and images first, from whichever destination form matched.
+        found.extend(
+            (number, match.group(1) if match.group(1) is not None else match.group(2))
+            for match in INLINE_LINK.finditer(line)
+        )
         definition = REFERENCE.match(line)
         # Add a reference definition's destination when the line declares one.
         if definition:
-            found.append((number, definition.group(1)))
+            bracketed = definition.group(1)
+            found.append((number, bracketed if bracketed is not None else definition.group(2)))
     return found
 
 
-def check_target(source: Path, target: str, cache: dict[Path, set[str]]) -> str | None:
+def check_target(
+    source: Path, target: str, cache: dict[Path, set[str]], listings: dict[Path, set[str]]
+) -> str | None:
     """Verify one link target relative to the file that contains it.
+
+    Every path component must match an on-disk name exactly, so a link that only
+    resolves on a case-insensitive filesystem fails on every platform.
 
     Args:
         source: Markdown file containing the link.
         target: Raw link destination.
         cache: Anchor sets already computed, keyed by resolved path; updated in place.
+        listings: Entry names of each directory walked so far, keyed by resolved
+            directory; updated in place so each directory is listed once per run.
 
     Returns:
         A fault message, or ``None`` when the target is valid or external.
@@ -138,9 +172,32 @@ def check_target(source: Path, target: str, cache: dict[Path, set[str]]) -> str 
     path_part, _, fragment = target.partition("#")
     # Resolve the file part; an empty file part refers to the containing file.
     destination = source.parent / unquote(path_part) if path_part else source
-    # Report a target whose file or directory does not exist.
-    if not destination.exists():
-        return f"broken link: {target} (file not found)"
+    relative = Path(unquote(path_part))
+    directory = source.parent / relative.anchor
+    # Walk each component below any root; ``Path.exists`` ignores letter case on macOS
+    # and Windows, so only exact directory entries prove the link works everywhere.
+    for part in relative.parts[1:] if relative.anchor else relative.parts:
+        key = directory.resolve()
+        # List each directory once per run; a file cannot contain another component.
+        if key not in listings:
+            if not key.is_dir():
+                return f"broken link: {target} (file not found)"
+            listings[key] = {entry.name for entry in key.iterdir()}
+        # Step to the parent of a directory without matching a name.
+        if part == "..":
+            directory = directory / part
+            continue
+        # Report a missing component, naming the on-disk spelling when only case differs.
+        if part not in listings[key]:
+            folded = part.casefold()
+            actual = next(
+                (name for name in sorted(listings[key]) if name.casefold() == folded), None
+            )
+            if actual is None:
+                return f"broken link: {target} (file not found)"
+            kind = "directory" if (directory / actual).is_dir() else "file"
+            return f"broken link: {target} (case mismatch; {kind} is {actual})"
+        directory = directory / part
     # Verify anchors only for fragments that point into a Markdown file.
     if not fragment or destination.suffix.lower() != ".md" or not destination.is_file():
         return None
@@ -195,13 +252,14 @@ def main(argv: list[str] | None = None) -> int:
     arguments = sys.argv[1:] if argv is None else argv
     files, faults = markdown_files(arguments or list(DEFAULT_PATHS))
     cache: dict[Path, set[str]] = {}
+    listings: dict[Path, set[str]] = {}
     checked = 0
     # Check each link in each file and record faults with their location.
     for path in files:
         # Validate every extracted target in document order.
         for number, target in links(path.read_text(encoding="utf-8")):
             checked += 1
-            fault = check_target(path, target, cache)
+            fault = check_target(path, target, cache, listings)
             # Keep only failing targets, prefixed with their source location.
             if fault:
                 faults.append(f"{path.as_posix()}:{number}: {fault}")
