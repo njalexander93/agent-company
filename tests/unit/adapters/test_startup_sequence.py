@@ -169,13 +169,13 @@ def test_initial_packet_skips_absent_optional_checkout_rules(
     checkout, main = tmp_path / "checkout", tmp_path / "main"
     checkout.mkdir()
     main.mkdir()
-    roadmap = main / ".task/AGENT-30/roadmap.md"
+    roadmap = main / ".task/TEST-30/roadmap.md"
     monkeypatch.setattr(
         startup,
         "_read_file",
         lambda path: b"roadmap" if path == roadmap else pytest.fail("optional read"),
     )
-    packet = startup._initial_packet(checkout, main, "AGENT-30", "reader-key")
+    packet = startup._initial_packet(checkout, main, "TEST-30", "reader-key")
     assert len(packet) == 1
     assert packet[0]["id"] == "roadmap"
     assert packet[0]["sha256"] == core.sha(b"roadmap")
@@ -192,16 +192,16 @@ def test_initial_packet_records_exact_canonical_source_digests(
     """
     checkout, main = tmp_path / "checkout", tmp_path / "main"
     (checkout / "docs/runtime").mkdir(parents=True)
-    (main / ".task/AGENT-30").mkdir(parents=True)
+    (main / ".task/TEST-30").mkdir(parents=True)
     (checkout / "AGENTS.md").touch()
     (checkout / "docs/runtime/contributor-workflow.md").touch()
     bytes_by_path = {
-        main / ".task/AGENT-30/roadmap.md": b"roadmap v1",
+        main / ".task/TEST-30/roadmap.md": b"roadmap v1",
         checkout / "AGENTS.md": b"rules v1",
         checkout / "docs/runtime/contributor-workflow.md": b"procedure v1",
     }
     monkeypatch.setattr(startup, "_read_file", lambda path: bytes_by_path[path])
-    packet = startup._initial_packet(checkout, main, "AGENT-30", "reader-key")
+    packet = startup._initial_packet(checkout, main, "TEST-30", "reader-key")
     assert [ref["id"] for ref in packet] == ["roadmap", "contributors", "procedure"]
     assert [ref["sha256"] for ref in packet] == [
         core.sha(b"roadmap v1"),
@@ -224,7 +224,7 @@ def test_start_creates_scope_then_reads_bytes_before_acknowledging(
     key = core.participant_key({"host": "codex", "session_id": "actual-session"})
     checkout = tmp_path / "checkout"
     checkout.mkdir()
-    read_path = checkout / ".task" / "AGENT-30" / "roadmap.md"
+    read_path = checkout / ".task" / "TEST-30" / "roadmap.md"
     calls: list[str] = []
     references = [
         {
@@ -298,7 +298,7 @@ def test_start_creates_scope_then_reads_bytes_before_acknowledging(
     monkeypatch.setattr(startup.core, "Issue", Issue)
     result = startup.start(
         {"cwd": str(checkout), "session_id": "actual-session"},
-        {"id": "AGENT-30", "uuid": "verified-uuid"},
+        {"id": "TEST-30", "uuid": "verified-uuid"},
     )
     assert result["participant_id"] == result["coordinator"] == key
     assert calls == [
@@ -371,7 +371,7 @@ def test_start_refuses_stale_source_without_acknowledgment(
     with pytest.raises(core.WorkspaceError) as captured:
         startup.start(
             {"cwd": str(checkout), "session_id": "actual-session"},
-            {"id": "AGENT-30", "uuid": "verified-uuid"},
+            {"id": "TEST-30", "uuid": "verified-uuid"},
         )
     assert captured.value.code == "SOURCE_STALE"
     assert "acknowledge" not in calls
@@ -504,7 +504,7 @@ def test_start_existing_reader_joins_without_replacing_coordinator_packet(
     monkeypatch.setattr(startup.core, "Issue", ExistingIssue)
     result = startup.start(
         {"cwd": str(checkout), "session_id": "reader"},
-        {"id": "AGENT-30", "uuid": "verified-uuid"},
+        {"id": "TEST-30", "uuid": "verified-uuid"},
     )
     assert result["coordinator"] == coordinator
     assert result["participant_id"] == reader
@@ -741,14 +741,14 @@ def test_start_existing_assignment_respects_coordinator_packet_authority(
         with pytest.raises(core.WorkspaceError) as captured:
             startup.start(
                 {"cwd": str(checkout), "session_id": "actual"},
-                {"id": "AGENT-30", "uuid": "verified-uuid"},
+                {"id": "TEST-30", "uuid": "verified-uuid"},
             )
         assert captured.value.code == expected_error
     else:
         # Successful variants must complete startup and return ready state.
         result = startup.start(
             {"cwd": str(checkout), "session_id": "actual"},
-            {"id": "AGENT-30", "uuid": "verified-uuid"},
+            {"id": "TEST-30", "uuid": "verified-uuid"},
         )
         assert result["participant_id"] == key
         assert result["coordinator"] == coordinator
@@ -757,8 +757,8 @@ def test_start_existing_assignment_respects_coordinator_packet_authority(
     assert operations == expected_operations
 
 
-BOUND = {"issue_id": "AGENT-29", "binding_generation": 4}
-VERIFIED = {"id": "AGENT-30", "uuid": "verified-uuid"}
+BOUND = {"issue_id": "TEST-29", "binding_generation": 4}
+VERIFIED = {"id": "TEST-30", "uuid": "verified-uuid"}
 
 
 def test_start_rebinds_bound_session_into_absent_issue(
@@ -824,11 +824,11 @@ def test_start_rebinds_bound_session_into_absent_issue(
         "ready",
     ]
     rebind = calls[2]
-    assert (rebind["issue_id"], rebind["binding_generation"]) == ("AGENT-29", 4)
-    assert (rebind["new_issue_id"], rebind["issue_uuid"]) == ("AGENT-30", "verified-uuid")
+    assert (rebind["issue_id"], rebind["binding_generation"]) == ("TEST-29", 4)
+    assert (rebind["new_issue_id"], rebind["issue_uuid"]) == ("TEST-30", "verified-uuid")
     assert rebind["evidence"] == startup._ticket_evidence(VERIFIED)
     assert "coordinator" not in rebind and "new_binding_generation" not in rebind
-    assert calls[4]["issue_id"] == "AGENT-30" and calls[4]["binding_generation"] == 1
+    assert calls[4]["issue_id"] == "TEST-30" and calls[4]["binding_generation"] == 1
 
 
 def test_start_rebinds_bound_session_into_existing_participation(

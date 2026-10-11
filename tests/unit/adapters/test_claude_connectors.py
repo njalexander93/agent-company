@@ -160,8 +160,8 @@ def test_native_tool_routes_providers_and_no_effect_tools_by_host(
         with pytest.raises(core.WorkspaceError) as failure:
             common.native_tool(event, host)
         assert failure.value.code == code
-    # Claude admits schema loads, skill loads and messages by name.
-    for tool in ["ToolSearch", "Skill", "SendMessage"]:
+    # Claude admits schema loads, skill loads, messages and user questions by name.
+    for tool in ["ToolSearch", "Skill", "SendMessage", "AskUserQuestion"]:
         event = {"tool_name": tool, "tool_input": {}, "tool_use_id": "c"}
         assert common.native_tool(event, "claude-code") == tool
     # Only a normalized child identity may hand a report back; a parent cannot.
@@ -172,7 +172,7 @@ def test_native_tool_routes_providers_and_no_effect_tools_by_host(
     assert parent_failure.value.code == "HOST_UNSUPPORTED_TOOL"
 
 
-@pytest.mark.parametrize("tool", ["ToolSearch", "Skill", "SendMessage"])
+@pytest.mark.parametrize("tool", ["ToolSearch", "Skill", "SendMessage", "AskUserQuestion"])
 def test_no_effect_tools_require_readiness_but_record_no_pending_work(
     monkeypatch: pytest.MonkeyPatch, tool: str
 ) -> None:

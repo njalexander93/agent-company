@@ -1168,9 +1168,10 @@ def native_bootstrap(event: core.JSONObject, host: str, ready: bool = False) -> 
 
 
 CLAUDE_SYNC_TOOLS = frozenset({"Read", "Write", "Edit", "Glob", "Grep", "NotebookEdit"})
-# Schema loading, skill loading and messaging change no files or provider state; a
-# tool they surface is still evaluated on its own call, so these record no pending work.
-CLAUDE_NO_EFFECT_TOOLS = frozenset({"ToolSearch", "Skill", "SendMessage"})
+# Schema loading, skill loading, messaging and asking the user change no files or
+# provider state; a tool they surface is still evaluated on its own call, so these
+# record no pending work.
+CLAUDE_NO_EFFECT_TOOLS = frozenset({"ToolSearch", "Skill", "SendMessage", "AskUserQuestion"})
 # A subagent's report to its parent changes nothing either; only a child identity may
 # use it, so a parent cannot impersonate a hand-back.
 CLAUDE_CHILD_REPORT_TOOLS = frozenset({"SubagentHandback"})
@@ -1800,8 +1801,8 @@ def _recovery_route(code: str, host: str) -> str:
     # Unsupported tools need a different tool, not lifecycle recovery.
     if code == "HOST_UNSUPPORTED_TOOL":
         tools = (
-            "Read, Write, Edit, Glob, Grep, NotebookEdit, foreground Bash, ToolSearch, Skill or "
-            "SendMessage (a subagent also has SubagentHandback)"
+            "Read, Write, Edit, Glob, Grep, NotebookEdit, foreground Bash, ToolSearch, Skill, "
+            "SendMessage or AskUserQuestion (a subagent also has SubagentHandback)"
             if host == "claude-code"
             else "Read, Write, Edit, Grep, Delete or foreground Shell"
         )

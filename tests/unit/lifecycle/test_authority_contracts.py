@@ -353,7 +353,7 @@ def test_new_state_binds_only_explicit_coordinator() -> None:
     supplied = {
         **request(),
         "coordinator": core.participant_key(request()),
-        "issue_id": "AGENT-30",
+        "issue_id": "TEST-30",
         "issue_uuid": "uuid",
     }
     # Create initial state using the explicitly supplied coordinator.

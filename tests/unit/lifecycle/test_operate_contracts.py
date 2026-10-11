@@ -29,7 +29,7 @@ def base_request(operation: str, **fields: object) -> dict[str, Any]:
         "request_id": "request-1",
         "host": "codex",
         "session_id": "session",
-        "issue_id": "AGENT-30",
+        "issue_id": "TEST-30",
         "binding_generation": 2,
         **fields,
     }
@@ -92,7 +92,7 @@ class MemoryStore:
         Returns:
             Participant binding used by the operation.
         """
-        return {"issue_id": "AGENT-30", "binding_generation": 2}
+        return {"issue_id": "TEST-30", "binding_generation": 2}
 
     def view(self, identifier: str) -> None:
         """Record that the issue view is exposed to this participant.
@@ -122,7 +122,7 @@ class MemoryIssue:
             acknowledged: Whether the participant starts with a current packet acknowledgment.
         """
         # Initialize issue identity, control handle, and transaction logs.
-        self.id = "AGENT-30"
+        self.id = "TEST-30"
         self.control = MemoryControl()
         self.store = MemoryStore()
         self.recoveries = 0
@@ -254,7 +254,7 @@ def test_diagnose_reports_absent_and_present_issue_without_binding_read() -> Non
         "ok": True,
         "code": "PRESENT",
         "repo_id": "repo",
-        "issue_id": "AGENT-30",
+        "issue_id": "TEST-30",
         "revision": 7,
         "storage": "present",
         "packet": before["participants"][key]["packet"],
@@ -286,7 +286,7 @@ def test_diagnose_reports_absent_and_present_issue_without_binding_read() -> Non
         "ok": True,
         "code": "ABSENT",
         "repo_id": "repo",
-        "issue_id": "AGENT-30",
+        "issue_id": "TEST-30",
         "revision": None,
         "storage": "absent",
     }
@@ -479,7 +479,7 @@ def test_update_replaces_owned_note_with_attributable_provenance() -> None:
         path="context/note.md",
         old_digest=core.sha(b"old note"),
         content="new note é",
-        provenance={"sources": [source], "applicability": "AGENT-30", "status": "draft"},
+        provenance={"sources": [source], "applicability": "TEST-30", "status": "draft"},
     )
     # Check the operation response and committed issue state.
     assert core.operate(store, issue, request)["ok"] is True  # type: ignore[arg-type]
@@ -1225,7 +1225,7 @@ def test_existing_create_reuses_explicit_coordinator_binding() -> None:
     # Confirm the result remains bound to the requested issue.
     assert result["ok"] is True
     assert store.saved == [key]
-    assert store.views[-1] == "AGENT-30"
+    assert store.views[-1] == "TEST-30"
     assert issue.commits[-1][0] == "attach"
 
 
@@ -1249,7 +1249,7 @@ def test_create_initializes_packaged_roadmap_only_for_absent_issue() -> None:
                 Whether the requested test entry exists.
             """
             # Confirm the result remains bound to the requested issue.
-            assert identifier == "AGENT-30"
+            assert identifier == "TEST-30"
             return False
 
     # Attach the modeled canonical issue directory to the store.
@@ -1263,7 +1263,7 @@ def test_create_initializes_packaged_roadmap_only_for_absent_issue() -> None:
     assert result["ok"] is True
     assert result["binding_generation"] == 1
     assert issue.payload["events.jsonl"] == b""
-    assert b"AGENT-30" in issue.payload["roadmap.md"]
+    assert b"TEST-30" in issue.payload["roadmap.md"]
     assert issue.state["coordinator"] == key
     assert issue.commits[-1][0] == "create"
     assert store.saved == [key]
@@ -1438,7 +1438,7 @@ def test_reconcile_imports_only_inspected_markdown_with_unchanged_event_history(
                 Fake child directory or issue context for the caller.
             """
             # Confirm the result remains bound to the requested issue.
-            assert (identifier, private) == ("AGENT-30", False)
+            assert (identifier, private) == ("TEST-30", False)
             return Payload()
 
     # Install fake inventory calls.
@@ -1901,7 +1901,7 @@ def test_adopt_requires_exact_existing_payload_inventory_and_owners(
                 Whether the requested test entry exists.
             """
             # Confirm the result remains bound to the requested issue.
-            assert identifier == "AGENT-30"
+            assert identifier == "TEST-30"
             return True
 
         def child(self, identifier: str, *, private: bool) -> Payload:
@@ -1915,7 +1915,7 @@ def test_adopt_requires_exact_existing_payload_inventory_and_owners(
                 Fake child directory or issue context for the caller.
             """
             # Confirm the result remains bound to the requested issue.
-            assert (identifier, private) == ("AGENT-30", False)
+            assert (identifier, private) == ("TEST-30", False)
             return Payload()
 
     # Install fake inventory calls.
@@ -2191,7 +2191,7 @@ def test_replayed_create_restores_saved_result_and_binding_without_new_commit() 
         "participant_id": key,
     }
     assert store.saved == [key]
-    assert store.views == ["AGENT-30"]
+    assert store.views == ["TEST-30"]
     assert issue.commits == []
 
 
@@ -2467,7 +2467,7 @@ def test_coordinator_roadmap_update_refreshes_its_own_packet_reference() -> None
         path="roadmap.md",
         old_digest=core.sha(b"approved roadmap"),
         content="revised roadmap",
-        provenance={"sources": [source], "applicability": "AGENT-30", "status": "draft"},
+        provenance={"sources": [source], "applicability": "TEST-30", "status": "draft"},
     )
     assert core.operate(store, issue, request)["ok"] is True  # type: ignore[arg-type]
     participant = issue.state["participants"][key]

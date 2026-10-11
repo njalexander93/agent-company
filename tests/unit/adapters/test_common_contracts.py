@@ -535,7 +535,11 @@ def test_recovery_message_preserves_exact_diagnostic_without_task_content() -> N
             ["exact selected-ticket get_issue", "save_issue and save_comment"],
         ),
         ("HOST_UNSUPPORTED_PROVIDER", "cursor", ["exact selected-ticket get_issue"]),
-        ("HOST_UNSUPPORTED_TOOL", "claude-code", ["Skill or", "SendMessage", "SubagentHandback"]),
+        (
+            "HOST_UNSUPPORTED_TOOL",
+            "claude-code",
+            ["Skill, SendMessage or AskUserQuestion", "SubagentHandback"],
+        ),
         ("HOST_UNSUPPORTED_TOOL", "cursor", ["Delete or foreground Shell"]),
         (
             "HOST_UNSUPPORTED_CHILD_IDENTITY",

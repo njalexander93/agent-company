@@ -67,7 +67,7 @@ def parent_request(operation: str = "ready") -> dict[str, Any]:
         "host": HOST,
         "session_id": PARENT,
         "repo_id": "repo",
-        "issue_id": "AGENT-30",
+        "issue_id": "TEST-30",
         "binding_generation": 1,
     }
 
@@ -245,7 +245,7 @@ def test_issue_state_recovers_under_the_issue_lock_then_reads_committed_state(
             Args:
                 request: Verified parent request.
             """
-            assert request["issue_id"] == "AGENT-30"
+            assert request["issue_id"] == "TEST-30"
             self.issues = SimpleNamespace(
                 child=lambda identifier: opened.append(identifier) or Control(locks)
             )
@@ -261,7 +261,7 @@ def test_issue_state_recovers_under_the_issue_lock_then_reads_committed_state(
                 _control: Opened control directory, unused by this fake.
                 identifier: Issue identifier under recovery.
             """
-            assert identifier == "AGENT-30"
+            assert identifier == "TEST-30"
 
         def recover(self) -> None:
             """Record recovery while the lock is held."""
@@ -279,7 +279,7 @@ def test_issue_state_recovers_under_the_issue_lock_then_reads_committed_state(
     monkeypatch.setattr(common.core, "Store", Store)
     monkeypatch.setattr(common.core, "Issue", Issue)
     assert common._issue_state(parent_request()) is state
-    assert opened == ["AGENT-30"]
+    assert opened == ["TEST-30"]
     assert locks == ["issue", "recover", "read"]
 
 
@@ -332,7 +332,7 @@ def test_join_child_joins_at_the_freshly_read_revision(
     assert joined["session_id"] == CHILD
     assert joined["worktree"] == str(tmp_path)
     assert (joined["issue_id"], joined["issue_uuid"], joined["expected_revision"]) == (
-        "AGENT-30",
+        "TEST-30",
         "uuid",
         7,
     )
@@ -642,7 +642,7 @@ def test_child_start_joins_only_for_a_pending_admitted_agent_call(
         f"TASK_WORKSPACE_CHILD_READY: participant {CHILD_KEY}; packet {'e' * 64}."
     )
     assert steps == ["join", "ready"]
-    assert assignment(tmp_path) == {"issue_id": "AGENT-30"}
+    assert assignment(tmp_path) == {"issue_id": "TEST-30"}
     # The same child identity may start again for the same issue.
     assert common.child_start(child_event(tmp_path), HOST) == text
     # A recorded call that is no longer pending does not authorize a join.
@@ -686,10 +686,10 @@ def test_child_start_refuses_unready_parent_and_foreign_assignment(
         worktree.child(".task") as local,
         local.child(".bindings") as bindings,
     ):
-        bindings.put(CHILD_KEY + ".assignment.json", {"issue_id": "AGENT-31"})
+        bindings.put(CHILD_KEY + ".assignment.json", {"issue_id": "TEST-31"})
     steps = install_child_route(monkeypatch, tmp_path, pending={"agent-call": {}})
     with pytest.raises(core.WorkspaceError) as captured:
         common.child_start(child_event(tmp_path), HOST)
     assert captured.value.code == "BINDING_CONFLICT"
     assert steps == []
-    assert assignment(tmp_path) == {"issue_id": "AGENT-31"}
+    assert assignment(tmp_path) == {"issue_id": "TEST-31"}

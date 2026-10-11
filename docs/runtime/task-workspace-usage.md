@@ -109,8 +109,9 @@ The startup prompt accepts exactly one standalone `Task: <issue-id>` line, for e
 `Task: ISSUE-1`. Each supported runtime adapter records that identifier before
 requiring local registration. Its exact Linear issue read is admitted before
 readiness through the [host-specific ticket-read protocol](host-hooks.md#ticket-read-protocols).
-On Claude Code, only the bounded preparation reads in
-[setup step 3](host-hooks.md#setup-and-bootstrap) may precede it.
+Only the bounded preparation reads in
+[setup step 3](host-hooks.md#setup-and-bootstrap) may precede it. That rule is runtime-neutral;
+the Claude Code adapter is the only one implementing it so far.
 The adapter verifies the response's identifier and immutable issue UUID, then
 invokes the shared startup orchestrator with the actual runtime/session identity.
 

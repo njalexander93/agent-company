@@ -66,11 +66,15 @@ local lifecycle integration, not proposal approval.
    narrow read before readiness and verifies its native completion. See
    [ticket-read protocols](#ticket-read-protocols). A new Task line fences ordinary
    tools even when the session was previously ready. While that read is pending,
-   Claude Code also admits a read-only preparation phase: `ToolSearch` loading
-   only configured `get_issue` schemas, and `Read` or a plain `cat` of exactly
-   `<checkout>/docs/runtime/contributor-workflow.md` or `<checkout>/AGENTS.md`.
-   These calls get no lifecycle decision and write nothing, so the selected
-   ticket read remains the first issue-provider operation. A session already bound
+   a runtime may admit a read-only preparation phase: loading the issue-read tool's
+   schema and reading the governing procedure. The rule is runtime-neutral; this
+   checkout implements it only in the Claude Code adapter, as `ToolSearch` (a
+   Claude Code mechanism) loading only configured `get_issue` schemas, and `Read`
+   or a plain `cat` of exactly `<checkout>/docs/runtime/contributor-workflow.md`
+   or `<checkout>/AGENTS.md`. These calls get no lifecycle decision and write
+   nothing, so the selected ticket read remains the first issue-provider
+   operation. The Cursor and Codex adapters do not implement the phase yet and
+   deny every other tool until the ticket read completes. A session already bound
    to another issue may submit a Task line too: the adapter records the new issue as
    a pending assignment and the binding stays on the old issue until the verified
    read moves it (step 5). If that read or the move fails, the old binding remains;
@@ -206,7 +210,7 @@ content-block list. The adapter restores its success envelope before invoking
 the shared parser; it still requires exactly one text block containing the
 requested issue and a canonical immutable UUID. Failed native calls retain the
 separate `PostToolUseFailure` path. On 2026-10-09, the local Desktop 2.1.293
-AGENT-2 session exercised both callbacks with `sdk` provenance and this list
+ticket-first session exercised both callbacks with `sdk` provenance and this list
 shape, ending in `TASK_WORKSPACE_READY`. This establishes that observed local
 path, not cloud/Cowork support or another platform's installed-host coverage.
 
@@ -303,7 +307,7 @@ These rules are implemented in `adapters/common.py`, `adapters/claude.py`, and `
 | Boundary | Claude Code | Cursor Agent |
 | --- | --- | --- |
 | Identity | Exact native session ID. A hook carrying `agent_id` with a valid `session_id` is a subagent keyed `<session_id>/agent/<agent_id>`; `subagent_id`, `parent_conversation_id`, background markers and `agent_id` without `session_id` are rejected | Exact conversation ID; require any session ID to match; one workspace root |
-| Ordinary tools | Read, Write, Edit, Glob, Grep, NotebookEdit; foreground Bash under the setting above. `ToolSearch`, `Skill` and `SendMessage` are readiness-checked no-effect operations with no pending entry; a tool they surface is evaluated on its own call. A subagent's `SubagentHandback` is the same kind of no-effect operation and is admitted only under a child identity | Read, Write, Edit, Grep, Delete; Shell with supported foreground arguments |
+| Ordinary tools | Read, Write, Edit, Glob, Grep, NotebookEdit; foreground Bash under the setting above. `ToolSearch`, `Skill`, `SendMessage` and `AskUserQuestion` are readiness-checked no-effect operations with no pending entry; a tool they surface is evaluated on its own call. A subagent's `SubagentHandback` is the same kind of no-effect operation and is admitted only under a child identity | Read, Write, Edit, Grep, Delete; Shell with supported foreground arguments |
 | Linear provider after readiness | Configured connector only (same server name and `mcp_server.source` checks as the ticket read): `get_issue` (any ID), `get_user`, `list_users`, `list_issue_statuses`, `list_comments`, `save_issue`, `save_comment` (a subagent child gets the read operations only). Each call is pending work under its native `tool_use_id`, settled by `PostToolUse` (any non-null `tool_response`, including Desktop's content-block list) or `PostToolUseFailure` | No native provider admission; `MCP:` tools are denied |
 | Ticket-first startup | Exact configured Linear issue read before readiness; matching native completion runs shared startup | Exact Linear issue read with generic call-ID and MCP server checks before shared startup |
 | Admission | Deny on failed readiness outside the ticket-read/recovery exceptions; otherwise preserve native permission decisions | Allow only the particular validated ticket-read, recovery or ordinary tool call |
@@ -317,8 +321,12 @@ These rules are implemented in `adapters/common.py`, `adapters/claude.py`, and `
 
 ### Claude subagent child route (restricted)
 
-This route is implemented and covered by synthetic protocol tests, plus one observed
-local Desktop session (AGENT-34, 2026-10-09, macOS): `SubagentStart` fired before the
+The rule behind this route is runtime-neutral: a child joins only with a verified,
+host-issued child identity and its own reader binding. `Agent`, `SubagentStart` and
+`agent_id` are the Claude Code mechanism for it. Cursor's `subagentStart` and Codex's
+`spawn_agent` carry no verifiable child identity, so they remain denied. This route is
+implemented and covered by synthetic protocol tests, plus one observed local Desktop
+validation session (2026-10-09, macOS): `SubagentStart` fired before the
 child's first tool call and delivered the fixed `additionalContext`; the child's
 `PreToolUse`/`PostToolUse` carried the parent `session_id` with `agent_id`, so the child
 was keyed and settled under its own participant while the parent stayed ready;
@@ -345,7 +353,7 @@ owned `context/` paths. `SubagentStop` records an observation and never detaches
 field links a `SubagentStart` to a specific `Agent` call, so the check is "some admitted
 parent `Agent` call is pending", not an exact pairing.
 
-A second local Desktop session (AGENT-34 round 2, 2026-10-10, macOS, hooks enabled)
+A second round of that validation session (2026-10-10, macOS, hooks enabled)
 showed the route failing under concurrency: a ready parent issued three `Agent` calls
 within six seconds; all three were admitted as pending work, but only one child was
 joined. The other two never received a binding, so every one of their tool calls,
@@ -434,9 +442,9 @@ Claude's host-level fail-open cases remain a boundary:
 the wrapper converts process failures to exit 2 and the Python deadline precedes the configured
 host timeout, but an externally killed or timed-out hook is not guaranteed enforcement.
 
-**AGENT-32 observation.** In the AGENT-32 Desktop session, `save_issue`, `list_users`
-and `list_comments` completed although the adapter of that revision denied every MCP tool
-after readiness. The current revision admits exactly those operations on the configured
+**Earlier observation.** In a local Desktop session before this allowlist existed,
+`save_issue`, `list_users` and `list_comments` completed although the adapter of that
+revision denied every MCP tool after readiness. The current revision admits exactly those operations on the configured
 connector (see the allowlist above), so the observation no longer points at a defect. A
 host-side timeout fail-open was considered as the cause but never established; the
 project hooks keep `timeout: 10` and the runner its 2-second deadline, and an explicit

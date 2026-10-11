@@ -216,13 +216,13 @@ def test_store_binding_does_not_invent_absent_assignment() -> None:
     # Resolve the exact participant key for the selected session.
     key = core.participant_key(store.request)
     # Establish the issue state required by this transition.
-    state = {"issue_id": "AGENT-30", "participants": {key: {"generation": 3}}}
+    state = {"issue_id": "TEST-30", "participants": {key: {"generation": 3}}}
     # Persist the binding generation for that participant.
     store.save_binding(state, key)  # type: ignore[arg-type]
     # Confirm the view and binding reference the selected issue only.
     assert store.binding() == {
         "repo_id": "repo",
-        "issue_id": "AGENT-30",
+        "issue_id": "TEST-30",
         "participant_id": key,
         "binding_generation": 3,
     }
@@ -233,18 +233,18 @@ def test_store_view_exposes_only_selected_issue_link() -> None:
     # Attach fake binding and directory handles to the model store.
     store = bare_store()
     # Expose only the requested issue view through the store.
-    store.view("AGENT-30")
+    store.view("TEST-30")
     # Create the canonical issue target before linking its view.
-    target = str(Path(store.registration["main"]) / ".task" / "AGENT-30")
+    target = str(Path(store.registration["main"]) / ".task" / "TEST-30")
     # Confirm the view and binding reference the selected issue only.
-    assert store.local.views == [("AGENT-30", target)]
-    assert store.task.children == ["AGENT-30"]
+    assert store.local.views == [("TEST-30", target)]
+    assert store.task.children == ["TEST-30"]
     # Resolve the disposable root for the filesystem boundary.
     store.root = Path(store.registration["main"])
     # Expose only the requested issue view through the store.
-    store.view("AGENT-31")
+    store.view("TEST-31")
     # Confirm the view and binding reference the selected issue only.
-    assert store.local.views == [("AGENT-30", target)]
+    assert store.local.views == [("TEST-30", target)]
 
 
 def test_store_closes_tracked_handles_in_reverse_open_order() -> None:
@@ -558,7 +558,7 @@ def test_register_persists_only_explicit_coordinator_startup_packet(
             "reader": key,
         }
     ]
-    setup = {"issue_id": "AGENT-30", "issue_uuid": "uuid", "packet": packet, "coordinator": key}
+    setup = {"issue_id": "TEST-30", "issue_uuid": "uuid", "packet": packet, "coordinator": key}
     # Register the selected repository identity and verify its retry behavior.
     first = core.register({**request, "startup": setup})
     # Confirm the rejected operation reports REGISTERED.
@@ -568,7 +568,7 @@ def test_register_persists_only_explicit_coordinator_startup_packet(
     assert documents[binding_path][key + ".startup.json"] == setup
     assert core.register({**request, "startup": setup})["repo_id"] == first["repo_id"]
     # Change startup authority to test conflicting retry behavior.
-    altered = {**setup, "issue_id": "AGENT-31"}
+    altered = {**setup, "issue_id": "TEST-31"}
     # Reject a conflicting local registration without replacing it.
     with pytest.raises(core.WorkspaceError) as captured:
         core.register({**request, "startup": altered})

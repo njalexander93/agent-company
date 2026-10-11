@@ -401,7 +401,7 @@ def test_execute_serializes_issue_dispatch_and_explicit_collection(
                 Fake child directory or issue context for the caller.
             """
             # Confirm dispatch targets the requested issue ID.
-            assert (identifier, create) == ("AGENT-30", True)
+            assert (identifier, create) == ("TEST-30", True)
             return self
 
     class Store:
@@ -447,7 +447,7 @@ def test_execute_serializes_issue_dispatch_and_explicit_collection(
     monkeypatch.setattr(
         core,
         "collect_candidates",
-        lambda _store, _request: calls.append("collect") or [{"issue_id": "AGENT-29"}],
+        lambda _store, _request: calls.append("collect") or [{"issue_id": "TEST-29"}],
     )
     request = {
         "schema_version": 1,
@@ -455,16 +455,16 @@ def test_execute_serializes_issue_dispatch_and_explicit_collection(
         "operation": "create",
         "worktree": str(tmp_path / "checkout"),
         "repo_id": "repo",
-        "issue_id": "AGENT-30",
+        "issue_id": "TEST-30",
         "host": "codex",
         "session_id": "session",
-        "cleanup_candidates": [{"issue_id": "AGENT-29"}],
+        "cleanup_candidates": [{"issue_id": "TEST-29"}],
     }
     # Dispatch the public request through validation and repository lookup.
     result = core.execute(request)
     # Check the requested issue is the one dispatched and collected.
-    assert result["collection"] == [{"issue_id": "AGENT-29"}]
-    assert calls.index("enter:store") < calls.index("operate:AGENT-30")
-    assert calls.index("enter:issue.lock") < calls.index("operate:AGENT-30")
-    assert calls.index("operate:AGENT-30") < calls.index("collect")
+    assert result["collection"] == [{"issue_id": "TEST-29"}]
+    assert calls.index("enter:store") < calls.index("operate:TEST-30")
+    assert calls.index("enter:issue.lock") < calls.index("operate:TEST-30")
+    assert calls.index("operate:TEST-30") < calls.index("collect")
     assert calls[-1] == "exit:store"

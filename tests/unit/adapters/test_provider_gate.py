@@ -65,7 +65,7 @@ class Issues:
             The control handle for the recorded issue.
         """
         # A provider call must use the issue already bound to the session.
-        assert identifier == "AGENT-30"
+        assert identifier == "TEST-30"
         return Control()
 
 
@@ -157,7 +157,7 @@ def install_gate(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
             "operation": operation,
             "host": "codex",
             "session_id": "session",
-            "issue_id": "AGENT-30",
+            "issue_id": "TEST-30",
             "binding_generation": 1,
         },
     )
@@ -244,7 +244,7 @@ def test_provider_gate_reads_recorded_archive_after_cleanup(
     """
     # Model a cleaned issue with immutable archive document IDs.
     calls = install_gate(monkeypatch)
-    state = Issue(None, None, "AGENT-30").state  # type: ignore[arg-type]
+    state = Issue(None, None, "TEST-30").state  # type: ignore[arg-type]
     state.update(
         storage="cleaned",
         archive={"root": {"id": "root-1"}, "parts": [{"id": "archive-part-1"}]},
@@ -318,7 +318,7 @@ def test_provider_gate_allows_only_frozen_index_request(
     """
     # Provide an optional index whose exact request was frozen in issue state.
     calls = install_gate(monkeypatch)
-    state = Issue(None, None, "AGENT-30").state  # type: ignore[arg-type]
+    state = Issue(None, None, "TEST-30").state  # type: ignore[arg-type]
     index = {"issue": "uuid", "title": "index", "content": "frozen index"}
     state["index_request"] = index
     monkeypatch.setattr(Issue, "committed_state", lambda _self: state)

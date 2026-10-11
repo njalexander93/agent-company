@@ -236,7 +236,7 @@ def issue_id(value: str) -> str:
     """Validate the strict issue identifier used as a directory component.
 
     Args:
-        value: Human issue identifier, such as AGENT-30.
+        value: Human issue identifier, such as TEAM-123.
 
     Returns:
         The validated issue identifier.

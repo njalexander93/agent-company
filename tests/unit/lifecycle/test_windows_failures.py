@@ -23,7 +23,7 @@ def test_extended_path_uses_local_namespace() -> None:
     from agent_company.lifecycle import _filesystem_windows as windows
 
     # Confirm the extended local prefix preserves the drive path.
-    assert windows.extended(Path(r"C:\work\AGENT-30")) == r"\\?\C:\work\AGENT-30"
+    assert windows.extended(Path(r"C:\work\TEST-30")) == r"\\?\C:\work\TEST-30"
 
 
 def test_open_handle_surfaces_native_failure_without_accepting_invalid_handle(
@@ -41,7 +41,7 @@ def test_open_handle_surfaces_native_failure_without_accepting_invalid_handle(
     monkeypatch.setattr(windows.c, "get_last_error", lambda: 5)
     # Exercise windows.open_handle and capture the expected failure.
     with pytest.raises(OSError) as captured:  # noqa: PT011 - winerror is the contract.
-        windows.open_handle(Path(r"C:\work\AGENT-30"))
+        windows.open_handle(Path(r"C:\work\TEST-30"))
     assert captured.value.winerror == 5
 
 

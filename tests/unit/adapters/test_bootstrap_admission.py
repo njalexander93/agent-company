@@ -131,14 +131,14 @@ def test_canonical_bootstrap_requires_issue_to_match_persisted_assignment(
             """
             # The parser may read only the actual session's assignment.
             assert (self.level, name) == (2, key + ".assignment.json")
-            return {"issue_id": "AGENT-30"}
+            return {"issue_id": "TEST-30"}
 
     # Compare an exact issue request with a command-supplied foreign issue.
     monkeypatch.setattr(common.core, "repository", lambda _path: (root, None, [root]))
     monkeypatch.setattr(common.core.Directory, "absolute", lambda _path: Node())
     event = {"cwd": str(CHECKOUT), "session_id": "session"}
-    matching = common.bootstrap_command(base("read", issue_id="AGENT-30"), "codex")
-    foreign = common.bootstrap_command(base("read", issue_id="AGENT-31"), "codex")
+    matching = common.bootstrap_command(base("read", issue_id="TEST-30"), "codex")
+    foreign = common.bootstrap_command(base("read", issue_id="TEST-31"), "codex")
     assert common.canonical_bootstrap(event, matching, "codex", ready=False) is True
     assert common.canonical_bootstrap(event, foreign, "codex", ready=False) is False
     assert opened == [".task", ".bindings", ".task", ".bindings"]
@@ -182,7 +182,7 @@ class AssignmentDirectory:
         Returns:
             The bound shorthand issue ID.
         """
-        return {"issue_id": "AGENT-30"}
+        return {"issue_id": "TEST-30"}
 
 
 @pytest.mark.parametrize("ready", [False, True])
@@ -195,11 +195,11 @@ def test_canonical_bootstrap_admits_exact_issue_level_diagnose(
         monkeypatch: Replaces repository and binding access boundaries.
         ready: Whether ordinary readiness was already established.
     """
-    # Bind the observed session to AGENT-30 through a persisted assignment.
+    # Bind the observed session to TEST-30 through a persisted assignment.
     monkeypatch.setattr(common.core, "repository", lambda _path: (CHECKOUT, None, [CHECKOUT]))
     monkeypatch.setattr(common.core.Directory, "absolute", lambda _path: AssignmentDirectory())
     event = {"cwd": str(CHECKOUT), "session_id": "session"}
-    issue = {"repo_id": "repo", "issue_id": "AGENT-30"}
+    issue = {"repo_id": "repo", "issue_id": "TEST-30"}
 
     def admitted(request: dict[str, Any]) -> bool:
         """Evaluate one diagnose request through the canonical command parser.
@@ -217,8 +217,8 @@ def test_canonical_bootstrap_admits_exact_issue_level_diagnose(
     assert admitted(base("diagnose", **issue)) is True
     assert admitted(base("diagnose", **issue, binding_generation=3)) is True
     # A foreign issue, a partial issue shape, or any extra field stays denied.
-    assert admitted(base("diagnose", repo_id="repo", issue_id="AGENT-31")) is False
-    assert admitted(base("diagnose", issue_id="AGENT-30")) is False
+    assert admitted(base("diagnose", repo_id="repo", issue_id="TEST-31")) is False
+    assert admitted(base("diagnose", issue_id="TEST-30")) is False
     for extra in [
         {"issue_uuid": "uuid"},
         {"expected_revision": 1},
@@ -245,7 +245,7 @@ def test_canonical_bootstrap_rejects_foreign_worktree_before_binding_lookup(
         lambda _path: pytest.fail("opened assignment for foreign worktree"),
     )
     event = {"cwd": str(CHECKOUT), "session_id": "session"}
-    request = base("read", issue_id="AGENT-30", worktree=str(OTHER))
+    request = base("read", issue_id="TEST-30", worktree=str(OTHER))
     command = common.bootstrap_command(request, "codex")
     assert common.canonical_bootstrap(event, command, "codex", ready=False) is False
 
@@ -398,7 +398,7 @@ def install_state(monkeypatch: pytest.MonkeyPatch, state: dict[str, Any]) -> Non
         monkeypatch: Replaces repository, binding and store boundaries.
         state: Committed issue state served from the issue control directory.
     """
-    # Bind the session to AGENT-30 and serve the supplied committed state file.
+    # Bind the session to TEST-30 and serve the supplied committed state file.
     monkeypatch.setattr(common.core, "repository", lambda _path: (CHECKOUT, None, [CHECKOUT]))
     monkeypatch.setattr(common.core.Directory, "absolute", lambda _path: AssignmentDirectory())
     control = IssueControl(state)
@@ -452,7 +452,7 @@ def refresh(packet: list[dict[str, Any]], **extra: object) -> dict[str, Any]:
     """
     fields: dict[str, object] = {
         "repo_id": "repo",
-        "issue_id": "AGENT-30",
+        "issue_id": "TEST-30",
         "binding_generation": 1,
         "expected_revision": 7,
         "target_participant": SELF_KEY,
@@ -558,7 +558,7 @@ def test_unready_self_refresh_rejects_other_target_extra_fields_and_owned_paths(
     assert admitted_unready(refresh(refreshed(), owned_paths=["context/note.md"])) is False
     assert admitted_unready(refresh(refreshed(), arbitrary="injection")) is False
     # A foreign issue fails the assignment check before any issue store is opened.
-    assert admitted_unready(refresh(refreshed(), issue_id="AGENT-31")) is False
+    assert admitted_unready(refresh(refreshed(), issue_id="TEST-31")) is False
 
 
 def test_unready_self_refresh_rejects_non_coordinator_and_unscoped_callers(
@@ -612,7 +612,7 @@ def test_unready_self_refresh_for_unassigned_issue_opens_no_store(
         common.core, "Store", lambda _request: pytest.fail("opened a store for a foreign issue")
     )
     # The assignment check alone denies the foreign-issue self-refresh.
-    assert admitted_unready(refresh(refreshed(), issue_id="AGENT-31")) is False
+    assert admitted_unready(refresh(refreshed(), issue_id="TEST-31")) is False
 
 
 def rebind(old: str, new: str, **extra: object) -> dict[str, Any]:
@@ -677,7 +677,7 @@ class TargetIssues:
 def install_targets(
     monkeypatch: pytest.MonkeyPatch, committed: set[str], bound: str | None = None
 ) -> list[str]:
-    """Bind the session's assignment to AGENT-30 and model committed target issues.
+    """Bind the session's assignment to TEST-30 and model committed target issues.
 
     Args:
         monkeypatch: Replaces repository, binding and store boundaries.
@@ -687,7 +687,7 @@ def install_targets(
     Returns:
         The log of issue IDs the hook inspected.
     """
-    # Serve the AGENT-30 assignment and a store whose issues directory is modeled.
+    # Serve the TEST-30 assignment and a store whose issues directory is modeled.
     monkeypatch.setattr(common.core, "repository", lambda _path: (CHECKOUT, None, [CHECKOUT]))
     monkeypatch.setattr(common.core.Directory, "absolute", lambda _path: AssignmentDirectory())
     opened: list[str] = []
@@ -726,7 +726,7 @@ def test_rebind_to_recorded_task_target_is_admitted_without_store_reads(
         monkeypatch: Replaces repository, binding and store boundaries.
         ready: Whether ordinary readiness was already established.
     """
-    # The assignment names AGENT-30 while the binding still names AGENT-29.
+    # The assignment names TEST-30 while the binding still names TEST-29.
     opened = install_targets(monkeypatch, set())
     event = {"cwd": str(CHECKOUT), "session_id": "session"}
 
@@ -743,9 +743,9 @@ def test_rebind_to_recorded_task_target_is_admitted_without_store_reads(
         return common.canonical_bootstrap(event, command, "codex", ready=ready)
 
     # The create variant's target identity and generation fields are admitted.
-    assert admitted(rebind("AGENT-29", "AGENT-30")) is True
-    assert admitted(rebind("AGENT-29", "AGENT-30", issue_uuid="uuid")) is True
-    assert admitted(rebind("AGENT-29", "AGENT-30", new_binding_generation=2)) is True
+    assert admitted(rebind("TEST-29", "TEST-30")) is True
+    assert admitted(rebind("TEST-29", "TEST-30", issue_uuid="uuid")) is True
+    assert admitted(rebind("TEST-29", "TEST-30", new_binding_generation=2)) is True
     assert opened == []
 
 
@@ -761,9 +761,9 @@ def test_rebind_rejects_unbootstrapped_fields_and_child_callers(
     install_targets(monkeypatch, set())
     for extra in [{"coordinator": "key"}, {"packet": []}, {"owned_paths": []}]:
         # A caller cannot name a coordinator or packet through the rebind exception.
-        assert admitted_unready(rebind("AGENT-29", "AGENT-30", **extra)) is False, extra
+        assert admitted_unready(rebind("TEST-29", "TEST-30", **extra)) is False, extra
     child = {"cwd": str(CHECKOUT), "session_id": "session", "child": True}
-    command = common.bootstrap_command(rebind("AGENT-29", "AGENT-30"), "codex")
+    command = common.bootstrap_command(rebind("TEST-29", "TEST-30"), "codex")
     assert common.canonical_bootstrap(child, command, "codex", ready=False) is False
     assert common.canonical_bootstrap(child, command, "codex", ready=True) is False
 
@@ -776,15 +776,15 @@ def test_rebind_from_assigned_issue_requires_existing_target(
     Args:
         monkeypatch: Replaces repository, binding and store boundaries.
     """
-    # Only AGENT-31 already has committed state.
-    opened = install_targets(monkeypatch, {"AGENT-31"})
-    assert admitted_unready(rebind("AGENT-30", "AGENT-31")) is True
-    assert admitted_unready(rebind("AGENT-30", "AGENT-32")) is False
-    assert opened == ["AGENT-31", "AGENT-32"]
+    # Only TEST-31 already has committed state.
+    opened = install_targets(monkeypatch, {"TEST-31"})
+    assert admitted_unready(rebind("TEST-30", "TEST-31")) is True
+    assert admitted_unready(rebind("TEST-30", "TEST-32")) is False
+    assert opened == ["TEST-31", "TEST-32"]
     # An unrelated old issue or a malformed target never opens the store.
-    assert admitted_unready(rebind("AGENT-28", "AGENT-31")) is False
-    assert admitted_unready(rebind("AGENT-30", "../AGENT-31")) is False
-    assert opened == ["AGENT-31", "AGENT-32"]
+    assert admitted_unready(rebind("TEST-28", "TEST-31")) is False
+    assert admitted_unready(rebind("TEST-30", "../TEST-31")) is False
+    assert opened == ["TEST-31", "TEST-32"]
 
 
 def test_rebind_must_leave_the_live_binding_issue(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -793,12 +793,12 @@ def test_rebind_must_leave_the_live_binding_issue(monkeypatch: pytest.MonkeyPatc
     Args:
         monkeypatch: Replaces repository, binding and store boundaries.
     """
-    # The session is bound to AGENT-29 and its Task line recorded AGENT-30.
-    opened = install_targets(monkeypatch, {"AGENT-31"}, bound="AGENT-29")
-    assert admitted_unready(rebind("AGENT-29", "AGENT-30")) is True
+    # The session is bound to TEST-29 and its Task line recorded TEST-30.
+    opened = install_targets(monkeypatch, {"TEST-31"}, bound="TEST-29")
+    assert admitted_unready(rebind("TEST-29", "TEST-30")) is True
     # A rebind "from" any other issue is refused before any target is inspected.
-    assert admitted_unready(rebind("AGENT-28", "AGENT-30")) is False
-    assert admitted_unready(rebind("AGENT-30", "AGENT-31")) is False
+    assert admitted_unready(rebind("TEST-28", "TEST-30")) is False
+    assert admitted_unready(rebind("TEST-30", "TEST-31")) is False
     assert opened == []
 
 

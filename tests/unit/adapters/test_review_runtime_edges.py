@@ -15,7 +15,7 @@ from agent_company.lifecycle import task_workspace as core
 
 pytestmark = pytest.mark.unit
 
-ISSUE = "AGENT-30"
+ISSUE = "TEST-30"
 UUID = "0920cdcc-1644-4fa1-bf71-eb8370134c70"
 ROOT = Path("/ticket-unit-repository")
 
@@ -285,7 +285,7 @@ def test_linear_tool_ignores_other_tools_and_validates_provenance(host: str) -> 
     "response,expected",
     [
         ({"id": UUID, "identifier": ISSUE}, None),
-        ({"id": UUID, "identifier": "AGENT-31"}, "ISSUE_MISMATCH"),
+        ({"id": UUID, "identifier": "TEST-31"}, "ISSUE_MISMATCH"),
         ({"id": "not-a-uuid", "identifier": ISSUE}, "PROVIDER_RESPONSE_INVALID"),
         ({"id": UUID.upper(), "identifier": ISSUE}, "PROVIDER_RESPONSE_INVALID"),
         ({"id": ISSUE, "uuid": UUID}, "PROVIDER_RESPONSE_INVALID"),
@@ -353,7 +353,7 @@ def test_ticket_parses_connector_text_and_rejects_missing_uuid() -> None:
     # Parsed JSON still has to pass identity and object-shape validation.
     for issue, expected in (
         ({"id": ISSUE}, "PROVIDER_RESPONSE_INVALID"),
-        ({"id": "AGENT-31", "uuid": UUID}, "ISSUE_MISMATCH"),
+        ({"id": "TEST-31", "uuid": UUID}, "ISSUE_MISMATCH"),
         ([{"id": ISSUE}], "PROVIDER_RESPONSE_INVALID"),
     ):
         response = {"isError": False, "content": [{"type": "text", "text": json.dumps(issue)}]}
@@ -472,7 +472,7 @@ def test_claude_ticket_completion_requires_exact_native_call(
         ([], "PROVIDER_RESPONSE_INVALID"),
         ([{"type": "text", "text": "{}"}] * 2, "PROVIDER_RESPONSE_INVALID"),
         (
-            [{"type": "text", "text": json.dumps({"id": "AGENT-99", "uuid": UUID})}],
+            [{"type": "text", "text": json.dumps({"id": "TEST-99", "uuid": UUID})}],
             "ISSUE_MISMATCH",
         ),
     ],
@@ -691,7 +691,7 @@ def test_failed_provider_callback_requires_active_matching_call(
     key = core.participant_key({"host": host, "session_id": "session"})
     name = f"/.task/.bindings/{key}.lookup.json"
     # Changed tool ID and changed issue arguments both fail correlation.
-    for changed in ({"tool_use_id": "other"}, {"tool_input": {"id": "AGENT-31"}}):
+    for changed in ({"tool_use_id": "other"}, {"tool_input": {"id": "TEST-31"}}):
         # A stale failure must leave the active marker in place.
         with pytest.raises(core.WorkspaceError) as caught:
             common.native_ticket_failed({**generic, **changed}, host)

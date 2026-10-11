@@ -11,7 +11,7 @@ doc_type: maintenance-contract
 ## Process
 
 1. Select the task and read only its named inputs. Trace affected links and section anchors before edits or moves.
-2. Edit the canonical rule or guide; update its affected callers, template, example or fixture without duplicating the rule.
+2. Edit the canonical rule or guide; update its affected callers, template, example or fixture without duplicating the rule. Never cite a Linear issue identifier or issue URL; describe the event, date and host instead. `scripts/dev.py ticket-references` fails the Code Quality check on any such reference in tracked files.
 3. Check link targets, exact artifact identity and the assigned semantic scope. Record unresolved inputs and implementation limits accurately.
 
 ## Outputs

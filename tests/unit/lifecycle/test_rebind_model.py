@@ -136,7 +136,7 @@ class Store:
         self.bindings = Bindings()
         self.registration = {"repo_id": "repo"}
         self.task = Payloads()
-        self.bound: dict[str, object] | None = {"issue_id": "AGENT-30", "binding_generation": 1}
+        self.bound: dict[str, object] | None = {"issue_id": "TEST-30", "binding_generation": 1}
 
     def binding(self) -> dict[str, object] | None:
         """Return this session's live binding, by default the old issue.
@@ -242,14 +242,14 @@ def fixture_state(store: Store) -> tuple[Issue, Issue, str]:
     key = core.participant_key({"host": "codex", "session_id": "session"})
     # Establish the issue state required by this transition.
     old = object.__new__(Issue)
-    old.store, old.id = store, "AGENT-30"
+    old.store, old.id = store, "TEST-30"
     old.state = {
         "coordinator": key,
         "participants": {key: {"generation": 1, "status": "ready", "pending": {}, "ack": "digest"}},
         "requests": {},
     }
     new = object.__new__(Issue)
-    new.store, new.id = store, "AGENT-31"
+    new.store, new.id = store, "TEST-31"
     new.state = {
         "coordinator": "other-coordinator",
         "disposition": "active",
@@ -273,8 +273,8 @@ def rebind_request(**changes: object) -> dict[str, Any]:
     """
     return {
         "operation": "rebind",
-        "issue_id": "AGENT-30",
-        "new_issue_id": "AGENT-31",
+        "issue_id": "TEST-30",
+        "new_issue_id": "TEST-31",
         "host": "codex",
         "session_id": "session",
         "binding_generation": 1,
@@ -299,18 +299,18 @@ def test_rebind_retires_old_participant_before_new_binding(
     store = Store()
     old, new, key = fixture_state(store)
     assignment = key + ".assignment.json"
-    store.bindings.data[assignment] = {"issue_id": "AGENT-30"}
+    store.bindings.data[assignment] = {"issue_id": "TEST-30"}
     monkeypatch.setattr(core, "Issue", Issue)
     # Transfer the selected participant between old and target issues.
     result = core.rebind(store, rebind_request())  # type: ignore[arg-type]
-    # Confirm the new binding targets AGENT-31 after old retirement.
+    # Confirm the new binding targets TEST-31 after old retirement.
     assert result["participant_id"] == key
     assert old.state["participants"][key]["status"] == "detached"
     assert old.state["participants"][key]["ack"] is None
     assert new.state["participants"][key]["status"] == "attached"
-    assert store.order.index("commit:AGENT-30") < store.order.index("commit:AGENT-31")
-    assert store.order.index("commit:AGENT-31") < store.order.index("save-binding")
-    assert store.bindings.data[assignment] == {"issue_id": "AGENT-31"}
+    assert store.order.index("commit:TEST-30") < store.order.index("commit:TEST-31")
+    assert store.order.index("commit:TEST-31") < store.order.index("save-binding")
+    assert store.bindings.data[assignment] == {"issue_id": "TEST-31"}
 
 
 def test_rebind_rejects_pending_old_work_without_target_commit(
@@ -359,8 +359,8 @@ def test_rebind_retry_after_old_retirement_commits_only_target(
     # Transfer the selected participant between old and target issues.
     result = core.rebind(store, rebind_request())  # type: ignore[arg-type]
     assert result["ok"] is True
-    assert "commit:AGENT-30" not in store.order
-    assert "commit:AGENT-31" in store.order
+    assert "commit:TEST-30" not in store.order
+    assert "commit:TEST-31" in store.order
     assert new.state["participants"][key]["status"] == "attached"
 
 
@@ -407,8 +407,8 @@ def test_rebind_replay_finishes_assignment_publication_after_interruption(
     target_request = {
         **request,
         "operation": "rebind",
-        "issue_id": "AGENT-31",
-        "old_issue_id": "AGENT-30",
+        "issue_id": "TEST-31",
+        "old_issue_id": "TEST-30",
         "binding_generation": None,
     }
     new.state["requests"][core.sha(request["request_id"].encode())] = {
@@ -416,13 +416,13 @@ def test_rebind_replay_finishes_assignment_publication_after_interruption(
         "result": {"ok": True, "code": "OK", "participant_id": key, "binding_generation": 1},
     }
     assignment = key + ".assignment.json"
-    store.bindings.data[assignment] = {"issue_id": "AGENT-30"}
+    store.bindings.data[assignment] = {"issue_id": "TEST-30"}
     monkeypatch.setattr(core, "Issue", Issue)
     # Transfer the selected participant between old and target issues.
     result = core.rebind(store, request)  # type: ignore[arg-type]
-    # Confirm the new binding targets AGENT-31 after old retirement.
+    # Confirm the new binding targets TEST-31 after old retirement.
     assert result["participant_id"] == key
-    assert store.bindings.data[assignment] == {"issue_id": "AGENT-31"}
+    assert store.bindings.data[assignment] == {"issue_id": "TEST-31"}
     assert not any(item.startswith("commit:") for item in store.order)
 
 
@@ -449,8 +449,8 @@ def test_rebind_replay_does_not_invent_absent_assignment_marker(
     target_request = {
         **request,
         "operation": "rebind",
-        "issue_id": "AGENT-31",
-        "old_issue_id": "AGENT-30",
+        "issue_id": "TEST-31",
+        "old_issue_id": "TEST-30",
         "binding_generation": None,
     }
     new.state["requests"][core.sha(request["request_id"].encode())] = {
@@ -476,7 +476,7 @@ def test_rebind_replay_can_finish_after_assignment_write_failure(
     store = Store()
     old, new, key = fixture_state(store)
     assignment = key + ".assignment.json"
-    store.bindings.data[assignment] = {"issue_id": "AGENT-30"}
+    store.bindings.data[assignment] = {"issue_id": "TEST-30"}
     request = rebind_request()
     original_put = store.bindings.put
 
@@ -501,13 +501,13 @@ def test_rebind_replay_can_finish_after_assignment_write_failure(
     # Confirm the old issue retains its exact identity during replay.
     assert old.state["participants"][key]["status"] == "detached"
     assert new.state["participants"][key]["status"] == "attached"
-    assert store.bindings.data[assignment] == {"issue_id": "AGENT-30"}
+    assert store.bindings.data[assignment] == {"issue_id": "TEST-30"}
     # Install fake put calls.
     target_request = {
         **request,
         "operation": "rebind",
-        "issue_id": "AGENT-31",
-        "old_issue_id": "AGENT-30",
+        "issue_id": "TEST-31",
+        "old_issue_id": "TEST-30",
         "binding_generation": None,
     }
     new.state["requests"][core.sha(request["request_id"].encode())] = {
@@ -515,9 +515,9 @@ def test_rebind_replay_can_finish_after_assignment_write_failure(
         "result": {"ok": True, "code": "OK", "participant_id": key, "binding_generation": 1},
     }
     monkeypatch.setattr(store.bindings, "put", original_put)
-    # Confirm the new binding targets AGENT-31 after old retirement.
+    # Confirm the new binding targets TEST-31 after old retirement.
     assert core.rebind(store, request)["ok"] is True  # type: ignore[arg-type]
-    assert store.bindings.data[assignment] == {"issue_id": "AGENT-31"}
+    assert store.bindings.data[assignment] == {"issue_id": "TEST-31"}
 
 
 def absent_target(store: Store) -> tuple[Issue, Issue, str]:
@@ -547,7 +547,7 @@ def test_rebind_creates_absent_target_with_caller_as_coordinator(
     store = Store()
     old, new, key = absent_target(store)
     assignment = key + ".assignment.json"
-    store.bindings.data[assignment] = {"issue_id": "AGENT-31"}
+    store.bindings.data[assignment] = {"issue_id": "TEST-31"}
     monkeypatch.setattr(core, "Issue", Issue)
     # Rebind with the target's provider identity and the verified read as evidence.
     result = core.rebind(store, rebind_request(issue_uuid="target-uuid"))  # type: ignore[arg-type]
@@ -557,15 +557,15 @@ def test_rebind_creates_absent_target_with_caller_as_coordinator(
     assert new.state["owners"] == {"roadmap.md": key}
     assert new.state["issue_uuid"] == "target-uuid"
     assert new.state["participants"][key]["status"] == "attached"
-    assert b"AGENT-31" in new.payload["roadmap.md"]
+    assert b"TEST-31" in new.payload["roadmap.md"]
     assert new.payload["events.jsonl"] == b""
     assert old.state["coordinator"] == key
     assert old.state["participants"][key]["status"] == "detached"
     # Only the target control may be created; old retirement precedes publication.
-    assert "create:AGENT-31" in store.order and "create:AGENT-30" not in store.order
-    assert store.order.index("commit:AGENT-30") < store.order.index("commit:AGENT-31")
-    assert store.order.index("commit:AGENT-31") < store.order.index("save-binding")
-    assert store.bindings.data[assignment] == {"issue_id": "AGENT-31"}
+    assert "create:TEST-31" in store.order and "create:TEST-30" not in store.order
+    assert store.order.index("commit:TEST-30") < store.order.index("commit:TEST-31")
+    assert store.order.index("commit:TEST-31") < store.order.index("save-binding")
+    assert store.bindings.data[assignment] == {"issue_id": "TEST-31"}
 
 
 @pytest.mark.parametrize(
@@ -596,7 +596,7 @@ def test_rebind_create_refuses_incomplete_requests_without_commit(
     old, new, key = absent_target(store)
     # Add the unadopted payload directory only for the adoption case.
     if payload:
-        store.task.present.add("AGENT-31")
+        store.task.present.add("TEST-31")
     monkeypatch.setattr(core, "Issue", Issue)
     # Reject the request before either issue changes.
     with pytest.raises(core.WorkspaceError) as captured:
@@ -670,16 +670,16 @@ def test_rebind_existing_target_rejects_other_provider_identity(
     assert not any(item.startswith("commit:") for item in store.order)
     # The matching identity keeps the existing assignment rule and succeeds.
     assert core.rebind(store, rebind_request(issue_uuid="target-uuid"))["ok"] is True  # type: ignore[arg-type]
-    assert "create:AGENT-31" in store.order
+    assert "create:TEST-31" in store.order
 
 
 @pytest.mark.parametrize(
     "bound",
     [
         None,
-        {"issue_id": "AGENT-29", "binding_generation": 1},
-        {"issue_id": "AGENT-30", "binding_generation": 2},
-        {"issue_id": "AGENT-31", "binding_generation": 1},
+        {"issue_id": "TEST-29", "binding_generation": 1},
+        {"issue_id": "TEST-30", "binding_generation": 2},
+        {"issue_id": "TEST-31", "binding_generation": 1},
     ],
 )
 def test_rebind_requires_the_live_binding_on_the_old_issue(
@@ -689,9 +689,9 @@ def test_rebind_requires_the_live_binding_on_the_old_issue(
 
     Args:
         monkeypatch: Pytest fixture used to replace the dependency under test.
-        bound: Live binding modeled for the session, never naming AGENT-30 at generation 1.
+        bound: Live binding modeled for the session, never naming TEST-30 at generation 1.
     """
-    # Bind the session elsewhere (or nowhere) while AGENT-30 still lists it.
+    # Bind the session elsewhere (or nowhere) while TEST-30 still lists it.
     store = Store()
     old, new, key = absent_target(store)
     store.bound = bound
@@ -749,15 +749,15 @@ def test_rebind_replay_is_accepted_after_the_binding_moved(
     target_request = {
         **request,
         "operation": "rebind",
-        "issue_id": "AGENT-31",
-        "old_issue_id": "AGENT-30",
+        "issue_id": "TEST-31",
+        "old_issue_id": "TEST-30",
         "binding_generation": None,
     }
     new.state["requests"][core.sha(request["request_id"].encode())] = {
         "digest": core.sha(core.canonical(target_request)),
         "result": {"ok": True, "code": "OK", "participant_id": key, "binding_generation": 1},
     }
-    store.bound = {"issue_id": "AGENT-31", "binding_generation": 1}
+    store.bound = {"issue_id": "TEST-31", "binding_generation": 1}
     monkeypatch.setattr(core, "Issue", Issue)
     # The replay returns the saved result without committing again.
     assert core.rebind(store, request)["participant_id"] == key  # type: ignore[arg-type]

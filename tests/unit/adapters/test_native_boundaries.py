@@ -239,7 +239,7 @@ def test_automatic_attach_uses_only_persisted_startup_assignment(
     native = {"cwd": str(CHECKOUT), "session_id": "session"}
     key = core.participant_key({"host": "codex", "session_id": "session"})
     packet = [{"reader": key, "id": "roadmap"}]
-    setup = {"issue_id": "AGENT-30", "issue_uuid": "uuid", "coordinator": key, "packet": packet}
+    setup = {"issue_id": "TEST-30", "issue_uuid": "uuid", "coordinator": key, "packet": packet}
     calls: list[dict[str, Any]] = []
 
     class Bindings:
@@ -323,7 +323,7 @@ def test_automatic_attach_uses_only_persisted_startup_assignment(
 
     monkeypatch.setattr(common.core, "Store", Store)
     monkeypatch.setattr(common.core, "execute", execute)
-    assert common.automatic_attach(native, "AGENT-30", "codex") is None
+    assert common.automatic_attach(native, "TEST-30", "codex") is None
     assert [item["operation"] for item in calls] == ["diagnose", "create", "diagnose", "scope"]
     assert calls[-1]["target_participant"] == key
     assert calls[-1]["packet"] == packet
@@ -478,7 +478,7 @@ def test_automatic_attach_keeps_existing_assigned_packet_without_recreation(
             Returns:
                 The requested child directory fixture.
             """
-            assert identifier == "AGENT-30"
+            assert identifier == "TEST-30"
             return self
 
     class Bindings:
@@ -528,7 +528,7 @@ def test_automatic_attach_keeps_existing_assigned_packet_without_recreation(
             Returns:
                 The recorded session binding fixture.
             """
-            return {"issue_id": "AGENT-30"}
+            return {"issue_id": "TEST-30"}
 
     class Issue:
         """Expose the current participant packet from committed state."""
@@ -571,7 +571,7 @@ def test_automatic_attach_keeps_existing_assigned_packet_without_recreation(
     monkeypatch.setattr(common.core, "Store", Store)
     monkeypatch.setattr(common.core, "Issue", Issue)
     monkeypatch.setattr(common.core, "execute", execute)
-    assert common.automatic_attach(native, "AGENT-30", "codex") is None
+    assert common.automatic_attach(native, "TEST-30", "codex") is None
     assert calls == ["diagnose"]
 
 
@@ -666,7 +666,7 @@ def test_automatic_attach_bound_without_packet_does_not_invent_assignment(
             Returns:
                 The recorded session binding fixture.
             """
-            return {"issue_id": "AGENT-30"}
+            return {"issue_id": "TEST-30"}
 
     class Issue:
         """Expose an existing participant with no assigned packet."""
@@ -702,9 +702,7 @@ def test_automatic_attach_bound_without_packet_does_not_invent_assignment(
         ),
     )
     assert (
-        common.automatic_attach(
-            {"cwd": str(CHECKOUT), "session_id": "session"}, "AGENT-30", "codex"
-        )
+        common.automatic_attach({"cwd": str(CHECKOUT), "session_id": "session"}, "TEST-30", "codex")
         is None
     )
     assert calls == ["diagnose"]
@@ -790,11 +788,11 @@ def test_automatic_attach_without_setup_attempts_only_existing_core_scope(
     if code == "REVISION_CONFLICT":
         # Assert the exact revision conflict from the lifecycle call.
         with pytest.raises(core.WorkspaceError) as captured:
-            common.automatic_attach(native, "AGENT-30", "codex")
+            common.automatic_attach(native, "TEST-30", "codex")
         assert captured.value.code == code
     else:
         # Other lifecycle diagnostics must remain bounded without an exception.
-        assert common.automatic_attach(native, "AGENT-30", "codex") is None
+        assert common.automatic_attach(native, "TEST-30", "codex") is None
     assert calls == ["diagnose", "attach"]
 
 
