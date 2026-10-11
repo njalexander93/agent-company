@@ -4,7 +4,7 @@
 
 ## Authoring route
 
-1. Identify the canonical Role and owning unit from accepted organizational sources. Framework authors use the repository's documentation entry point and [team map](../organization/team-map.md). Company authors add their accessible Company-owned governing material.
+1. Identify the canonical Role and owning unit from accepted organizational sources. Use the packaged [team map](../organization/team-map.md) and [organizational baseline](../organization/baseline.md). Framework repository contributors also start from that repository's documentation catalog. Company authors add their accessible Company-owned governing material.
 2. Resolve the assignment's permitted governing sources, exact versions and relevant sections. Use the [source-reference contract](#source-reference-contract). Required scope, acceptance criteria and prohibitions must survive summaries. Read only context permitted for this assignment and disclosure stage.
 3. Copy the appropriate template. Replace every placeholder with sourced content or an explicit disposition from [Completeness and gaps](#completeness-and-gaps). Link shared rules instead of recreating them.
 4. Check the draft against [Review and maintenance](#review-and-maintenance). Record field completeness, reference verification and semantic review separately. A structurally complete document can still misstate authority.
@@ -58,7 +58,7 @@ A source can be readable and correctly hashed yet lack governing authority. An a
 
 ## Source-reference contract
 
-Reference the public [baseline rules](../organization/baseline.md) and their exact repository revision. For Company-specific requirements, use an accessible Company-owned source register. Both use the fields below and the [source authority and retrieval rules](../organization/baseline.md#source-authority-and-retrieval).
+Reference the public [baseline rules](../organization/baseline.md) and their exact framework repository revision. For Company-specific requirements, use an accessible Company-owned source register. Both use the fields below and the [source authority and retrieval rules](../organization/baseline.md#source-authority-and-retrieval).
 
 | Reference part | Required content |
 | --- | --- |

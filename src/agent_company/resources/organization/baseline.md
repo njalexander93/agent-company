@@ -1,10 +1,10 @@
-# Authoring baseline
+# Organizational baseline
 
-This guide defines the scope and source conventions for writing compatible Role/Profile definitions. The documents describe governance; reading, publishing or loading them grants no execution authority.
+These are the framework's shared organizational rules for authority, sources, assurance, ownership, handoffs, planning, capacity and evidence. Every Role and Profile definition applies them. The documents describe governance; reading, publishing or loading them grants no execution authority.
 
 ## Purpose and revision
 
-A definition must make responsibility, authority, required inputs, owned outputs, independence, evidence and handoffs traceable. Use the [shared format](../templates/definition-format.md), [team map](team-map.md) and the repository's coverage record.
+A definition must make responsibility, authority, required inputs, owned outputs, independence, evidence and handoffs traceable. Use the packaged [shared format](../templates/definition-format.md) and [team map](team-map.md). The framework repository keeps a separate coverage record for its own definition work.
 
 Identify a candidate by its full Git commit and file path/set. Record governing source revisions separately. A branch name is not an immutable revision, and a hash embedded in its own file cannot identify that file's final bytes. Changed guidance or source inputs require affected reference and semantic review; repeat affected authoring checks when necessary.
 
@@ -31,7 +31,7 @@ For each required governing input:
 3. Pin the approved immutable revision or retain exact bytes with a verified content digest and retrieval route. A mutable branch/tag is insufficient. A digest without accessible retained content is insufficient.
 4. If content changes, retain the required version or reconcile the new version before relying on it. Missing, stale, inaccessible, ambiguous or conflicting inputs stop the dependent conclusion; identify the recovery owner or human decision needed.
 
-Use the [definition source-reference contract](../templates/definition-format.md#source-reference-contract) for authoring fields. Public framework rules resolve to repository sections at a pinned revision. Company-specific rules may use a Company-owned accessible register with the same fields. Register membership does not authorize reading every entry.
+Use the [definition source-reference contract](../templates/definition-format.md#source-reference-contract) for authoring fields. Public framework rules resolve to framework repository sections at a pinned revision. Company-specific rules may use a Company-owned accessible register with the same fields. Register membership does not authorize reading every entry.
 
 ## Context and independent assurance
 
@@ -49,7 +49,7 @@ Clarification stays within the same issue and retrieves approved sources first. 
 - **Code Reviewer** is repository-read-only and writes only its review receipt. It cannot repair the reviewed artifacts, tests or criteria; approve a human PR; merge; accept risk; or replace Security. Outcomes are `PASS`, `CHANGES_REQUIRED`, `INCONCLUSIVE` or `SCOPE_OR_POLICY_CONFLICT`. A pass covers only assigned artifacts, requirements and interfaces. All required scopes must pass; uncovered, negative or inconclusive scopes prevent aggregate success. Whole-change coverage requires declared competence and permitted context, not merely fewer reviewers. Database–backend and backend–frontend contracts need explicit coverage when affected.
 - **Security Reviewers** protect distinct subjects: Internal protects the organization and its operating tools; Product protects shipped artifacts, designs and customer/environment risk; External protects exposed perimeters and entry points. Several may apply. They inspect, analyze, classify, recommend and validate; they do not implement remediation, activate tools, change reviewed gates/evidence, waive findings or accept material risk. One subject cannot silently satisfy another. Detailed Security Profile taxonomy is not supplied.
 
-The repository's coverage record identifies the four Profiles selected for these fixtures. A technical implementation needs applicable independent tests, Platform Artifact review and Security; declarative governance candidates need Agent Capability Artifact review and applicable Security. The fixture-specific exceptions apply only to their stated paper scopes.
+A technical implementation needs applicable independent tests, Platform Artifact review and Security; declarative governance candidates need Agent Capability Artifact review and applicable Security.
 
 ## Governance and technical ownership
 
@@ -95,4 +95,4 @@ Account for provider-observed usage and the Controller's own commitments. Cross-
 
 Raw secrets remain outside Agent Roles; exact-operation use occurs through a separately trusted broker. Human authentication material, signing roots, recovery/override controls and enforcement internals remain sealed. Neither a Company grant nor convenient tool access can override a Framework prohibition. Send non-secret rule references and the blocked effect to the required decision authority.
 
-Evidence retains exact subject, governing revisions, attributable actor, decision/action, outcome certainty and causal/supporting references under its disclosure scope. Provider objects are editable projections/archives, not execution authority. A durable archive preserves meaningful readable and structured history. Verify write and read-back against registered identities before local cleanup. Exclude sensitive material before export. The repository's task-workspace contract, in its archive provider boundary and recovery section, defines the implemented local archive mechanics and their limits.
+Evidence retains exact subject, governing revisions, attributable actor, decision/action, outcome certainty and causal/supporting references under its disclosure scope. Provider objects are editable projections/archives, not execution authority. A durable archive preserves meaningful readable and structured history. Verify write and read-back against registered identities before local cleanup. Exclude sensitive material before export. The framework repository's task-workspace contract, in its archive provider boundary and recovery section, documents the implemented local archive mechanics and their limits.

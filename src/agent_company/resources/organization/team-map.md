@@ -1,6 +1,6 @@
 # Department and team map
 
-**Two peer departments; six teams.** This is a compact map of the accepted organization, not a Role catalog or an authority grant. Use the shared [authority rules](baseline.md#authority-and-role-boundaries) and the repository's coverage record for bounded Role participation.
+**Two peer departments; six teams.** This is a compact map of the accepted organization, not a Role catalog or an authority grant. Use the shared [authority rules](baseline.md#authority-and-role-boundaries) for bounded Role participation. The framework repository's coverage record documents which Roles its own definition work covers.
 
 ## Placement and authority
 
@@ -90,6 +90,6 @@ Escalation destinations below apply the [authority rule](baseline.md#authority-a
 
 **Control Plane is infrastructure outside the hierarchy.** It includes deterministic Wave Controller, workflow/gate evaluation, contract/lease/receipt/context routing, ledger/projections, provider synchronization and evidence registry. It neither becomes a Team member nor replaces independent specialist judgment or human authorization. No Wave Planner Role is added.
 
-**Known drafting work is not an unknown authority decision.** The repository's coverage record distinguishes 22 canonical Roles from the smaller selected definition set. It records responsibilities and fixture participation without assigning new authority. The worked AGO example kept in the repository is documentation, not a runtime Role.
+**Known drafting work is not an unknown authority decision.** The framework repository's coverage record distinguishes 22 canonical Roles from the smaller selected definition set. It records responsibilities and participation in the framework repository's paper fixtures without assigning new authority. The framework repository's worked AGO example is documentation, not a runtime Role.
 
 The high-level hierarchy is not an exhaustive Profile inventory. Security Profile taxonomy remains deliberately deferred. If a required source or governing authority decision is missing/conflicting, block the affected path and route the decision to Human Leadership; do not fill it with a new unit, Role or permission.
