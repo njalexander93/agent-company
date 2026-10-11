@@ -1,7 +1,9 @@
 # Profile definitions
 
 This folder is reserved for Profile definitions shipped inside the
-`agent_company` package. It is currently empty apart from this README.
+`agent_company` package. It is currently empty apart from this README. Definitions placed here are
+authoritative framework content, with the same status as the organization
+and template resources.
 
 No loader or activation mechanism reads this folder. Publishing the package,
 installing it, or adding a file here does not activate governance and does
