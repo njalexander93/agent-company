@@ -6,8 +6,8 @@ doc_type: maintenance-contract
 ## Inputs
 
 - Working: the exact candidate and assigned review scope. [agent-governance-officer.md](agent-governance-officer.md) is the worked example.
-- Reference: [field guidance](../authoring/definition-format.md#role-field-guidance), [review criteria](../authoring/definition-format.md#review-and-maintenance), the selected Role entry in [coverage](../framework/role-coverage.md#03-agent-governance-officer), and the candidate's [public rule links](agent-governance-officer.md#governing-sources-and-open-gaps).
-- For each review question read the affected candidate fields and their corresponding public rule sections. Read [independent context rules](../framework/baseline.md#context-and-independent-assurance) before assembling reviewer inputs.
+- Reference: [field guidance](../../src/agent_company/resources/templates/definition-format.md#role-field-guidance), [review criteria](../../src/agent_company/resources/templates/definition-format.md#review-and-maintenance), the selected Role entry in [coverage](../framework/role-coverage.md#03-agent-governance-officer), and the candidate's [public rule links](agent-governance-officer.md#governing-sources-and-open-gaps).
+- For each review question read the affected candidate fields and their corresponding public rule sections. Read [independent context rules](../../src/agent_company/resources/organization/baseline.md#context-and-independent-assurance) before assembling reviewer inputs.
 
 ## Process
 

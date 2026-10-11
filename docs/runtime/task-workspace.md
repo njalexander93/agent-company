@@ -6,7 +6,7 @@ Host adapters call a shared lifecycle core for supported local task actions. It 
 
 ## Scope and governing inputs
 
-Use the public [context and independence rules](../framework/baseline.md#context-and-independent-assurance), [evidence/privacy rules](../framework/baseline.md#evidence-and-privacy) and [handoff/outcome rules](../framework/baseline.md#handoffs-and-outcomes). This document defines local mechanics, not new organizational authority.
+Use the public [context and independence rules](../../src/agent_company/resources/organization/baseline.md#context-and-independent-assurance), [evidence/privacy rules](../../src/agent_company/resources/organization/baseline.md#evidence-and-privacy) and [handoff/outcome rules](../../src/agent_company/resources/organization/baseline.md#handoffs-and-outcomes). This document defines local mechanics, not new organizational authority.
 
 The scope is one local non-bare Git repository and its linked worktrees on macOS, Linux or native Windows. Windows storage must use local NTFS. Separate clones, remote hosts, network filesystems, synchronization, exposed services and background scheduling are excluded. Each platform needs its own execution evidence; WSL is not native Windows verification.
 

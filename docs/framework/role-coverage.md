@@ -22,13 +22,13 @@ The two fixtures share correction, authority-conflict and missing/stale-input va
 
 Selected supporting dispositions are in [G-1 applicability](../fixtures/governance-change.md#applicability-and-owned-open-work) and [T-1 applicability](../fixtures/tooling-change.md#applicability-and-owned-open-work). Entries below adopt those **paper expectations**, not execution approval. Neither fixture selects Leadership Advisor advice, Triager diagnostic triage or Software Architect proposals. Both exclude setup/migration, a research Spike, product implementation, infrastructure and deployment. Confirm supporting participation and resolve bounded inputs/destinations in the assignment before any triggered use.
 
-Use the [shared format](../authoring/definition-format.md#completeness-and-gaps) to distinguish untriggered conditions from missing required inputs. “Conditional — not triggered” below preserves the expansion rule while recording why it does not apply to G-1/T-1. It is not a completed specialist assignment.
+Use the [shared format](../../src/agent_company/resources/templates/definition-format.md#completeness-and-gaps) to distinguish untriggered conditions from missing required inputs. “Conditional — not triggered” below preserves the expansion rule while recording why it does not apply to G-1/T-1. It is not a completed specialist assignment.
 
 ## Canonical Role inventory
 
 ### Company-level staff — 3 Roles
 
-Staff placement is directly beneath Human Leadership, not a Department or Team. See [placement](team-map.md#placement-and-authority).
+Staff placement is directly beneath Human Leadership, not a Department or Team. See [placement](../../src/agent_company/resources/organization/team-map.md#placement-and-authority).
 
 #### 01. Organization Architect
 
@@ -53,7 +53,7 @@ Staff placement is directly beneath Human Leadership, not a Department or Team. 
 
 ### Product Planning Team — 6 Roles
 
-Parent: [Product Management Department → Product Planning Team](team-map.md#product-planning-team).
+Parent: [Product Management Department → Product Planning Team](../../src/agent_company/resources/organization/team-map.md#product-planning-team).
 
 #### 04. Initiative Planner
 
@@ -99,7 +99,7 @@ Parent: [Product Management Department → Product Planning Team](team-map.md#pr
 
 ### Delivery Management Team — 2 Roles
 
-Parent: [Product Management Department → Delivery Management Team](team-map.md#delivery-management-team).
+Parent: [Product Management Department → Delivery Management Team](../../src/agent_company/resources/organization/team-map.md#delivery-management-team).
 
 #### 10. Issue Delivery Manager
 
@@ -117,7 +117,7 @@ Parent: [Product Management Department → Delivery Management Team](team-map.md
 
 ### Product Engineering Team — 2 Roles
 
-Parent: [Engineering Department → Product Engineering Team](team-map.md#product-engineering-team).
+Parent: [Engineering Department → Product Engineering Team](../../src/agent_company/resources/organization/team-map.md#product-engineering-team).
 
 #### 12. Product Developer
 
@@ -135,7 +135,7 @@ Parent: [Engineering Department → Product Engineering Team](team-map.md#produc
 
 ### Engineering Assurance Team — 2 Roles
 
-Parent: [Engineering Department → Engineering Assurance Team](team-map.md#engineering-assurance-team).
+Parent: [Engineering Department → Engineering Assurance Team](../../src/agent_company/resources/organization/team-map.md#engineering-assurance-team).
 
 #### 14. Test Developer
 
@@ -153,7 +153,7 @@ Parent: [Engineering Department → Engineering Assurance Team](team-map.md#engi
 
 ### Security Engineering Team — 3 Roles
 
-Parent: [Engineering Department → Security Engineering Team](team-map.md#security-engineering-team). All three are assurance-only; none implements remediation, activates tools, accepts material risk or waives another protected subject.
+Parent: [Engineering Department → Security Engineering Team](../../src/agent_company/resources/organization/team-map.md#security-engineering-team). All three are assurance-only; none implements remediation, activates tools, accepts material risk or waives another protected subject.
 
 #### 16. Internal Security Reviewer
 
@@ -178,7 +178,7 @@ Parent: [Engineering Department → Security Engineering Team](team-map.md#secur
 
 ### Platform Engineering Team — 4 Roles
 
-Parent: [Engineering Department → Platform Engineering Team](team-map.md#platform-engineering-team).
+Parent: [Engineering Department → Platform Engineering Team](../../src/agent_company/resources/organization/team-map.md#platform-engineering-team).
 
 #### 19. Tooling Engineer
 
@@ -214,10 +214,10 @@ All four are selected Profile references, not new Roles or installed runtime def
 
 | Canonical Profile / parent | G participation | T participation | Bounded responsibility, artifact → destination | Rule / next action |
 | --- | --- | --- | --- | --- |
-| Agent Tooling and Runtime Integration / Tooling Engineer | Conditional — not triggered in G-1: no technical change; unsupported evidence transport/new technical mechanism triggers | Required for T-1 technical specification | Scoped agent-loading/validation technical candidate → independent test, Platform Artifact review and applicable Security; no governance authority selection | [Governance/technical ownership](baseline.md#governance-and-technical-ownership). Define exact inputs/write scope and any separately authorized governance handoff before use. |
-| Container or runtime-behavior Test / Test Developer | Conditional — not triggered in G-1: prose-only evidence delta, no runtime-behavior claim; behavioral/enforcement verification triggers | Required for T-1 independent behavioral-test specification | Independent test specification, fixtures and test-only helpers → review/delivery; platform or implementation defect → Tooling Engineer; defective test → Test Developer | [Assurance ownership](baseline.md#assurance-ownership). Define scoped context/paths before use; G-1 does not trigger this Profile; rescope before adding a behavioral claim. |
-| Platform Artifact / Code Reviewer | Conditional — not triggered in G-1: no platform artifacts change; technical/platform changes trigger | Required for T-1 technical/test/interface scope | Read-only review of platform candidate/test scope → findings to authorized author and scoped review evidence to delivery; no remediation edits | [Assurance ownership](baseline.md#assurance-ownership). Explicitly assign all applicable artifact domains. |
-| Agent Capability Artifact / Code Reviewer | Required for G-1 contract delta | Conditional — not triggered in T-1: no declarative change; Role/Profile, permission or context-rule change triggers | Read-only governance candidate review → AGO correction or exact-candidate decision/publication route; no self-approval/activation | [Assurance ownership](baseline.md#assurance-ownership). Define scope and reconcile the exact governance assignment before use. |
+| Agent Tooling and Runtime Integration / Tooling Engineer | Conditional — not triggered in G-1: no technical change; unsupported evidence transport/new technical mechanism triggers | Required for T-1 technical specification | Scoped agent-loading/validation technical candidate → independent test, Platform Artifact review and applicable Security; no governance authority selection | [Governance/technical ownership](../../src/agent_company/resources/organization/baseline.md#governance-and-technical-ownership). Define exact inputs/write scope and any separately authorized governance handoff before use. |
+| Container or runtime-behavior Test / Test Developer | Conditional — not triggered in G-1: prose-only evidence delta, no runtime-behavior claim; behavioral/enforcement verification triggers | Required for T-1 independent behavioral-test specification | Independent test specification, fixtures and test-only helpers → review/delivery; platform or implementation defect → Tooling Engineer; defective test → Test Developer | [Assurance ownership](../../src/agent_company/resources/organization/baseline.md#assurance-ownership). Define scoped context/paths before use; G-1 does not trigger this Profile; rescope before adding a behavioral claim. |
+| Platform Artifact / Code Reviewer | Conditional — not triggered in G-1: no platform artifacts change; technical/platform changes trigger | Required for T-1 technical/test/interface scope | Read-only review of platform candidate/test scope → findings to authorized author and scoped review evidence to delivery; no remediation edits | [Assurance ownership](../../src/agent_company/resources/organization/baseline.md#assurance-ownership). Explicitly assign all applicable artifact domains. |
+| Agent Capability Artifact / Code Reviewer | Required for G-1 contract delta | Conditional — not triggered in T-1: no declarative change; Role/Profile, permission or context-rule change triggers | Read-only governance candidate review → AGO correction or exact-candidate decision/publication route; no self-approval/activation | [Assurance ownership](../../src/agent_company/resources/organization/baseline.md#assurance-ownership). Define scope and reconcile the exact governance assignment before use. |
 
 ## Definition backlog and readiness
 
@@ -230,8 +230,8 @@ Incomplete definitions do not block bounded authoring. They do block claims of o
 ### Shared downstream handoffs
 
 - Resolve supporting participation, triggers, bounded inputs and destinations before operational use. Additional definitions require explicit scope; do not hide a full catalog inside a coverage entry.
-- Reconcile permission and exact-revision decisions against [authority and governance rules](baseline.md#authority-and-role-boundaries). Human Leadership supplies protected decisions; documentation cannot grant them.
-- Bind handoff, context and outcome fields to exact artifact revisions under [handoff and outcome rules](baseline.md#handoffs-and-outcomes). Preserve reviewer context, correction routes and missing/stale-input stops.
+- Reconcile permission and exact-revision decisions against [authority and governance rules](../../src/agent_company/resources/organization/baseline.md#authority-and-role-boundaries). Human Leadership supplies protected decisions; documentation cannot grant them.
+- Bind handoff, context and outcome fields to exact artifact revisions under [handoff and outcome rules](../../src/agent_company/resources/organization/baseline.md#handoffs-and-outcomes). Preserve reviewer context, correction routes and missing/stale-input stops.
 - Record paper-walkthrough observations separately from expected outcomes. Integrated review cannot replace a required independent decision or upstream acceptance.
 
 ### Stops and decision destinations
@@ -241,8 +241,8 @@ Incomplete definitions do not block bounded authoring. They do block claims of o
 - Route unknown authority, conflicting lower-level permission versus Company prohibition, or material scope/risk decisions to **Human Leadership**, with exact shared permission/decision linkage and Issue Delivery Manager coordinating the bounded escalation. A lower scope cannot manufacture permission.
 - Review defects return to the relevant author. No reviewer repairs its own subject. Missing specialist/human evidence cannot become a successful transition. Material candidate changes require applicable renewed review/decision; publication is distinct from human approval, merge and governance activation.
 
-Apply the shared [authority](baseline.md#authority-and-role-boundaries) and [outcome](baseline.md#handoffs-and-outcomes) rules. They add no runtime enforcement or decision authority. Human Leadership and Control Plane infrastructure are necessary boundaries but are **not counted as Roles**. Teams, departments and Profiles also remain outside the 22-Role count.
+Apply the shared [authority](../../src/agent_company/resources/organization/baseline.md#authority-and-role-boundaries) and [outcome](../../src/agent_company/resources/organization/baseline.md#handoffs-and-outcomes) rules. They add no runtime enforcement or decision authority. Human Leadership and Control Plane infrastructure are necessary boundaries but are **not counted as Roles**. Teams, departments and Profiles also remain outside the 22-Role count.
 
 ## Shared rules
 
-Apply the baseline’s [authority](baseline.md#authority-and-role-boundaries), [assurance](baseline.md#assurance-ownership), [context](baseline.md#context-and-independent-assurance) and [handoff/outcome](baseline.md#handoffs-and-outcomes) rules. Company-specific inputs must satisfy the [source contract](../authoring/definition-format.md#source-reference-contract).
+Apply the baseline’s [authority](../../src/agent_company/resources/organization/baseline.md#authority-and-role-boundaries), [assurance](../../src/agent_company/resources/organization/baseline.md#assurance-ownership), [context](../../src/agent_company/resources/organization/baseline.md#context-and-independent-assurance) and [handoff/outcome](../../src/agent_company/resources/organization/baseline.md#handoffs-and-outcomes) rules. Company-specific inputs must satisfy the [source contract](../../src/agent_company/resources/templates/definition-format.md#source-reference-contract).
