@@ -258,6 +258,27 @@ def test_bracketed_destinations_with_spaces_are_checked(tmp_path: Path) -> None:
     assert faults == [None, "broken link: no file.md (file not found)", None, None]
 
 
+def test_check_target_checks_same_file_anchors_without_walking_a_path(tmp_path: Path) -> None:
+    """Resolve a bare ``#fragment`` against the containing file's own headings.
+
+    Args:
+        tmp_path: Disposable directory supplied by pytest for this case.
+    """
+    tree(tmp_path, {"docs/a.md": "# Top\n\n## Rules v1.2\n"})
+    source = tmp_path / "docs" / "a.md"
+    cache: dict[Path, set[str]] = {}
+    listings: dict[Path, set[str]] = {}
+    # An empty path part names the source itself, so no directory component is walked.
+    assert check_links.check_target(source, "#top", cache, listings) is None
+    assert check_links.check_target(source, "#rules-v12", cache, listings) is None
+    assert check_links.check_target(source, "./#top", cache, listings) is None
+    assert listings == {}
+    # A missing heading is still a broken anchor, never a missing file.
+    assert check_links.check_target(source, "#nope", cache, listings) == (
+        "broken anchor: #nope (no heading #nope)"
+    )
+
+
 def test_check_target_reports_letter_case_mismatches_on_every_platform(tmp_path: Path) -> None:
     """Require exact file and directory names even where the filesystem ignores case.
 
