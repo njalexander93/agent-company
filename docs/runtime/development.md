@@ -175,11 +175,12 @@ native scenarios, per-function obligations, and coverage exceptions.
 | `make format-check` | Ruff formatting without changing files. |
 | `make lint` | Ruff errors, warnings, imports, docstrings and logging rules; no automatic fixes. |
 | `make type-check` | Mypy on production code under `src/agent_company/`. |
+| `make ticket-references` | Fail on Linear issue identifiers or issue URLs in tracked files; describe events instead. |
 | `make test-unit` | Run `tests/unit` without imposing aggregate coverage on the subset. |
 | `make test-integration` | Run `tests/integration` without a subset coverage gate. |
 | `poetry run python scripts/dev.py test-tooling --evidence-dir OUT` | Collect validation-tool coverage separately from production coverage. |
 | `make test` | Pytest, branch-aware coverage and the configured 80% coverage floor. |
-| `make check-local` | Configuration, formatting, lint, types and all tests on this OS; save coverage for combination. |
+| `make check-local` | Configuration, formatting, lint, types, issue-reference guard and all tests on this OS; save coverage for combination. |
 | `make check` or `make ci` | Strict single-run checks, including the whole-package 80% coverage floor. |
 | `make format` | Apply Ruff formatting. Review the resulting diff. |
 | `make build` | Build a local wheel under `dist/`; no upload or release. |
