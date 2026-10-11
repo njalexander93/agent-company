@@ -428,6 +428,13 @@ shapes, duplicate callbacks, host separation, strict bootstrap rejection, and im
 All three adapters have ticket-first startup regression coverage. Native protocol
 tests use synthetic events; they are not actual host callbacks.
 
+Inside the Claude desktop app's command sandbox, the `tests/integration/tooling` cases that
+require child-process coverage (the coverage smoke, `check-local`, platform-coverage and
+PR-workflow tests) fail with `child-only coverage: failed` at any commit, because the sandbox
+blocks the child interpreter's coverage startup; observed 2026-10-11 on macOS at the base
+and branch commits alike, with an unsandboxed rerun refused by the hook. Treat native CI as
+the arbiter for `make check` from such a session and do not weaken those tests to pass there.
+
 Before claiming actual-host acceptance, use a disposable registered repository and retain:
 
 1. The installed host version and evidence that these exact project hook definitions loaded once.
