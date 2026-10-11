@@ -262,3 +262,77 @@ def test_preparation_tool_bounds_tool_search_and_paths(
         ("Write", {"file_path": agents}),
     ]:
         assert common.preparation_tool(event(tool, args), "claude-code") is False, args
+
+
+@pytest.mark.parametrize("operation", sorted(common.APP_PR_OPERATIONS))
+def test_app_pr_monitor_admits_only_named_operations_for_a_parent(operation: str) -> None:
+    """Admit the desktop app's PR-monitor reads and arming for a parent only.
+
+    Args:
+        operation: One admitted PR-monitor operation.
+    """
+    # The exact qualified name is admitted with or without a matching server object.
+    event: JsonObject = {
+        "tool_name": f"mcp__ccd_pr__{operation}",
+        "tool_input": {},
+        "tool_use_id": "native-call",
+    }
+    assert common._app_pr_monitor_tool(event, "claude-code") == (operation, None)
+    served = {**event, "mcp_server": {"name": "ccd_pr", "source": "observed"}}
+    assert common._app_pr_monitor_tool(served, "claude-code") == (operation, "observed")
+    assert common.native_tool(served, "claude-code") == served["tool_name"]
+    # Another host, server name, source shape or server object never qualifies.
+    for changed, host in [
+        (served, "cursor"),
+        ({**served, "mcp_server": {"name": "linear", "source": "user"}}, "claude-code"),
+        ({**served, "mcp_server": {"name": "ccd_pr", "source": None}}, "claude-code"),
+        ({**served, "mcp_server": {"name": "ccd_pr"}}, "claude-code"),
+        ({**served, "mcp_server": "ccd_pr"}, "claude-code"),
+    ]:
+        assert common._app_pr_monitor_tool(changed, host) is None
+        with pytest.raises(core.WorkspaceError) as failure:
+            common.native_tool(changed, host)
+        assert failure.value.code == "HOST_UNSUPPORTED_PROVIDER"
+    # A child identity receives neither operation.
+    with pytest.raises(core.WorkspaceError) as child_failure:
+        common.native_tool({**served, "child": True}, "claude-code")
+    assert child_failure.value.code == "HOST_UNSUPPORTED_PROVIDER"
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "mcp__ccd_pr__set_auto_merge",
+        "mcp__ccd_pr__bind_pr",
+        "mcp__ccd_pr__unbind_pr",
+        "mcp__ccd_session_mgmt__get_session",
+        "mcp__ccd_settings__set_setting",
+        "mcp__ccd_pr__get_status_x",
+        "mcp__other__get_status",
+    ],
+)
+def test_app_pr_monitor_denies_other_app_tools(name: str) -> None:
+    """Keep auto-merge, PR binding and other desktop-app servers denied.
+
+    Args:
+        name: A qualified app tool outside the PR-monitor allowlist.
+    """
+    # Neither a missing nor a self-consistent server object widens the allowlist.
+    server = name.split("__")[1]
+    for event in [
+        {"tool_name": name, "tool_input": {}, "tool_use_id": "c"},
+        {"tool_name": name, "tool_input": {}, "tool_use_id": "c", "mcp_server": {"name": server}},
+    ]:
+        assert common._app_pr_monitor_tool(event, "claude-code") is None
+        with pytest.raises(core.WorkspaceError) as failure:
+            common.native_tool(event, "claude-code")
+        assert failure.value.code == "HOST_UNSUPPORTED_PROVIDER"
+
+
+def test_unsupported_provider_recovery_names_app_pr_monitor() -> None:
+    """Name the admitted PR-monitor operations in the Claude recovery message only."""
+    # The Claude message lists both operations; Cursor's message is unchanged.
+    message = common.recovery("HOST_UNSUPPORTED_PROVIDER", "claude-code")
+    assert "get_status" in message
+    assert "set_monitor" in message
+    assert "set_monitor" not in common.recovery("HOST_UNSUPPORTED_PROVIDER", "cursor")

@@ -322,3 +322,96 @@ def test_ready_session_tracks_configured_provider_operations(
     finally:
         # Release filesystem state even when an assertion fails.
         case.doCleanups()
+
+
+def test_ready_parent_tracks_app_pr_monitor_operations(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Admit the desktop app's PR-monitor read and arming as pending work after readiness.
+
+    Args:
+        monkeypatch: Scoped environment configuration for the connector binding.
+    """
+    # Create the disposable Desktop repository with the connector mapped.
+    case = _desktop_case(monkeypatch)
+    try:
+
+        def monitor(name: str, tool: str, tool_id: str, **fields: object) -> core.JSONObject:
+            """Build one desktop-app PR tool event.
+
+            Args:
+                name: Native hook event name.
+                tool: Qualified native tool name.
+                tool_id: Native tool-use identifier.
+                **fields: Event-specific fields, such as the result or server object.
+
+            Returns:
+                The native Claude envelope.
+            """
+            return native_event(
+                "claude",
+                case,
+                name,
+                tool_name=tool,
+                tool_input={"pr_url": "https://example.test/pull/1"},
+                tool_use_id=tool_id,
+                **fields,
+            )
+
+        def pending() -> dict[str, object]:
+            """Read the coordinator's pending native tool map.
+
+            Returns:
+                Pending tool entries keyed by native tool ID.
+            """
+            return case.state()["participants"][case.base["coordinator"]]["pending"]
+
+        # Before readiness the PR-monitor read is denied like any other call.
+        _start_desktop_task(case)
+        early = monitor("PreToolUse", "mcp__ccd_pr__get_status", "early")
+        assert _denied(claude.handle(early), "TICKET_READ_REQUIRED")
+        _ready_desktop(case)
+        server = {"name": "ccd_pr", "source": "observed"}
+        # The status read is pending work settled by its native result.
+        read = monitor("PreToolUse", "mcp__ccd_pr__get_status", "status", mcp_server=server)
+        assert claude.handle(read) == {}
+        assert "status" in pending()
+        done = monitor(
+            "PostToolUse",
+            "mcp__ccd_pr__get_status",
+            "status",
+            mcp_server=server,
+            tool_response=[{"type": "text", "text": "{}"}],
+        )
+        assert claude.handle(done) == {}
+        assert pending() == {}
+        # Arming the monitor is admitted the same way and settled by its failure event.
+        arm = monitor("PreToolUse", "mcp__ccd_pr__set_monitor", "arm")
+        assert claude.handle(arm) == {}
+        assert "arm" in pending()
+        failed = monitor(
+            "PostToolUseFailure",
+            "mcp__ccd_pr__set_monitor",
+            "arm",
+            error="denied",
+            is_interrupt=False,
+        )
+        assert claude.handle(failed) == {}
+        assert pending() == {}
+        # Auto-merge, PR binding, other app servers and a wrong server name stay denied.
+        before = case.state()
+        for event in (
+            monitor("PreToolUse", "mcp__ccd_pr__set_auto_merge", "merge"),
+            monitor("PreToolUse", "mcp__ccd_pr__bind_pr", "bind"),
+            monitor("PreToolUse", "mcp__ccd_session_mgmt__get_session", "session"),
+            monitor(
+                "PreToolUse",
+                "mcp__ccd_pr__get_status",
+                "wrong-server",
+                mcp_server={"name": "linear", "source": "user"},
+            ),
+        ):
+            # Each rejected call leaves lifecycle state unchanged.
+            assert _denied(claude.handle(event), "HOST_UNSUPPORTED_PROVIDER")
+        assert case.state() == before
+    finally:
+        # Release filesystem state even when an assertion fails.
+        case.doCleanups()
