@@ -6,10 +6,10 @@ doc_type: maintenance-contract
 ## Inputs
 
 - Working: authorized objective, exact candidate/parent, assigned output path and permitted Company inputs.
-- Reference: [authoring route](definition-format.md#authoring-route), [field guidance](definition-format.md#role-field-guidance), [completeness](definition-format.md#completeness-and-gaps), [source contract](definition-format.md#source-reference-contract) and [review criteria](definition-format.md#review-and-maintenance).
-- Select the canonical Role entry in [coverage](../framework/role-coverage.md#canonical-role-inventory) and its owning unit in [Teams](../framework/team-map.md#teams) or [Company-level staff placement](../framework/team-map.md#placement-and-authority); use only the selected entries.
-- Read the applicable [authority](../framework/baseline.md#authority-and-role-boundaries), [sources](../framework/baseline.md#source-authority-and-retrieval), [context](../framework/baseline.md#context-and-independent-assurance) and [outcome](../framework/baseline.md#handoffs-and-outcomes) sections. Add [governance ownership](../framework/baseline.md#governance-and-technical-ownership) for AGO or [assurance ownership](../framework/baseline.md#assurance-ownership) for assurance scopes.
-- Copy the blank [Role template](_templates/role.md) or [Profile template](_templates/profile.md), following the [template contract](_templates/CONTEXT.md). For a Profile, also read the exact permitted parent and [Profile guidance](definition-format.md#profile-template).
+- Reference: [authoring route](../../src/agent_company/resources/templates/definition-format.md#authoring-route), [field guidance](../../src/agent_company/resources/templates/definition-format.md#role-field-guidance), [completeness](../../src/agent_company/resources/templates/definition-format.md#completeness-and-gaps), [source contract](../../src/agent_company/resources/templates/definition-format.md#source-reference-contract) and [review criteria](../../src/agent_company/resources/templates/definition-format.md#review-and-maintenance).
+- Select the canonical Role entry in [coverage](../framework/role-coverage.md#canonical-role-inventory) and its owning unit in [Teams](../../src/agent_company/resources/organization/team-map.md#teams) or [Company-level staff placement](../../src/agent_company/resources/organization/team-map.md#placement-and-authority); use only the selected entries.
+- Read the applicable [authority](../../src/agent_company/resources/organization/baseline.md#authority-and-role-boundaries), [sources](../../src/agent_company/resources/organization/baseline.md#source-authority-and-retrieval), [context](../../src/agent_company/resources/organization/baseline.md#context-and-independent-assurance) and [outcome](../../src/agent_company/resources/organization/baseline.md#handoffs-and-outcomes) sections. Add [governance ownership](../../src/agent_company/resources/organization/baseline.md#governance-and-technical-ownership) for AGO or [assurance ownership](../../src/agent_company/resources/organization/baseline.md#assurance-ownership) for assurance scopes.
+- Copy the blank [Role template](../../src/agent_company/resources/templates/role.md) or [Profile template](../../src/agent_company/resources/templates/profile.md), following the [template contract](../../src/agent_company/resources/templates/README.md). For a Profile, also read the exact permitted parent and [Profile guidance](../../src/agent_company/resources/templates/definition-format.md#profile-template).
 
 ## Process
 
@@ -19,7 +19,7 @@ doc_type: maintenance-contract
 
 ## Outputs
 
-One scoped Role/Profile draft plus field/source checks and unresolved gaps in its assigned evidence record. This folder holds reference format/templates, not every draft.
+One scoped Role/Profile draft plus field/source checks and unresolved gaps in its assigned evidence record. The packaged templates folder holds the reference format/templates, not every draft.
 
 ## Human check
 

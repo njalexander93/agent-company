@@ -515,6 +515,33 @@ def test_child_provider_writes_are_denied(case: Fixture, operation: str) -> None
     assert "parent-write" in case.state()["participants"][case.base["coordinator"]]["pending"]
 
 
+@pytest.mark.parametrize("operation", ["get_status", "set_monitor"])
+def test_child_app_pr_monitor_is_denied(case: Fixture, operation: str) -> None:
+    """Deny the desktop app's PR-monitor tools to a ready child; its parent keeps them.
+
+    Args:
+        case: Disposable repository fixture.
+        operation: Admitted PR-monitor operation the child attempts.
+    """
+    # The ready child's call is denied without recording pending work.
+    start_child(case)
+    before = copy.deepcopy(case.state())
+    fields: dict[str, JsonValue] = {
+        "tool_name": "mcp__ccd_pr__" + operation,
+        "tool_input": {},
+        "mcp_server": {"name": "ccd_pr", "source": "sdk"},
+    }
+    response = claude.handle(
+        event(case, "PreToolUse", child=True, tool_use_id="child-pr", **fields)
+    )
+    assert denied(response)
+    assert "HOST_UNSUPPORTED_PROVIDER" in response["hookSpecificOutput"]["permissionDecisionReason"]
+    assert case.state() == before
+    # The same call from the ready parent remains admitted as pending work.
+    assert not denied(claude.handle(event(case, "PreToolUse", tool_use_id="parent-pr", **fields)))
+    assert "parent-pr" in case.state()["participants"][case.base["coordinator"]]["pending"]
+
+
 def test_child_handback_and_parent_message_record_no_pending_work(case: Fixture) -> None:
     """Admit the child's hand-back and the parent's message without pending entries.
 

@@ -6,17 +6,17 @@ doc_type: maintenance-contract
 ## Inputs
 
 - Working: named rule change and affected Role/Company scope.
-- Reference: the exact section of [baseline.md](baseline.md); selected owning unit in [Teams](team-map.md#teams) or [Company-level staff placement](team-map.md#placement-and-authority); selected numbered Role entry and, if relevant, Profile row in [role-coverage.md](role-coverage.md#canonical-role-inventory).
-- For changed definition semantics: [field guidance](../authoring/definition-format.md#role-field-guidance) and [review criteria](../authoring/definition-format.md#review-and-maintenance).
+- Reference: the exact section of the packaged [baseline.md](../../src/agent_company/resources/organization/baseline.md) or the contributor [baseline.md](baseline.md); selected owning unit in [Teams](../../src/agent_company/resources/organization/team-map.md#teams) or [Company-level staff placement](../../src/agent_company/resources/organization/team-map.md#placement-and-authority); selected numbered Role entry and, if relevant, Profile row in [role-coverage.md](role-coverage.md#canonical-role-inventory).
+- For changed definition semantics: [field guidance](../../src/agent_company/resources/templates/definition-format.md#role-field-guidance) and [review criteria](../authoring/definition-format.md#review-and-maintenance).
 
 ### Rule topics
 
-- [Planning and assignment](baseline.md#planning-and-wave-boundaries) · [Model and capacity](baseline.md#model-and-capacity-boundaries)
-- [Authority](baseline.md#authority-and-role-boundaries) · [Sources](baseline.md#source-authority-and-retrieval)
-- [Context and independence](baseline.md#context-and-independent-assurance) · [Assurance ownership](baseline.md#assurance-ownership)
-- [Governance and technical ownership](baseline.md#governance-and-technical-ownership) · [Handoffs](baseline.md#handoffs-and-outcomes)
+- [Planning and assignment](../../src/agent_company/resources/organization/baseline.md#planning-and-wave-boundaries) · [Model and capacity](../../src/agent_company/resources/organization/baseline.md#model-and-capacity-boundaries)
+- [Authority](../../src/agent_company/resources/organization/baseline.md#authority-and-role-boundaries) · [Sources](../../src/agent_company/resources/organization/baseline.md#source-authority-and-retrieval)
+- [Context and independence](../../src/agent_company/resources/organization/baseline.md#context-and-independent-assurance) · [Assurance ownership](../../src/agent_company/resources/organization/baseline.md#assurance-ownership)
+- [Governance and technical ownership](../../src/agent_company/resources/organization/baseline.md#governance-and-technical-ownership) · [Handoffs](../../src/agent_company/resources/organization/baseline.md#handoffs-and-outcomes)
 - [Working locations](baseline.md#working-locations-and-ownership) · [Publication](baseline.md#authoring-and-publication-rules)
-- [Paper scope](baseline.md#selected-paper-fixtures-and-exclusions) · [Setup](baseline.md#setup-boundary) · [Evidence and privacy](baseline.md#evidence-and-privacy)
+- [Paper scope](baseline.md#selected-paper-fixtures-and-exclusions) · [Setup](baseline.md#setup-boundary) · [Evidence and privacy](../../src/agent_company/resources/organization/baseline.md#evidence-and-privacy)
 
 ## Process
 

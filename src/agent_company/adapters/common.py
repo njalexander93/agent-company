@@ -397,6 +397,15 @@ LINEAR_PROVIDER_OPERATIONS = frozenset(
 # A child subagent receives only the read operations; writes stay with its parent.
 LINEAR_CHILD_OPERATIONS = LINEAR_PROVIDER_OPERATIONS - {"save_issue", "save_comment"}
 PREPARATION_FILES = ("docs/runtime/contributor-workflow.md", "AGENTS.md")
+# The Claude desktop app's built-in PR-monitor server: a parent may read a PR's state
+# and turn on the app's monitor. Auto-merge, PR binding and every other app server
+# (session management, settings and the rest) stay denied, and a child gets none.
+APP_PR_SERVER = "ccd_pr"
+APP_PR_OPERATIONS = frozenset({"get_status", "set_monitor"})
+# The desktop app reports its built-in server with this provenance source; captured
+# from a live PreToolUse event on 2026-10-11 (macOS Desktop) and pinned like the
+# configured Linear connector's sources.
+APP_PR_SOURCE = "sdk"
 
 
 def _linear_provider_tool(event: core.JSONObject, host: str) -> str | None:
@@ -433,6 +442,41 @@ def _linear_provider_tool(event: core.JSONObject, host: str) -> str | None:
     prefix = "mcp__" + server["name"] + "__"
     operation = name[len(prefix) :] if name.startswith(prefix) else None
     return operation if operation in LINEAR_PROVIDER_OPERATIONS else None
+
+
+def _app_pr_monitor_tool(event: core.JSONObject, host: str) -> str | None:
+    """Identify one call to the Claude desktop app's built-in PR-monitor tools.
+
+    The server is built into the desktop app rather than configured by an operator,
+    so its identity is pinned to the provenance the app itself reports: the hook's
+    ``mcp_server`` object must name this server with the captured ``source``. A call
+    without that object, or with any other name or source, is not this server.
+
+    Args:
+        event: Native tool event carrying the MCP-qualified name and server object.
+        host: Native adapter identity; only Claude Code has this route.
+
+    Returns:
+        The admitted operation, or None for any other host, server, operation or identity.
+    """
+    # Cursor and other hosts have no desktop-app PR tools.
+    if host != "claude-code":
+        return None
+    # Only the exact qualified names of the two admitted operations qualify.
+    name = event.get("tool_name")
+    prefix = "mcp__" + APP_PR_SERVER + "__"
+    operation = name[len(prefix) :] if isinstance(name, str) and name.startswith(prefix) else None
+    if operation not in APP_PR_OPERATIONS:
+        return None
+    # The server object must carry the app's own name and captured provenance source.
+    server = event.get("mcp_server")
+    if not (
+        isinstance(server, dict)
+        and server.get("name") == APP_PR_SERVER
+        and server.get("source") == APP_PR_SOURCE
+    ):
+        return None
+    return operation
 
 
 def _preparation_path(event: core.JSONObject, value: object, exact: bool = False) -> bool:
@@ -1198,9 +1242,14 @@ def native_tool(event: core.JSONObject, host: str) -> str:
     # Require a structured native tool input for supported synchronous work.
     if not isinstance(args, dict):
         raise core.WorkspaceError("INVALID_REQUEST")
-    # Only the configured Claude Linear connector's allowlisted operations become
-    # ordinary pending work; every other provider route stays unsupported.
+    # Only the configured Claude Linear connector's allowlisted operations and the
+    # desktop app's two PR-monitor operations become ordinary pending work; every
+    # other provider route stays unsupported.
     if tool.startswith(("mcp__", "MCP:")) or event.get("mcp_server") is not None:
+        # A parent may read and arm the app's PR monitor; delivery stays with the parent.
+        if _app_pr_monitor_tool(event, host) is not None:
+            core.require(event.get("child") is not True, "HOST_UNSUPPORTED_PROVIDER")
+            return tool
         operation = _linear_provider_tool(event, host)
         core.require(operation is not None, "HOST_UNSUPPORTED_PROVIDER")
         # A child subagent gets no provider writes; issue delivery stays with the parent.
@@ -1788,8 +1837,9 @@ def _recovery_route(code: str, host: str) -> str:
     if code == "HOST_UNSUPPORTED_PROVIDER":
         admitted = (
             " After readiness, only the configured Linear connector's get_issue, get_user, "
-            "list_users, list_issue_statuses, list_comments, save_issue and save_comment are "
-            "admitted."
+            "list_users, list_issue_statuses, list_comments, save_issue and save_comment, "
+            "and for a parent session the desktop app's PR monitor get_status and "
+            "set_monitor (ccd_pr), are admitted."
             if host == "claude-code"
             else ""
         )

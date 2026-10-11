@@ -29,8 +29,8 @@ For contributions, follow the [local checks](docs/runtime/development.md#checks)
 
 ## Explore the framework
 
-- [Organization and teams](docs/framework/team-map.md)
-- [Role and profile definitions](docs/authoring/definition-format.md)
+- [Organization and teams](src/agent_company/resources/organization/team-map.md)
+- [Role and profile definitions](src/agent_company/resources/templates/definition-format.md)
 - [Documentation index](docs/README.md)
 
 ## License

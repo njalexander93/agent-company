@@ -30,6 +30,7 @@ COMMANDS: dict[str, list[list[str]]] = {
     ],
     "type-check": [["poetry", "run", "mypy"]],
     "ticket-references": [["poetry", "run", "python", "scripts/ticket_references.py"]],
+    "check-links": [["poetry", "run", "python", "scripts/check_links.py"]],
     "test": [["poetry", "run", "pytest", "--cov", "--cov-report=term-missing"]],
     "test-unit": [["poetry", "run", "pytest", "tests/unit"]],
     "test-integration": [["poetry", "run", "pytest", "tests/integration"]],
