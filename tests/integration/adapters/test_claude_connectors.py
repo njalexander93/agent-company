@@ -369,7 +369,7 @@ def test_ready_parent_tracks_app_pr_monitor_operations(monkeypatch: pytest.Monke
         early = monitor("PreToolUse", "mcp__ccd_pr__get_status", "early")
         assert _denied(claude.handle(early), "TICKET_READ_REQUIRED")
         _ready_desktop(case)
-        server = {"name": "ccd_pr", "source": "observed"}
+        server = {"name": "ccd_pr", "source": "sdk"}
         # The status read is pending work settled by its native result.
         read = monitor("PreToolUse", "mcp__ccd_pr__get_status", "status", mcp_server=server)
         assert claude.handle(read) == {}
@@ -384,24 +384,33 @@ def test_ready_parent_tracks_app_pr_monitor_operations(monkeypatch: pytest.Monke
         assert claude.handle(done) == {}
         assert pending() == {}
         # Arming the monitor is admitted the same way and settled by its failure event.
-        arm = monitor("PreToolUse", "mcp__ccd_pr__set_monitor", "arm")
+        arm = monitor("PreToolUse", "mcp__ccd_pr__set_monitor", "arm", mcp_server=server)
         assert claude.handle(arm) == {}
         assert "arm" in pending()
         failed = monitor(
             "PostToolUseFailure",
             "mcp__ccd_pr__set_monitor",
             "arm",
+            mcp_server=server,
             error="denied",
             is_interrupt=False,
         )
         assert claude.handle(failed) == {}
         assert pending() == {}
-        # Auto-merge, PR binding, other app servers and a wrong server name stay denied.
+        # Auto-merge, PR binding, other app servers, a missing server object, another
+        # provenance source and a wrong server name stay denied.
         before = case.state()
         for event in (
-            monitor("PreToolUse", "mcp__ccd_pr__set_auto_merge", "merge"),
-            monitor("PreToolUse", "mcp__ccd_pr__bind_pr", "bind"),
+            monitor("PreToolUse", "mcp__ccd_pr__set_auto_merge", "merge", mcp_server=server),
+            monitor("PreToolUse", "mcp__ccd_pr__bind_pr", "bind", mcp_server=server),
             monitor("PreToolUse", "mcp__ccd_session_mgmt__get_session", "session"),
+            monitor("PreToolUse", "mcp__ccd_pr__get_status", "no-server"),
+            monitor(
+                "PreToolUse",
+                "mcp__ccd_pr__get_status",
+                "wrong-source",
+                mcp_server={"name": "ccd_pr", "source": "user"},
+            ),
             monitor(
                 "PreToolUse",
                 "mcp__ccd_pr__get_status",

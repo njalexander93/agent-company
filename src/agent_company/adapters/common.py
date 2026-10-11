@@ -402,6 +402,10 @@ PREPARATION_FILES = ("docs/runtime/contributor-workflow.md", "AGENTS.md")
 # (session management, settings and the rest) stay denied, and a child gets none.
 APP_PR_SERVER = "ccd_pr"
 APP_PR_OPERATIONS = frozenset({"get_status", "set_monitor"})
+# The desktop app reports its built-in server with this provenance source; captured
+# from a live PreToolUse event on 2026-10-11 (macOS Desktop) and pinned like the
+# configured Linear connector's sources.
+APP_PR_SOURCE = "sdk"
 
 
 def _linear_provider_tool(event: core.JSONObject, host: str) -> str | None:
@@ -440,22 +444,20 @@ def _linear_provider_tool(event: core.JSONObject, host: str) -> str | None:
     return operation if operation in LINEAR_PROVIDER_OPERATIONS else None
 
 
-def _app_pr_monitor_tool(event: core.JSONObject, host: str) -> tuple[str, str | None] | None:
+def _app_pr_monitor_tool(event: core.JSONObject, host: str) -> str | None:
     """Identify one call to the Claude desktop app's built-in PR-monitor tools.
 
-    The server is built into the desktop app, so its provenance is the app's own
-    rather than an operator-configured connector. The ``mcp_server.source`` value the
-    hook receives for it has not been captured from a live session yet; the host guide
-    records it once the live capture is made. Until then any string source is
-    accepted, but a present ``mcp_server`` object must name this server.
+    The server is built into the desktop app rather than configured by an operator,
+    so its identity is pinned to the provenance the app itself reports: the hook's
+    ``mcp_server`` object must name this server with the captured ``source``. A call
+    without that object, or with any other name or source, is not this server.
 
     Args:
-        event: Native tool event carrying the MCP-qualified name and optional server object.
+        event: Native tool event carrying the MCP-qualified name and server object.
         host: Native adapter identity; only Claude Code has this route.
 
     Returns:
-        The admitted operation and the observed source (None when the host sent no
-        server object), or None for any other host, server, operation or identity.
+        The admitted operation, or None for any other host, server, operation or identity.
     """
     # Cursor and other hosts have no desktop-app PR tools.
     if host != "claude-code":
@@ -466,18 +468,15 @@ def _app_pr_monitor_tool(event: core.JSONObject, host: str) -> tuple[str, str | 
     operation = name[len(prefix) :] if isinstance(name, str) and name.startswith(prefix) else None
     if operation not in APP_PR_OPERATIONS:
         return None
-    # Without a server object, the exact qualified name is the whole identity.
+    # The server object must carry the app's own name and captured provenance source.
     server = event.get("mcp_server")
-    if server is None:
-        return operation, None
-    # A present server object must name this server and report a string source.
     if not (
         isinstance(server, dict)
         and server.get("name") == APP_PR_SERVER
-        and isinstance(server.get("source"), str)
+        and server.get("source") == APP_PR_SOURCE
     ):
         return None
-    return operation, server["source"]
+    return operation
 
 
 def _preparation_path(event: core.JSONObject, value: object, exact: bool = False) -> bool:

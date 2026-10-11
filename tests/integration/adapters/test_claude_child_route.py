@@ -529,7 +529,7 @@ def test_child_app_pr_monitor_is_denied(case: Fixture, operation: str) -> None:
     fields: dict[str, JsonValue] = {
         "tool_name": "mcp__ccd_pr__" + operation,
         "tool_input": {},
-        "mcp_server": {"name": "ccd_pr", "source": "observed"},
+        "mcp_server": {"name": "ccd_pr", "source": "sdk"},
     }
     response = claude.handle(
         event(case, "PreToolUse", child=True, tool_use_id="child-pr", **fields)

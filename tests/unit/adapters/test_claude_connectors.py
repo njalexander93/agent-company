@@ -271,20 +271,22 @@ def test_app_pr_monitor_admits_only_named_operations_for_a_parent(operation: str
     Args:
         operation: One admitted PR-monitor operation.
     """
-    # The exact qualified name is admitted with or without a matching server object.
+    # The exact qualified name is admitted only with the app's captured server identity.
     event: JsonObject = {
         "tool_name": f"mcp__ccd_pr__{operation}",
         "tool_input": {},
         "tool_use_id": "native-call",
     }
-    assert common._app_pr_monitor_tool(event, "claude-code") == (operation, None)
-    served = {**event, "mcp_server": {"name": "ccd_pr", "source": "observed"}}
-    assert common._app_pr_monitor_tool(served, "claude-code") == (operation, "observed")
+    served = {**event, "mcp_server": {"name": "ccd_pr", "source": "sdk"}}
+    assert common._app_pr_monitor_tool(served, "claude-code") == operation
     assert common.native_tool(served, "claude-code") == served["tool_name"]
-    # Another host, server name, source shape or server object never qualifies.
+    # A missing server object, another host, name, source or shape never qualifies.
     for changed, host in [
+        (event, "claude-code"),
         (served, "cursor"),
         ({**served, "mcp_server": {"name": "linear", "source": "user"}}, "claude-code"),
+        ({**served, "mcp_server": {"name": "ccd_pr", "source": "user"}}, "claude-code"),
+        ({**served, "mcp_server": {"name": "ccd_pr", "source": "observed"}}, "claude-code"),
         ({**served, "mcp_server": {"name": "ccd_pr", "source": None}}, "claude-code"),
         ({**served, "mcp_server": {"name": "ccd_pr"}}, "claude-code"),
         ({**served, "mcp_server": "ccd_pr"}, "claude-code"),
