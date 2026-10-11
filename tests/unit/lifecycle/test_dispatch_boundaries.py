@@ -41,9 +41,9 @@ def test_collect_candidates_uses_separate_sessions_and_bounded_requests(
     monkeypatch.setattr(core, "execute", execute)
     request: dict[str, Any] = {
         "cleanup_candidates": [
-            {"issue_id": "AGENT-29", "session_id": "maintenance", "host": "codex"}
+            {"issue_id": "TEST-29", "session_id": "maintenance", "host": "codex"}
         ],
-        "issue_id": "AGENT-30",
+        "issue_id": "TEST-30",
         "request_id": "create-1",
         "session_id": "owner",
         "worktree": str(tmp_path / "checkout"),
@@ -51,16 +51,16 @@ def test_collect_candidates_uses_separate_sessions_and_bounded_requests(
     }
     # Confirm only the explicit candidate receives a CLEANED result.
     assert core.collect_candidates(object(), request) == [
-        {"issue_id": "AGENT-29", "ok": True, "code": "CLEANED"}
+        {"issue_id": "TEST-29", "ok": True, "code": "CLEANED"}
     ]
     assert requests == [
         {
-            "issue_id": "AGENT-29",
+            "issue_id": "TEST-29",
             "session_id": "maintenance",
             "host": "codex",
             "schema_version": 1,
             "operation": "cleanup-commit",
-            "request_id": "create-1:collect:AGENT-29",
+            "request_id": "create-1:collect:TEST-29",
             "worktree": str(tmp_path / "checkout"),
             "repo_id": "repo",
         }
@@ -70,8 +70,8 @@ def test_collect_candidates_uses_separate_sessions_and_bounded_requests(
 @pytest.mark.parametrize(
     ("candidates", "code"),
     [
-        ([{"issue_id": "AGENT-30", "session_id": "maintenance"}], "INVALID_REQUEST"),
-        ([{"issue_id": "AGENT-29", "session_id": "owner"}], "BINDING_CONFLICT"),
+        ([{"issue_id": "TEST-30", "session_id": "maintenance"}], "INVALID_REQUEST"),
+        ([{"issue_id": "TEST-29", "session_id": "owner"}], "BINDING_CONFLICT"),
         ([{"issue_id": "bad", "session_id": "maintenance"}], "INVALID_ISSUE"),
     ],
 )
@@ -97,7 +97,7 @@ def test_collect_candidates_rejects_wrong_scope_before_dispatch(
             object(),
             {
                 "cleanup_candidates": candidates,
-                "issue_id": "AGENT-30",
+                "issue_id": "TEST-30",
                 "request_id": "create-1",
                 "session_id": "owner",
                 "worktree": str(tmp_path / "checkout"),
@@ -127,13 +127,13 @@ def test_permission_paths_selects_only_issue_control_and_binding_paths(
     )
     # Confirm permission paths stay scoped to the requested issue.
     assert core.permission_paths(
-        {"worktree": str(tmp_path / "alias"), "main_worktree": str(main), "issue_id": "AGENT-30"}
+        {"worktree": str(tmp_path / "alias"), "main_worktree": str(main), "issue_id": "TEST-30"}
     ) == [
         str(root / ".task/.repository.json"),
         str(root / ".task/.bindings"),
         str(main / ".task/.control/repository.json"),
-        str(main / ".task/AGENT-30"),
-        str(main / ".task/.control/issues/AGENT-30"),
+        str(main / ".task/TEST-30"),
+        str(main / ".task/.control/issues/TEST-30"),
     ]
 
 
@@ -253,12 +253,12 @@ def test_permission_paths_discovers_main_only_from_validated_local_registration(
     # Read the registration only through a checked directory handle.
     monkeypatch.setattr(core.Directory, "absolute", lambda _root: Node())
     # Confirm permission paths stay scoped to the requested issue.
-    assert core.permission_paths({"worktree": str(root), "issue_id": "AGENT-30"}) == [
+    assert core.permission_paths({"worktree": str(root), "issue_id": "TEST-30"}) == [
         str(root / ".task/.repository.json"),
         str(root / ".task/.bindings"),
         str(main / ".task/.control/repository.json"),
-        str(main / ".task/AGENT-30"),
-        str(main / ".task/.control/issues/AGENT-30"),
+        str(main / ".task/TEST-30"),
+        str(main / ".task/.control/issues/TEST-30"),
     ]
 
 
@@ -281,7 +281,7 @@ def test_permission_paths_does_not_invent_main_when_registration_unreadable(
         lambda _root: (_ for _ in ()).throw(PermissionError("denied")),
     )
     # Confirm permission paths stay scoped to the requested issue.
-    assert core.permission_paths({"worktree": str(root), "issue_id": "AGENT-30"}) == [
+    assert core.permission_paths({"worktree": str(root), "issue_id": "TEST-30"}) == [
         str(root / ".task/.repository.json"),
         str(root / ".task/.bindings"),
     ]
@@ -365,7 +365,7 @@ def test_execute_dispatches_rebind_under_session_lock_without_opening_single_iss
         "schema_version": 1,
         "operation": "rebind",
         "request_id": "rebind-1",
-        "issue_id": "AGENT-30",
+        "issue_id": "TEST-30",
         "repo_id": "repo",
         "host": "codex",
         "session_id": "session",
@@ -480,7 +480,7 @@ def test_execute_collects_only_after_successful_create_with_explicit_candidates(
             Files collected for archive or cleanup assertions.
         """
         calls.append("collect")
-        return [{"issue_id": "AGENT-29", "ok": True}]
+        return [{"issue_id": "TEST-29", "ok": True}]
 
     # Record create dispatch before any candidate cleanup.
     monkeypatch.setattr(core, "Store", Store)
@@ -491,7 +491,7 @@ def test_execute_collects_only_after_successful_create_with_explicit_candidates(
         "schema_version": 1,
         "operation": "create",
         "request_id": "create-1",
-        "issue_id": "AGENT-30",
+        "issue_id": "TEST-30",
         "repo_id": "repo",
         "host": "codex",
         "session_id": "session",
@@ -500,7 +500,53 @@ def test_execute_collects_only_after_successful_create_with_explicit_candidates(
     assert core.execute(request) == {"ok": True, "code": "CREATED"}
     assert calls == ["create"]
     # Dispatch the create request before considering candidate cleanup.
-    result = core.execute({**request, "cleanup_candidates": [{"issue_id": "AGENT-29"}]})
+    result = core.execute({**request, "cleanup_candidates": [{"issue_id": "TEST-29"}]})
     # Confirm only the explicit candidate issue receives cleanup.
-    assert result["collection"] == [{"issue_id": "AGENT-29", "ok": True}]
+    assert result["collection"] == [{"issue_id": "TEST-29", "ok": True}]
     assert calls == ["create", "create", "collect"]
+
+
+def test_execute_reports_stale_references_beside_the_source_stale_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stale packet failure carries the changed references without exception text.
+
+    Args:
+        monkeypatch: Replaces the store boundary with a stale-source failure.
+    """
+    stale = [
+        {
+            "id": "rules",
+            "locator": "/checkout/AGENTS.md",
+            "recorded_sha256": "a" * 64,
+            "current_sha256": "b" * 64,
+            "available": True,
+        }
+    ]
+
+    def open_store(_request: dict[str, Any]) -> object:
+        """Fail the store open with the stale-source diagnostic.
+
+        Args:
+            _request: Lifecycle request, unused by this fake.
+
+        Raises:
+            core.StaleSourceError: Always, naming the stale reference.
+        """
+        raise core.StaleSourceError(stale)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(core, "Store", open_store)
+    request = {
+        "schema_version": 1,
+        "operation": "read",
+        "request_id": "read-1",
+        "issue_id": "TEST-30",
+        "repo_id": "repo",
+        "host": "codex",
+        "session_id": "session",
+    }
+    result = core.execute(request)
+    assert (result["ok"], result["code"]) == (False, "SOURCE_STALE")
+    assert result["stale"] == stale
+    # The response holds a copy, never the exception's own list.
+    assert result["stale"] is not stale

@@ -49,6 +49,9 @@ jobs:
       - name: Types
         if: ${{ !cancelled() }}
         run: poetry run python scripts/dev.py type-check --evidence-dir "$RUNNER_TEMP/python-quality/types"
+      - name: Issue references
+        if: ${{ !cancelled() }}
+        run: poetry run python scripts/dev.py ticket-references --evidence-dir "$RUNNER_TEMP/python-quality/references"
       - name: Retain quality evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

@@ -39,17 +39,15 @@ def test_codex_wrappers_fix_the_host_and_defer_to_shared_contracts(
     monkeypatch.setattr(
         codex.common,
         "prompt",
-        lambda native, host, *, attempt_attach: (
-            seen.append(("prompt", native, host, attempt_attach)) or {}
-        ),
+        lambda native, host: seen.append(("prompt", native, host)) or {},
     )
     assert codex.request_for(event, "ready") == {}
-    assert codex.automatic_attach(event, "AGENT-30") is None
+    assert codex.automatic_attach(event, "TEST-30") is None
     assert codex.prompt(event) == {}
     assert seen == [
         ("request", event, "ready", "codex"),
-        ("attach", event, "AGENT-30", "codex"),
-        ("prompt", event, "codex", False),
+        ("attach", event, "TEST-30", "codex"),
+        ("prompt", event, "codex"),
     ]
 
 
@@ -536,10 +534,10 @@ def test_codex_posttool_ticket_lookup_reports_exact_missing_issue(
         {
             "hook_event_name": "PostToolUse",
             "tool_name": "mcp__codex_apps__linear_get_issue",
-            "tool_input": {"id": "AGENT-30"},
+            "tool_input": {"id": "TEST-30"},
         }
     )
-    assert response == {"systemMessage": "TASK_WORKSPACE_NOT_READY: ISSUE_NOT_FOUND for AGENT-30"}
+    assert response == {"systemMessage": "TASK_WORKSPACE_NOT_READY: ISSUE_NOT_FOUND for TEST-30"}
 
 
 def test_codex_posttool_forwards_verified_ticket_startup_context(
@@ -876,13 +874,13 @@ def test_codex_posttool_linear_missing_reference_names_requested_issue(
         {
             "hook_event_name": "PostToolUse",
             "tool_name": "mcp__codex_apps__linear_get_issue",
-            "tool_input": {"id": "AGENT-30"},
+            "tool_input": {"id": "TEST-30"},
         }
     )
     assert response == {
         "systemMessage": (
             "TASK_WORKSPACE_NOT_READY: LINEAR_ISSUE_UNRESOLVED "
-            "Linear could not find requested issue AGENT-30."
+            "Linear could not find requested issue TEST-30."
         )
     }
 

@@ -107,7 +107,7 @@ def snapshot_state() -> dict[str, object]:
     """
     return {
         "repo_id": "repo",
-        "issue_id": "AGENT-30",
+        "issue_id": "TEST-30",
         "issue_uuid": "uuid",
         "revision": 3,
         "disposition": "active",

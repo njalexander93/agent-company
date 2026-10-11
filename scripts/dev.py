@@ -29,6 +29,7 @@ COMMANDS: dict[str, list[list[str]]] = {
         ["poetry", "run", "ruff", "check", "--no-fix", "--no-cache", "src", "tests", "scripts"]
     ],
     "type-check": [["poetry", "run", "mypy"]],
+    "ticket-references": [["poetry", "run", "python", "scripts/ticket_references.py"]],
     "test": [["poetry", "run", "pytest", "--cov", "--cov-report=term-missing"]],
     "test-unit": [["poetry", "run", "pytest", "tests/unit"]],
     "test-integration": [["poetry", "run", "pytest", "tests/integration"]],
@@ -37,7 +38,7 @@ COMMANDS: dict[str, list[list[str]]] = {
     "build": [["poetry", "build", "--format", "wheel"]],
 }
 TEST_TASKS = {"test", "test-unit", "test-integration"}
-CHECKS = ["validate-config", "format-check", "lint", "type-check", "test"]
+CHECKS = ["validate-config", "format-check", "lint", "type-check", "ticket-references", "test"]
 
 
 def clean() -> None:

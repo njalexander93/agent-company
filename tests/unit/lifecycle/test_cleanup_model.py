@@ -242,7 +242,7 @@ class Task:
             Whether the requested test entry exists.
         """
         # Confirm cleanup stays scoped to the requested issue.
-        assert identifier == "AGENT-30"
+        assert identifier == "TEST-30"
         return self.payload is not None
 
     def child(self, identifier: str, **_kwargs: object) -> Payload:
@@ -256,7 +256,7 @@ class Task:
             Fake child directory or issue context for the caller.
         """
         # Confirm cleanup stays scoped to the requested issue.
-        assert identifier == "AGENT-30" and self.payload is not None
+        assert identifier == "TEST-30" and self.payload is not None
         return self.payload
 
     def rename_directory(self, identifier: str, control: Control, name: str) -> None:
@@ -268,7 +268,7 @@ class Task:
             name: Requested file, directory, or control-entry name.
         """
         # Confirm cleanup stays scoped to the requested issue.
-        assert identifier == "AGENT-30" and name == "quarantine-1"
+        assert identifier == "TEST-30" and name == "quarantine-1"
         self.effects.append("rename:quarantine-1")
         # Preload the recorded quarantine and its expected file bytes.
         control.quarantine, self.payload = self.payload, None
@@ -303,7 +303,7 @@ def issue_with_cleanup(files: dict[str, bytes]) -> tuple[Any, Payload, Control, 
     }
     control = Control(intent, effects)
     issue = type("IssueHandle", (), {})()
-    issue.id = "AGENT-30"
+    issue.id = "TEST-30"
     issue.control = control
     issue.store = type("StoreHandle", (), {"task": Task(payload, effects)})()
     issue.state = copy.deepcopy(state)

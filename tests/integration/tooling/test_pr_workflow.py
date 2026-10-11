@@ -86,7 +86,7 @@ def test_workflow_collectors_retain_failure_and_run_later_checks(
     tasks = [shlex.split(step["run"])[4] for step in selected]
     # Require later collection steps to run while the job still fails.
     assert tasks == (
-        ["validate-config", "format-check", "lint", "type-check"]
+        ["validate-config", "format-check", "lint", "type-check", "ticket-references"]
         if job == "quality"
         else ["test-unit", "test-integration", "test-tooling-unit"]
     )

@@ -727,8 +727,17 @@ def test_native_unsupported_provider_or_child_tool_denies(native: NativeCase, to
     case.create()
     case.ready()
     before = case.state()
+    # Claude admits a foreground Agent call (see test_claude_child_route), so its
+    # worktree-isolated form is the unsupported child launch exercised here.
+    inputs: JsonObject = (
+        {"prompt": "fixture", "isolation": "worktree"}
+        if host == "claude" and tool == "Agent"
+        else {}
+    )
     # Missing child identity must not be synthesized from the ready root session.
-    result = dispatch(host, native_event(host, case, "PreToolUse", tool_name=tool, tool_input={}))
+    result = dispatch(
+        host, native_event(host, case, "PreToolUse", tool_name=tool, tool_input=inputs)
+    )
     assert_decision(host, result, False)
     assert case.state() == before
 
@@ -1065,3 +1074,261 @@ def test_native_admission_requires_actual_host_tool_id(
     result = dispatch(host, native_event(host, case, "PreToolUse", tool_use_id=identifier))
     assert_decision(host, result, False)
     assert case.state() == before
+
+
+def started_coordinator(native: NativeCase) -> tuple[NativeHost, Fixture, JsonObject, str]:
+    """Start a ready coordinator whose packet includes a governing checkout file.
+
+    Args:
+        native: Host-specific disposable repository fixture.
+
+    Returns:
+        The host, fixture, identity-resolved base request and native shell tool name.
+
+    Raises:
+        AssertionError: Ticket-first startup does not reach readiness.
+    """
+    # Provide a governing source before startup hashes it into the coordinator packet.
+    host, case = native
+    # Write through the lifecycle directory boundary so every native backend can read it.
+    with core.Directory.absolute(case.root) as checkout:
+        checkout.write("AGENTS.md", b"# Rules\n")
+    dispatch(host, native_event(host, case, "UserPromptSubmit", prompt="Task: TEST-1"))
+    issue = {"id": "c0a8f3be-1c13-4f2b-9a1e-b2e61f11f977", "identifier": "TEST-1"}
+    before, after = ticket_callbacks(host, case, issue)
+    # Complete the exact ticket read so startup scopes, acknowledges and readies.
+    for callback in before:
+        dispatch(host, callback)
+    assert "TASK_WORKSPACE_READY" in str(dispatch(host, after))
+    observed = common.native_identity(native_event(host, case, "SessionStart"), case.base["host"])
+    base = common.request_for(observed, "ready", case.base["host"])
+    # Keep only the fields a literal bootstrap command carries.
+    base.pop("participant_id", None)
+    return host, case, base, "Bash" if host == "claude" else "Shell"
+
+
+def lifecycle_call(
+    host: NativeHost, case: Fixture, shell: str, request: JsonObject, admitted: bool = True
+) -> JsonObject | None:
+    """Submit one lifecycle request as the exact native shell bootstrap command.
+
+    Args:
+        host: Native adapter identity.
+        case: Disposable repository fixture.
+        shell: Native shell tool name for the host.
+        request: Lifecycle request encoded with bootstrap_command.
+        admitted: Whether the hook is expected to admit the command.
+
+    Returns:
+        The core result of running the admitted command, or None when it was denied.
+
+    Raises:
+        AssertionError: The hook decision differs from the expectation.
+    """
+    # Ask the real native hook whether the canonical command may run.
+    command = common.bootstrap_command(request, case.base["host"])
+    event = native_event(
+        host,
+        case,
+        "PreToolUse",
+        tool_use_id="bootstrap",
+        tool_name=shell,
+        tool_input={"command": command},
+    )
+    assert_decision(host, dispatch(host, event), admitted)
+    # Run the admitted command's request through the core, as the shell would.
+    return core.execute(request) if admitted else None
+
+
+def test_native_coordinator_self_refresh_recovers_stale_governing_source(
+    native: NativeCase,
+) -> None:
+    """A coordinator stranded by its own governing edit recovers through self-refresh.
+
+    Args:
+        native: Host-specific disposable repository fixture.
+
+    Raises:
+        AssertionError: The stale source is not detected or recovery is not admitted.
+    """
+    # Change a governing source in the ready coordinator's packet.
+    host, case, base, shell = started_coordinator(native)
+    with core.Directory.absolute(case.root) as checkout:
+        checkout.write("AGENTS.md", b"# Rules\n\nEdited by the coordinator.\n")
+    denied = dispatch(host, native_event(host, case, "PreToolUse"))
+    assert_decision(host, denied, False)
+    assert "SOURCE_STALE" in str(denied) and "self-refresh scope" in str(denied)
+    # Obtain the current packet through the admitted issue-level diagnose, not state.json.
+    diagnosis = lifecycle_call(
+        host, case, shell, {**base, "operation": "diagnose", "request_id": "d"}
+    )
+    assert diagnosis is not None and diagnosis["ok"] is True, diagnosis
+    assert all("available" not in ref for ref in diagnosis["packet"])
+    # The aligned sources name the stale governing file; nothing here hashes a file.
+    sources = diagnosis["sources"]
+    assert [s["locator"] for s in sources] == [r["locator"] for r in diagnosis["packet"]]
+    assert [s["locator"] for s in sources if not s["available"]] == [str(case.root / "AGENTS.md")]
+    # Re-scope the coordinator's own packet with diagnose's current digests only.
+    packet = [
+        {**ref, "sha256": source["current_sha256"]}
+        for ref, source in zip(diagnosis["packet"], sources, strict=True)
+    ]
+    scope = {
+        **base,
+        "operation": "scope",
+        "request_id": "self-refresh",
+        "expected_revision": diagnosis["revision"],
+        "target_participant": case.base["coordinator"],
+        "packet": packet,
+    }
+    scoped = lifecycle_call(host, case, shell, scope)
+    assert scoped is not None and scoped["ok"] is True, scoped
+    # The scope alone grants nothing: ordinary tools stay denied until ready.
+    assert_decision(host, dispatch(host, native_event(host, case, "PreToolUse")), False)
+    # Readiness still requires the explicit read, acknowledge and ready cycle.
+    read = lifecycle_call(host, case, shell, {**base, "operation": "read", "request_id": "r"})
+    assert read is not None and read["ok"] is True, read
+    acknowledged = lifecycle_call(
+        host,
+        case,
+        shell,
+        {
+            **base,
+            "operation": "acknowledge",
+            "request_id": "a",
+            "packet_digest": read["packet_digest"],
+        },
+    )
+    assert acknowledged is not None and acknowledged["ok"] is True, acknowledged
+    ready = lifecycle_call(host, case, shell, {**base, "operation": "ready", "request_id": "y"})
+    assert ready is not None and ready["ok"] is True, ready
+    # Ordinary tools are admitted again at the refreshed packet.
+    assert_decision(host, dispatch(host, native_event(host, case, "PreToolUse")), True)
+
+
+def test_native_coordinator_unchanged_digest_scope_keeps_source_stale(
+    native: NativeCase,
+) -> None:
+    """A self-refresh repeating stale digests is accepted but cannot restore readiness.
+
+    Args:
+        native: Host-specific disposable repository fixture.
+
+    Raises:
+        AssertionError: The unchanged scope is refused, or read no longer names the
+            stale governing source.
+    """
+    # Strand the coordinator at SOURCE_STALE through its own governing edit.
+    host, case, base, shell = started_coordinator(native)
+    with core.Directory.absolute(case.root) as checkout:
+        checkout.write("AGENTS.md", b"# Rules\n\nEdited by the coordinator.\n")
+    diagnosis = lifecycle_call(
+        host, case, shell, {**base, "operation": "diagnose", "request_id": "d"}
+    )
+    assert diagnosis is not None and diagnosis["ok"] is True, diagnosis
+    # Re-scope with the recorded packet unchanged: admitted and committed.
+    scope = {
+        **base,
+        "operation": "scope",
+        "request_id": "unchanged",
+        "expected_revision": diagnosis["revision"],
+        "target_participant": case.base["coordinator"],
+        "packet": diagnosis["packet"],
+    }
+    scoped = lifecycle_call(host, case, shell, scope)
+    assert scoped is not None and scoped["ok"] is True, scoped
+    # Read still fails, and the failure itself names the stale source and digests.
+    read = lifecycle_call(host, case, shell, {**base, "operation": "read", "request_id": "r"})
+    assert read is not None and read["ok"] is False and read["code"] == "SOURCE_STALE", read
+    stale = {s["locator"]: s for s in diagnosis["sources"] if not s["available"]}
+    assert read["stale"] == list(stale.values())
+    assert [s["locator"] for s in read["stale"]] == [str(case.root / "AGENTS.md")]
+    assert read["stale"][0]["current_sha256"] is not None
+    assert read["stale"][0]["current_sha256"] != read["stale"][0]["recorded_sha256"]
+    # Ordinary tools stay denied.
+    assert_decision(host, dispatch(host, native_event(host, case, "PreToolUse")), False)
+
+
+@pytest.mark.parametrize("change", ["locator", "target"])
+def test_native_coordinator_self_refresh_rejects_widened_scope(
+    native: NativeCase, change: str
+) -> None:
+    """A stale coordinator cannot change a reference or scope another key before readiness.
+
+    Args:
+        native: Host-specific disposable repository fixture.
+        change: Whether the request changes a locator or targets another participant.
+
+    Raises:
+        AssertionError: A widened scope is admitted or mutates state.
+    """
+    # Strand the coordinator at SOURCE_STALE through its own governing edit.
+    host, case, base, shell = started_coordinator(native)
+    with core.Directory.absolute(case.root) as checkout:
+        checkout.write("AGENTS.md", b"# Rules\n\nEdited by the coordinator.\n")
+    state = case.state()
+    key = case.base["coordinator"]
+    data = (case.root / "AGENTS.md").read_bytes()
+    packet = [{**ref, "sha256": core.sha(data)} for ref in state["participants"][key]["packet"]]
+    # Widen the request beyond a digest-only refresh of the caller's own packet.
+    target = key
+    if change == "locator":
+        packet[-1] = {**packet[-1], "locator": str(case.root / "OTHER.md")}
+    else:
+        target = "f" * 64
+        packet = [{**ref, "reader": target} for ref in packet]
+    scope = {
+        **base,
+        "operation": "scope",
+        "request_id": "widened",
+        "expected_revision": state["revision"],
+        "target_participant": target,
+        "packet": packet,
+    }
+    state_file = case.root / ".task/.control/issues/TEST-1/state.json"
+    before = state_file.read_bytes()
+    assert lifecycle_call(host, case, shell, scope, admitted=False) is None
+    # Committed state is unchanged and ordinary tools remain denied as stale.
+    assert state_file.read_bytes() == before
+    denied = dispatch(host, native_event(host, case, "PreToolUse"))
+    assert_decision(host, denied, False)
+    assert "SOURCE_STALE" in str(denied)
+
+
+def test_native_self_refresh_from_prior_read_requires_removing_available(
+    native: NativeCase,
+) -> None:
+    """A prior read result's references work for self-refresh only without ``available``.
+
+    Args:
+        native: Host-specific disposable repository fixture.
+
+    Raises:
+        AssertionError: Read references are admitted with their computed field, or
+            rejected after it is removed.
+    """
+    # Keep the references from a successful read while the coordinator is still ready.
+    host, case, base, shell = started_coordinator(native)
+    read = lifecycle_call(host, case, shell, {**base, "operation": "read", "request_id": "r0"})
+    assert read is not None and read["ok"] is True, read
+    # Strand the coordinator, then refresh the AGENTS.md digest in those references.
+    with core.Directory.absolute(case.root) as checkout:
+        checkout.write("AGENTS.md", b"# Rules\n\nEdited by the coordinator.\n")
+    digest = core.sha((case.root / "AGENTS.md").read_bytes())
+    references = [
+        {**ref, "sha256": digest} if ref["locator"].endswith("AGENTS.md") else ref
+        for ref in read["references"]
+    ]
+    scope = {
+        **base,
+        "operation": "scope",
+        "request_id": "from-read",
+        "expected_revision": case.state()["revision"],
+        "target_participant": case.base["coordinator"],
+    }
+    # The computed availability field is not part of a packet reference.
+    assert lifecycle_call(host, case, shell, {**scope, "packet": references}, False) is None
+    # Removing it yields exactly the committed shape with refreshed digests.
+    stripped = [{k: v for k, v in ref.items() if k != "available"} for ref in references]
+    scoped = lifecycle_call(host, case, shell, {**scope, "packet": stripped})
+    assert scoped is not None and scoped["ok"] is True, scoped

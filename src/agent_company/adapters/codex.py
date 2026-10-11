@@ -222,7 +222,7 @@ def prompt(event: core.JSONObject) -> core.JSONObject:
         core.WorkspaceError: If workspace registration or setup fails.
         OSError: If assignment persistence fails.
     """
-    return common.prompt(event, "codex", attempt_attach=False)
+    return common.prompt(event, "codex")
 
 
 def startup_lookup_state(event: core.JSONObject, suffix: str) -> bool:

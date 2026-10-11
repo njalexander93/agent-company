@@ -132,12 +132,10 @@ def test_prompt_ignores_ordinary_text_without_repository_access(
     """
     monkeypatch.setattr(common.core, "repository", lambda _cwd: pytest.fail("repository read"))
     event = {"cwd": str(ROOT), "session_id": "session", "prompt": "Please explain the code"}
-    assert common.prompt(event, "codex", attempt_attach=False) == {}
+    assert common.prompt(event, "codex") == {}
 
 
-@pytest.mark.parametrize(
-    "prompt", ["Task: bad", "Task: AGENT-30\nTask: AGENT-31", " Task: AGENT-30"]
-)
+@pytest.mark.parametrize("prompt", ["Task: bad", "Task: TEST-30\nTask: TEST-31", " Task: TEST-30"])
 def test_prompt_rejects_malformed_or_ambiguous_task_without_write(
     monkeypatch: pytest.MonkeyPatch, prompt: str
 ) -> None:
@@ -149,7 +147,7 @@ def test_prompt_rejects_malformed_or_ambiguous_task_without_write(
     """
     monkeypatch.setattr(common.core, "repository", lambda _cwd: pytest.fail("repository read"))
     event = {"cwd": str(ROOT), "session_id": "session", "prompt": prompt}
-    result = common.prompt(event, "codex", attempt_attach=False)
+    result = common.prompt(event, "codex")
     # Leading whitespace must not turn a near-match into an explicit Task line.
     if prompt.startswith(" "):
         assert result == {}
@@ -167,42 +165,14 @@ def test_prompt_records_exact_lookup_marker_for_codex(
         monkeypatch: Pytest fixture that isolates external state for this case.
     """
     data = setup_prompt(monkeypatch)
-    event = {"cwd": str(ROOT), "session_id": "session", "prompt": "Task: AGENT-30"}
-    result = common.prompt(event, "codex", attempt_attach=False)
+    event = {"cwd": str(ROOT), "session_id": "session", "prompt": "Task: TEST-30"}
+    result = common.prompt(event, "codex")
     key = core.participant_key({"host": "codex", "session_id": "session"})
     bindings = data[BINDINGS]
-    assert bindings[key + ".assignment.json"] == {"issue_id": "AGENT-30"}
-    assert bindings[key + ".lookup-required.json"] == {"issue_id": "AGENT-30"}
+    assert bindings[key + ".assignment.json"] == {"issue_id": "TEST-30"}
+    assert bindings[key + ".lookup-required.json"] == {"issue_id": "TEST-30"}
     assert (
         "Read the requested Linear ticket first"
-        in result["hookSpecificOutput"]["additionalContext"]
-    )
-
-
-def test_prompt_native_host_attempts_only_explicit_assignment_setup(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A native Task prompt records identity before its bounded attach attempt.
-
-    Args:
-        monkeypatch: Pytest fixture that isolates external state for this case.
-    """
-    data = setup_prompt(monkeypatch)
-    calls: list[tuple[str, str]] = []
-    monkeypatch.setattr(
-        common,
-        "automatic_attach",
-        lambda _event, identifier, host: calls.append((identifier, host)),
-    )
-    event = {"cwd": str(ROOT), "session_id": "session", "prompt": "Task: AGENT-30"}
-    result = common.prompt(event, "claude-code", attempt_attach=True)
-    key = core.participant_key({"host": "claude-code", "session_id": "session"})
-    bindings = data[BINDINGS]
-    assert bindings[key + ".assignment.json"] == {"issue_id": "AGENT-30"}
-    assert key + ".lookup-required.json" not in bindings
-    assert calls == [("AGENT-30", "claude-code")]
-    assert (
-        "assigned workspace setup was attempted"
         in result["hookSpecificOutput"]["additionalContext"]
     )
 
@@ -210,18 +180,98 @@ def test_prompt_native_host_attempts_only_explicit_assignment_setup(
 def test_prompt_refuses_switch_from_existing_assignment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Preserve the old assignment until explicit rebind authority is used.
+    """An unbound session never replaces its recorded Task identity.
 
     Args:
         monkeypatch: Pytest fixture that isolates external state for this case.
     """
     data = setup_prompt(monkeypatch)
     key = core.participant_key({"host": "codex", "session_id": "session"})
-    data[BINDINGS] = {key + ".assignment.json": {"issue_id": "AGENT-30"}}
-    event = {"cwd": str(ROOT), "session_id": "session", "prompt": "Task: AGENT-31"}
-    result = common.prompt(event, "codex", attempt_attach=False)
+    data[BINDINGS] = {key + ".assignment.json": {"issue_id": "TEST-30"}}
+    event = {"cwd": str(ROOT), "session_id": "session", "prompt": "Task: TEST-31"}
+    result = common.prompt(event, "codex")
     assert result["decision"] == "block"
-    assert data[BINDINGS] == {key + ".assignment.json": {"issue_id": "AGENT-30"}}
+    assert data[BINDINGS] == {key + ".assignment.json": {"issue_id": "TEST-30"}}
+
+
+def test_prompt_records_pending_switch_for_bound_session_without_touching_binding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A bound session's Task line for another issue waits for the verified read.
+
+    Args:
+        monkeypatch: Pytest fixture that isolates external state for this case.
+    """
+    data = setup_prompt(monkeypatch)
+    key = core.participant_key({"host": "claude-code", "session_id": "session"})
+    binding = {"issue_id": "TEST-30", "binding_generation": 3}
+    data[BINDINGS] = {
+        key + ".json": binding,
+        key + ".assignment.json": {"issue_id": "TEST-30"},
+        key + ".lookup.json": {"id": "TEST-30", "tool_id": "old", "completed": True},
+    }
+    event = {"cwd": str(ROOT), "session_id": "session", "prompt": "Task: TEST-31"}
+    result = common.prompt(event, "claude-code")
+    # The binding stays on the old issue; only the pending assignment and gate move.
+    assert data[BINDINGS] == {
+        key + ".json": binding,
+        key + ".assignment.json": {"issue_id": "TEST-31"},
+        key + ".lookup-required.json": {"issue_id": "TEST-31"},
+    }
+    context = result["hookSpecificOutput"]["additionalContext"]
+    assert "Read the requested Linear ticket first" in context
+    assert "rebinds this session from TEST-30" in context
+
+
+def test_prompt_returns_to_bound_issue_after_unfinished_switch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed switch read never strands the session: its bound Task line is admitted.
+
+    Args:
+        monkeypatch: Pytest fixture that isolates external state for this case.
+    """
+    data = setup_prompt(monkeypatch)
+    key = core.participant_key({"host": "codex", "session_id": "session"})
+    binding = {"issue_id": "TEST-30", "binding_generation": 3}
+    # Model a recorded switch to TEST-31 whose startup completed with a failure.
+    data[BINDINGS] = {
+        key + ".json": binding,
+        key + ".assignment.json": {"issue_id": "TEST-31"},
+        key + ".lookup-required.json": {"issue_id": "TEST-31"},
+        key + ".lookup.json": {"id": "TEST-31", "tool_id": "read-1", "completed": True},
+    }
+    event = {"cwd": str(ROOT), "session_id": "session", "prompt": "Task: TEST-30"}
+    result = common.prompt(event, "codex")
+    assert "decision" not in result
+    assert data[BINDINGS] == {
+        key + ".json": binding,
+        key + ".assignment.json": {"issue_id": "TEST-30"},
+        key + ".lookup-required.json": {"issue_id": "TEST-30"},
+    }
+    assert "rebinds" not in result["hookSpecificOutput"]["additionalContext"]
+
+
+def test_prompt_keeps_matching_lookup_correlation_for_repeated_switch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Repeating the pending Task line keeps that issue's own retry correlation.
+
+    Args:
+        monkeypatch: Pytest fixture that isolates external state for this case.
+    """
+    data = setup_prompt(monkeypatch)
+    key = core.participant_key({"host": "codex", "session_id": "session"})
+    retry = {"id": "TEST-31", "tool_id": "read-1", "completed": True}
+    data[BINDINGS] = {
+        key + ".json": {"issue_id": "TEST-30", "binding_generation": 3},
+        key + ".assignment.json": {"issue_id": "TEST-31"},
+        key + ".lookup-required.json": {"issue_id": "TEST-31"},
+        key + ".lookup.json": retry,
+    }
+    event = {"cwd": str(ROOT), "session_id": "session", "prompt": "Task: TEST-31"}
+    common.prompt(event, "codex")
+    assert data[BINDINGS][key + ".lookup.json"] == retry
 
 
 def test_automatic_attach_does_not_create_unregistered_workspace(
@@ -248,7 +298,7 @@ def test_automatic_attach_does_not_create_unregistered_workspace(
 
     monkeypatch.setattr(common.core, "execute", execute)
     event = {"cwd": str(ROOT), "session_id": "session"}
-    assert common.automatic_attach(event, "AGENT-30", "codex") is None
+    assert common.automatic_attach(event, "TEST-30", "codex") is None
     assert [item["operation"] for item in requests] == ["diagnose"]
 
 
@@ -292,7 +342,7 @@ def test_request_for_uses_only_persisted_binding(
             Returns:
                 The recorded session binding fixture.
             """
-            return {"issue_id": "AGENT-30", "binding_generation": 3}
+            return {"issue_id": "TEST-30", "binding_generation": 3}
 
     monkeypatch.setattr(
         common.core,
@@ -305,7 +355,7 @@ def test_request_for_uses_only_persisted_binding(
     assert result["worktree"] == str(ROOT)
     assert result["host"] == "codex"
     assert result["session_id"] == "session"
-    assert result["issue_id"] == "AGENT-30"
+    assert result["issue_id"] == "TEST-30"
     assert result["repo_id"] == "repo"
     assert result["binding_generation"] == 3
 
@@ -377,7 +427,7 @@ def test_request_for_requires_persisted_session_binding(
     # A stale binding must fail before an automatic attachment.
     with pytest.raises(core.WorkspaceError) as captured:
         common.request_for(
-            {"cwd": str(ROOT), "session_id": "session", "issue_id": "AGENT-30"},
+            {"cwd": str(ROOT), "session_id": "session", "issue_id": "TEST-30"},
             "ready",
             "codex",
         )
@@ -396,8 +446,8 @@ def lookup_setup(monkeypatch: pytest.MonkeyPatch) -> tuple[dict[str, dict[str, o
     data = setup_prompt(monkeypatch)
     key = core.participant_key({"host": "codex", "session_id": "session"})
     data[BINDINGS] = {
-        key + ".assignment.json": {"issue_id": "AGENT-30"},
-        key + ".lookup-required.json": {"issue_id": "AGENT-30"},
+        key + ".assignment.json": {"issue_id": "TEST-30"},
+        key + ".lookup-required.json": {"issue_id": "TEST-30"},
     }
     return data, key
 
@@ -415,7 +465,7 @@ def lookup_event(**fields: object) -> dict[str, object]:
         "cwd": str(ROOT),
         "session_id": "session",
         "tool_name": "mcp__codex_apps__linear_get_issue",
-        "tool_input": {"id": "AGENT-30"},
+        "tool_input": {"id": "TEST-30"},
         "tool_use_id": "tool-1",
         **fields,
     }
@@ -432,12 +482,12 @@ def test_ticket_lookup_admits_only_exact_recorded_issue_and_tool_id(
     data, key = lookup_setup(monkeypatch)
     # A mismatched startup issue cannot override the selected Task.
     with pytest.raises(core.WorkspaceError) as captured:
-        codex.ticket_lookup(lookup_event(tool_input={"id": "AGENT-31"}))
+        codex.ticket_lookup(lookup_event(tool_input={"id": "TEST-31"}))
     assert captured.value.code == "BINDING_CONFLICT"
     assert key + ".lookup.json" not in data[BINDINGS]
     assert codex.ticket_lookup(lookup_event()) == {}
     assert data[BINDINGS][key + ".lookup.json"] == {
-        "id": "AGENT-30",
+        "id": "TEST-30",
         "tool_id": "tool-1",
     }
     # A rejected lifecycle scope must retain its exact diagnostic.
@@ -469,13 +519,13 @@ def test_ticket_lookup_completes_only_after_verified_provider_result(
     data, key = lookup_setup(monkeypatch)
     event = lookup_event()
     codex.ticket_lookup(event)
-    issue = {"id": "AGENT-30", "uuid": "c0a8f3be-1c13-4f2b-9a1e-b2e61f11f977"}
+    issue = {"id": "TEST-30", "uuid": "c0a8f3be-1c13-4f2b-9a1e-b2e61f11f977"}
     provider = {
         "isError": False,
         "content": [
             {
                 "type": "text",
-                "text": '{"id":"AGENT-30","uuid":"c0a8f3be-1c13-4f2b-9a1e-b2e61f11f977"}',
+                "text": '{"id":"TEST-30","uuid":"c0a8f3be-1c13-4f2b-9a1e-b2e61f11f977"}',
             }
         ],
     }
@@ -547,7 +597,7 @@ def test_ticket_lookup_rejects_mismatched_required_marker_without_provider_call(
         monkeypatch: Pytest fixture that isolates external state for this case.
     """
     data, key = lookup_setup(monkeypatch)
-    data[BINDINGS][key + ".lookup-required.json"] = {"issue_id": "AGENT-31"}
+    data[BINDINGS][key + ".lookup-required.json"] = {"issue_id": "TEST-31"}
     # Reject a startup assignment that disagrees with the binding.
     with pytest.raises(core.WorkspaceError) as captured:
         codex.ticket_lookup(lookup_event())
@@ -591,7 +641,7 @@ def test_ticket_lookup_keeps_attempt_marker_when_startup_fails(
         "content": [
             {
                 "type": "text",
-                "text": '{"id":"AGENT-30","uuid":"c0a8f3be-1c13-4f2b-9a1e-b2e61f11f977"}',
+                "text": '{"id":"TEST-30","uuid":"c0a8f3be-1c13-4f2b-9a1e-b2e61f11f977"}',
             }
         ],
     }
@@ -605,7 +655,7 @@ def test_ticket_lookup_keeps_attempt_marker_when_startup_fails(
         codex.ticket_lookup({**event, "tool_response": provider}, complete=True)
     assert captured.value.code == "SOURCE_STALE"
     assert data[BINDINGS][key + ".lookup.json"] == {
-        "id": "AGENT-30",
+        "id": "TEST-30",
         "tool_id": "tool-1",
         "completed": True,
     }
@@ -627,7 +677,7 @@ def test_ticket_lookup_retries_completed_startup_with_same_tool_id(
         "content": [
             {
                 "type": "text",
-                "text": '{"id":"AGENT-30","uuid":"c0a8f3be-1c13-4f2b-9a1e-b2e61f11f977"}',
+                "text": '{"id":"TEST-30","uuid":"c0a8f3be-1c13-4f2b-9a1e-b2e61f11f977"}',
             }
         ],
     }
@@ -657,7 +707,7 @@ def test_ticket_lookup_retries_completed_startup_with_same_tool_id(
     # Verify that the stale source fails the first setup attempt.
     with pytest.raises(core.WorkspaceError, match="SOURCE_STALE"):
         codex.ticket_lookup({**event, "tool_response": provider}, complete=True)
-    completed = {"id": "AGENT-30", "tool_id": "tool-1", "completed": True}
+    completed = {"id": "TEST-30", "tool_id": "tool-1", "completed": True}
     assert data[BINDINGS][key + ".lookup.json"] == completed
     assert codex.ticket_lookup(event) == {}
     assert data[BINDINGS][key + ".lookup.json"] == completed
@@ -666,7 +716,7 @@ def test_ticket_lookup_retries_completed_startup_with_same_tool_id(
     assert len(starts) == 2
     assert key + ".lookup.json" not in data[BINDINGS]
     assert key + ".lookup-required.json" not in data[BINDINGS]
-    assert data[BINDINGS][key + ".assignment.json"] == {"issue_id": "AGENT-30"}
+    assert data[BINDINGS][key + ".assignment.json"] == {"issue_id": "TEST-30"}
 
 
 def test_ticket_lookup_replaces_completed_failure_with_fresh_exact_read(
@@ -685,7 +735,7 @@ def test_ticket_lookup_replaces_completed_failure_with_fresh_exact_read(
         "content": [
             {
                 "type": "text",
-                "text": '{"id":"AGENT-30","uuid":"c0a8f3be-1c13-4f2b-9a1e-b2e61f11f977"}',
+                "text": '{"id":"TEST-30","uuid":"c0a8f3be-1c13-4f2b-9a1e-b2e61f11f977"}',
             }
         ],
     }
@@ -699,11 +749,11 @@ def test_ticket_lookup_replaces_completed_failure_with_fresh_exact_read(
     with pytest.raises(core.WorkspaceError, match="SOURCE_STALE"):
         codex.ticket_lookup({**event, "tool_response": provider}, complete=True)
     assert codex.ticket_lookup(fresh) == {}
-    assert data[BINDINGS][key + ".lookup.json"] == {"id": "AGENT-30", "tool_id": "tool-2"}
+    assert data[BINDINGS][key + ".lookup.json"] == {"id": "TEST-30", "tool_id": "tool-2"}
     # A different Task cannot replace the recorded assignment.
     with pytest.raises(core.WorkspaceError, match="BINDING_CONFLICT"):
         codex.ticket_lookup({**event, "tool_response": provider}, complete=True)
-    assert data[BINDINGS][key + ".lookup.json"] == {"id": "AGENT-30", "tool_id": "tool-2"}
+    assert data[BINDINGS][key + ".lookup.json"] == {"id": "TEST-30", "tool_id": "tool-2"}
     # A different issue cannot replace the live binding.
     with pytest.raises(core.WorkspaceError, match="BINDING_CONFLICT"):
         codex.ticket_lookup(event)
@@ -730,9 +780,9 @@ def test_ticket_lookup_rejects_corrupt_completed_marker_without_replacement(
     name = key + ".lookup.json"
     # Corrupt each binding field independently to test fail-closed admission.
     for corrupt in (
-        {"id": "AGENT-31", "tool_id": "tool-1", "completed": True},
-        {"id": "AGENT-30", "tool_id": 7, "completed": True},
-        {"id": "AGENT-30", "tool_id": "tool-1", "completed": "yes"},
+        {"id": "TEST-31", "tool_id": "tool-1", "completed": True},
+        {"id": "TEST-30", "tool_id": 7, "completed": True},
+        {"id": "TEST-30", "tool_id": "tool-1", "completed": "yes"},
     ):
         data[BINDINGS][name] = corrupt
         # No corrupted binding may pass native prompt setup.
@@ -756,12 +806,12 @@ def test_ticket_lookup_failed_startup_preserves_a_newer_lookup_marker(
         "content": [
             {
                 "type": "text",
-                "text": '{"id":"AGENT-30","uuid":"c0a8f3be-1c13-4f2b-9a1e-b2e61f11f977"}',
+                "text": '{"id":"TEST-30","uuid":"c0a8f3be-1c13-4f2b-9a1e-b2e61f11f977"}',
             }
         ],
     }
     assert codex.ticket_lookup(event) == {}
-    replacement = {"id": "AGENT-30", "tool_id": "tool-2"}
+    replacement = {"id": "TEST-30", "tool_id": "tool-2"}
 
     def interrupted_start(*_args: object) -> None:
         """Model a replacement written after the old completion released its lock.
@@ -796,7 +846,7 @@ def test_ticket_lookup_reader_message_keeps_coordinator_ownership(
         "content": [
             {
                 "type": "text",
-                "text": '{"id":"AGENT-30","uuid":"c0a8f3be-1c13-4f2b-9a1e-b2e61f11f977"}',
+                "text": '{"id":"TEST-30","uuid":"c0a8f3be-1c13-4f2b-9a1e-b2e61f11f977"}',
             }
         ],
     }

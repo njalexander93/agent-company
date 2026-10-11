@@ -195,6 +195,6 @@ def test_issue_view_rejects_existing_link_to_different_target(
     monkeypatch.setattr(posix.os, "symlink", lambda *_args, **_kwargs: pytest.fail("replaced link"))
     # Preserve the existing link when its target differs.
     with pytest.raises(WorkspaceError) as captured:
-        handle().issue_view("AGENT-30", "/expected/issue")
+        handle().issue_view("TEST-30", "/expected/issue")
     # Confirm the rejected operation reports UNSAFE_PATH.
     assert captured.value.code == "UNSAFE_PATH"

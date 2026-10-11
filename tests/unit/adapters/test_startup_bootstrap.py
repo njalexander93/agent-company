@@ -27,19 +27,19 @@ def provider_response(issue: object) -> dict[str, object]:
 
 def test_ticket_accepts_exact_identifier_and_uuid() -> None:
     """Ticket accepts exact identifier and uuid."""
-    issue = {"id": "AGENT-30", "uuid": "c0a8f3be-1c13-4f2b-9a1e-b2e61f11f977", "title": "Testing"}
-    assert startup.ticket(provider_response(issue), "AGENT-30") == issue
+    issue = {"id": "TEST-30", "uuid": "c0a8f3be-1c13-4f2b-9a1e-b2e61f11f977", "title": "Testing"}
+    assert startup.ticket(provider_response(issue), "TEST-30") == issue
 
 
 def test_ticket_normalizes_strict_graphql_identity_inside_mcp_envelope() -> None:
     """Accept a documented GraphQL identity object inside a standard MCP result."""
     issue = {
         "id": "c0a8f3be-1c13-4f2b-9a1e-b2e61f11f977",
-        "identifier": "AGENT-30",
+        "identifier": "TEST-30",
         "title": "Testing",
     }
-    result = startup.ticket(provider_response(issue), "AGENT-30")
-    assert result["id"] == "AGENT-30"
+    result = startup.ticket(provider_response(issue), "TEST-30")
+    assert result["id"] == "TEST-30"
     assert result["uuid"] == issue["id"]
 
 
@@ -67,7 +67,7 @@ def test_ticket_maps_typed_provider_failures_without_text_guessing(
     """
     # The provider's typed error must map to the expected ticket diagnostic.
     with pytest.raises(core.WorkspaceError) as captured:
-        startup.ticket({"isError": True, "code": code, "message": "issue not found"}, "AGENT-30")
+        startup.ticket({"isError": True, "code": code, "message": "issue not found"}, "TEST-30")
     assert captured.value.code == expected
 
 
@@ -98,7 +98,7 @@ def test_ticket_recognizes_only_exact_structured_linear_missing_issue() -> None:
     """Report the observed missing-reference error without treating arbitrary 400s as absence."""
     # The exact observed missing-issue envelope has a distinct recovery code.
     with pytest.raises(core.WorkspaceError) as captured:
-        startup.ticket(missing_issue_envelope(), "AGENT-30")
+        startup.ticket(missing_issue_envelope(), "TEST-30")
     assert captured.value.code == "LINEAR_ISSUE_UNRESOLVED"
 
 
@@ -107,7 +107,7 @@ def test_ticket_does_not_classify_nontext_linear_error_as_missing() -> None:
     response = {**missing_issue_envelope(), "content": [{"type": "json", "text": "{}"}]}
     # A nontext content block cannot establish the missing-issue detail.
     with pytest.raises(core.WorkspaceError) as captured:
-        startup.ticket(response, "AGENT-30")
+        startup.ticket(response, "TEST-30")
     assert captured.value.code == "PROVIDER_ERROR"
 
 
@@ -132,7 +132,7 @@ def test_ticket_keeps_near_missing_issue_envelopes_as_provider_errors(
     """
     # Reject malformed or unverified provider results before workspace creation.
     with pytest.raises(core.WorkspaceError) as captured:
-        startup.ticket(response, "AGENT-30")
+        startup.ticket(response, "TEST-30")
     assert captured.value.code == "PROVIDER_ERROR"
 
 
@@ -148,9 +148,9 @@ def test_ticket_keeps_near_missing_issue_envelopes_as_provider_errors(
             {"isError": False, "content": [{"type": "text", "text": "{"}]},
             "PROVIDER_RESPONSE_INVALID",
         ),
-        (provider_response({"id": "AGENT-31", "uuid": "uuid"}), "ISSUE_MISMATCH"),
-        (provider_response({"id": "AGENT-30", "uuid": 7}), "PROVIDER_RESPONSE_INVALID"),
-        (provider_response({"id": "AGENT-30", "uuid": "bad uuid"}), "PROVIDER_RESPONSE_INVALID"),
+        (provider_response({"id": "TEST-31", "uuid": "uuid"}), "ISSUE_MISMATCH"),
+        (provider_response({"id": "TEST-30", "uuid": 7}), "PROVIDER_RESPONSE_INVALID"),
+        (provider_response({"id": "TEST-30", "uuid": "bad uuid"}), "PROVIDER_RESPONSE_INVALID"),
         (None, "PROVIDER_RESPONSE_INVALID"),
         ({"content": []}, "PROVIDER_RESPONSE_INVALID"),
     ],
@@ -164,7 +164,7 @@ def test_ticket_rejects_malformed_or_different_issue(response: object, expected:
     """
     # Match each provider failure to its bounded recovery category.
     with pytest.raises(core.WorkspaceError) as captured:
-        startup.ticket(response, "AGENT-30")
+        startup.ticket(response, "TEST-30")
     assert captured.value.code == expected
 
 

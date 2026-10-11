@@ -21,7 +21,8 @@ retention steps still attempt to preserve available diagnostic evidence.
 | `Test Quality Check` | Ubuntu 24.04 | Required native unit, integration and tooling evidence from **Linux, Windows and macOS**, per-OS function checks, the historical **80% unrounded** aggregate, focused test lint and three assertion probes pass. |
 
 Quality and the three OS jobs can run concurrently. Quality steps run in order:
-`validate-config`, `format-check`, `lint`, then `type-check`. Later steps still run
+`validate-config`, `format-check`, `lint`, `type-check`, then `ticket-references`
+(no Linear issue identifiers or issue URLs in tracked files). Later steps still run
 after an earlier failure unless cancelled; the failure still fails the job.
 Each OS similarly runs `test-unit`, then `test-integration`, then
 `test-tooling-unit`, including later suites after an earlier failure. The matrix
@@ -81,7 +82,7 @@ host-hook delivery. See [development limits](development.md#source-layout) and
    on the current OS. It stops at the first failure and saves evidence in ignored
    `.coverage.local/`. **The other native OS runs and combined quality validation
    remain pending.**
-3. Reproduce quality steps individually. Run all four to inspect independent
+3. Reproduce quality steps individually. Run all five to inspect independent
    failures, as the workflow does:
 
    ```sh
@@ -89,6 +90,7 @@ host-hook delivery. See [development limits](development.md#source-layout) and
    poetry run python scripts/dev.py format-check
    poetry run python scripts/dev.py lint
    poetry run python scripts/dev.py type-check
+   poetry run python scripts/dev.py ticket-references
    ```
 
 4. Reproduce split native collection on Linux, Windows and macOS from the same

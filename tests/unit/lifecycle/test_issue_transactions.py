@@ -50,12 +50,12 @@ def test_issue_loads_only_existing_control_state_and_exposes_committed_state() -
                 Decoded JSON value for the selected fake file.
             """
             self.reads.append(name)
-            return {"issue_id": "AGENT-30"}
+            return {"issue_id": "TEST-30"}
 
     # Model a missing control directory without inventing issue state.
     absent_control = Control(False)
     # Construct the issue from the selected control state.
-    absent = core.Issue(object(), absent_control, "AGENT-30")  # type: ignore[arg-type]
+    absent = core.Issue(object(), absent_control, "TEST-30")  # type: ignore[arg-type]
     assert absent.state is None
     assert absent_control.reads == []
     # Exercise absent.committed_state and capture the expected failure.
@@ -64,9 +64,9 @@ def test_issue_loads_only_existing_control_state_and_exposes_committed_state() -
     # Model an existing control directory with committed state.
     present_control = Control(True)
     # Construct the issue from the selected control state.
-    present = core.Issue(object(), present_control, "AGENT-30")  # type: ignore[arg-type]
-    # Confirm the fake issue remains bound to AGENT-30.
-    assert present.committed_state() == {"issue_id": "AGENT-30"}
+    present = core.Issue(object(), present_control, "TEST-30")  # type: ignore[arg-type]
+    # Confirm the fake issue remains bound to TEST-30.
+    assert present.committed_state() == {"issue_id": "TEST-30"}
     assert present_control.reads == ["state.json"]
 
 
@@ -101,7 +101,7 @@ class Issue:
     def __init__(self) -> None:
         """Start with an empty event stream and one owned roadmap."""
         # Build exact payload bytes for the transition.
-        self.id = "AGENT-30"
+        self.id = "TEST-30"
         self.order: list[str] = []
         self.control = Control(self.order)
         self.payload = {"roadmap.md": b"old", "events.jsonl": b""}
@@ -246,8 +246,8 @@ class Task:
         Returns:
             Whether the requested test entry exists.
         """
-        # Confirm the fake issue remains bound to AGENT-30.
-        assert identifier == "AGENT-30"
+        # Confirm the fake issue remains bound to TEST-30.
+        assert identifier == "TEST-30"
         return True
 
     def child(self, identifier: str, *_args: object, **_kwargs: object) -> Payload:
@@ -261,8 +261,8 @@ class Task:
         Returns:
             Fake child directory or issue context for the caller.
         """
-        # Confirm the fake issue remains bound to AGENT-30.
-        assert identifier == "AGENT-30"
+        # Confirm the fake issue remains bound to TEST-30.
+        assert identifier == "TEST-30"
         return self.payload
 
 
@@ -343,7 +343,7 @@ def recovering_issue(files: dict[str, bytes]) -> tuple[Any, Payload, RecoveryCon
         "writes": {"roadmap.md": core.encode(b"new")},
     }
     issue = type("IssueHandle", (), {})()
-    issue.id = "AGENT-30"
+    issue.id = "TEST-30"
     issue.store = type("StoreHandle", (), {"task": Task(payload)})()
     issue.control = control
     issue.state = {"files": old_manifest}
@@ -643,8 +643,8 @@ def test_recover_creates_absent_payload_only_for_initial_transaction(
             Returns:
                 Whether the requested test entry exists.
             """
-            # Confirm the fake issue remains bound to AGENT-30.
-            assert identifier == "AGENT-30"
+            # Confirm the fake issue remains bound to TEST-30.
+            assert identifier == "TEST-30"
             return self.present
 
         def child(self, identifier: str, create: bool = False, *, private: bool) -> Payload:
@@ -658,8 +658,8 @@ def test_recover_creates_absent_payload_only_for_initial_transaction(
             Returns:
                 Fake child directory or issue context for the caller.
             """
-            # Confirm the fake issue remains bound to AGENT-30.
-            assert identifier == "AGENT-30" and private is False
+            # Confirm the fake issue remains bound to TEST-30.
+            assert identifier == "TEST-30" and private is False
             # Check the create outcome and its alternative.
             if create:
                 # Create the absent payload only for an initial transaction.

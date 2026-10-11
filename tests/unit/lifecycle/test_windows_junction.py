@@ -93,7 +93,7 @@ def test_issue_view_rejects_nonjunction_and_closes_handle(
     target_scope(windows, monkeypatch)
     # Install fake _entry, exists, open_handle and related calls.
     closed: list[int] = []
-    monkeypatch.setattr(item, "_entry", lambda _name: Path(r"C:\work\AGENT-30"))
+    monkeypatch.setattr(item, "_entry", lambda _name: Path(r"C:\work\TEST-30"))
     monkeypatch.setattr(item, "exists", lambda _name: True)
     monkeypatch.setattr(windows, "open_handle", lambda *_args, **_kwargs: 91)
     monkeypatch.setattr(
@@ -104,7 +104,7 @@ def test_issue_view_rejects_nonjunction_and_closes_handle(
     monkeypatch.setattr(windows, "CloseHandle", lambda handle: closed.append(handle) or True)
     # Attempt junction publication with the selected native response.
     with pytest.raises(WorkspaceError) as captured:
-        item.issue_view("AGENT-30", r"C:\store\AGENT-30")
+        item.issue_view("TEST-30", r"C:\store\TEST-30")
     # Confirm the rejected operation reports UNSAFE_PATH.
     assert captured.value.code == "UNSAFE_PATH"
     assert closed == [91]
@@ -126,7 +126,7 @@ def test_issue_view_rejects_foreign_reparse_payload(
     # Install fake _entry, exists, open_handle and related calls.
     closed: list[int] = []
     calls: list[int] = []
-    monkeypatch.setattr(item, "_entry", lambda _name: Path(r"C:\work\AGENT-30"))
+    monkeypatch.setattr(item, "_entry", lambda _name: Path(r"C:\work\TEST-30"))
     monkeypatch.setattr(item, "exists", lambda _name: True)
     monkeypatch.setattr(windows, "open_handle", lambda *_args, **_kwargs: 91)
     monkeypatch.setattr(
@@ -171,7 +171,7 @@ def test_issue_view_rejects_foreign_reparse_payload(
     monkeypatch.setattr(windows, "DeviceIoControl", io_control)
     # Attempt junction publication with the selected native response.
     with pytest.raises(WorkspaceError) as captured:
-        item.issue_view("AGENT-30", r"C:\store\AGENT-30")
+        item.issue_view("TEST-30", r"C:\store\TEST-30")
     # Confirm the rejected operation reports UNSAFE_PATH.
     assert captured.value.code == "UNSAFE_PATH"
     assert calls == [0x900A8]
@@ -192,14 +192,14 @@ def test_issue_view_accepts_exact_mount_point_data(
     # Install the exact target path expected in the mount-point payload.
     target_scope(windows, monkeypatch)
     # Install fake _entry, exists, open_handle and related calls.
-    target = r"C:\store\AGENT-30"
+    target = r"C:\store\TEST-30"
     substitute = ("\\??\\" + target).encode("utf-16-le")
     printable = target.encode("utf-16-le")
     paths = substitute + b"\0\0" + printable + b"\0\0"
     body = struct.pack("<HHHH", 0, len(substitute), len(substitute) + 2, len(printable)) + paths
     native_payload = struct.pack("<IHH", 0xA0000003, len(body), 0) + body
     closed: list[int] = []
-    monkeypatch.setattr(item, "_entry", lambda _name: Path(r"C:\work\AGENT-30"))
+    monkeypatch.setattr(item, "_entry", lambda _name: Path(r"C:\work\TEST-30"))
     monkeypatch.setattr(item, "exists", lambda _name: True)
     monkeypatch.setattr(windows, "open_handle", lambda *_args, **_kwargs: 91)
     monkeypatch.setattr(
@@ -244,7 +244,7 @@ def test_issue_view_accepts_exact_mount_point_data(
     # Install fake DeviceIoControl calls.
     monkeypatch.setattr(windows, "DeviceIoControl", io_control)
     # Publish and validate the exact target junction.
-    item.issue_view("AGENT-30", target)
+    item.issue_view("TEST-30", target)
     # Check recorded closed against the required side effects.
     assert closed == [91]
 
@@ -280,7 +280,7 @@ def test_issue_view_creation_race_removes_only_temporary_junction(
         yield None
 
     # Install fake _entry, child, exists and related calls.
-    monkeypatch.setattr(item, "_entry", lambda _name: Path(r"C:\work\AGENT-30"))
+    monkeypatch.setattr(item, "_entry", lambda _name: Path(r"C:\work\TEST-30"))
     monkeypatch.setattr(item, "child", child)
     monkeypatch.setattr(item, "exists", lambda name: name.startswith(".view-"))
     monkeypatch.setattr(windows, "open_handle", lambda *_args, **_kwargs: 91)
@@ -329,7 +329,7 @@ def test_issue_view_creation_race_removes_only_temporary_junction(
     monkeypatch.setattr(windows, "DeviceIoControl", io_control)
     # Attempt junction publication with the selected native response.
     with pytest.raises(OSError) as captured:  # noqa: PT011 - native error is asserted.
-        item.issue_view("AGENT-30", r"C:\store\AGENT-30")
+        item.issue_view("TEST-30", r"C:\store\TEST-30")
     # Check recorded effects against the required side effects.
     assert captured.value.winerror == 183
     assert effects == [
@@ -375,7 +375,7 @@ def test_issue_view_rejects_unexpected_publish_failure_and_removes_temp(
         yield None
 
     # Install fake _entry, child, exists and related calls.
-    monkeypatch.setattr(item, "_entry", lambda _name: Path(r"C:\work\AGENT-30"))
+    monkeypatch.setattr(item, "_entry", lambda _name: Path(r"C:\work\TEST-30"))
     monkeypatch.setattr(item, "child", child)
     monkeypatch.setattr(item, "exists", lambda name: name.startswith(".view-"))
     monkeypatch.setattr(
@@ -395,7 +395,7 @@ def test_issue_view_rejects_unexpected_publish_failure_and_removes_temp(
     )
     # Attempt junction publication with the selected native response.
     with pytest.raises(OSError) as captured:  # noqa: PT011 - native code is asserted.
-        item.issue_view("AGENT-30", r"C:\store\AGENT-30")
+        item.issue_view("TEST-30", r"C:\store\TEST-30")
     # Check recorded effects against the required side effects.
     assert captured.value.winerror == 5
     assert effects == [
@@ -486,7 +486,7 @@ def test_issue_view_after_publish_checks_new_view_without_unlinking_target(
         return SimpleNamespace(attributes=windows.DIRECTORY | windows.REPARSE)
 
     # Install fake _entry, child, exists and related calls.
-    monkeypatch.setattr(item, "_entry", lambda _name: Path(r"C:\work\AGENT-30"))
+    monkeypatch.setattr(item, "_entry", lambda _name: Path(r"C:\work\TEST-30"))
     monkeypatch.setattr(item, "child", child)
     monkeypatch.setattr(item, "exists", exists)
     monkeypatch.setattr(
@@ -503,7 +503,7 @@ def test_issue_view_after_publish_checks_new_view_without_unlinking_target(
     )
     # Attempt junction publication with the selected native response.
     with pytest.raises(WorkspaceError) as captured:
-        item.issue_view("AGENT-30", r"C:\store\AGENT-30")
+        item.issue_view("TEST-30", r"C:\store\TEST-30")
     # Confirm the rejected operation reports UNSAFE_PATH.
     assert captured.value.code == "UNSAFE_PATH"
     assert effects == ["create-temp", "open", "set", "close", "publish", "open", "close"]

@@ -118,8 +118,10 @@ class ReviewRegressions(Fixture):
             "packet": [],
         }
         self.require_ok(w.execute(scope))
-        # Rebind once and require identical replay results.
-        request = self.req("rebind", new_issue_id="TEST-2", evidence=self.evidence())
+        # Rebind once (issue_uuid names the target) and require identical replay results.
+        request = self.req(
+            "rebind", new_issue_id="TEST-2", issue_uuid="second", evidence=self.evidence()
+        )
         first = self.require_ok(w.execute(request))
         self.assertEqual(first, w.execute(request))
         # Change evidence while retaining request identity and require a conflict.

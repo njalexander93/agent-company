@@ -290,13 +290,13 @@ def test_issue_view_creates_exact_link_and_flushes_before_validation(
         lambda name, *, dir_fd: events.append(("readlink", name, dir_fd)) or "/target/issue",
     )
     # Publish an issue view through the validated link boundary.
-    directory().issue_view("AGENT-30", "/target/issue")
+    directory().issue_view("TEST-30", "/target/issue")
     # Confirm the native entry operation stays within the selected issue.
     assert events == [
-        ("symlink", "/target/issue", "AGENT-30", 10),
+        ("symlink", "/target/issue", "TEST-30", 10),
         ("fsync", 10),
-        ("stat", "AGENT-30", 10, False),
-        ("readlink", "AGENT-30", 10),
+        ("stat", "TEST-30", 10, False),
+        ("readlink", "TEST-30", 10),
     ]
 
 
@@ -838,7 +838,7 @@ def test_issue_view_validates_racing_existing_exact_link(
     )
     monkeypatch.setattr(posix.os, "readlink", lambda *_args, **_kwargs: "/exact")
     # Confirm the native entry operation stays within the selected issue.
-    assert directory().issue_view("AGENT-30", "/exact") is None
+    assert directory().issue_view("TEST-30", "/exact") is None
 
 
 def test_child_without_create_never_attempts_mkdir_or_parent_flush(

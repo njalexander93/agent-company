@@ -29,7 +29,7 @@ def base_request(operation: str, **fields: object) -> dict[str, Any]:
         "request_id": "request-1",
         "host": "codex",
         "session_id": "session",
-        "issue_id": "AGENT-30",
+        "issue_id": "TEST-30",
         "binding_generation": 2,
         **fields,
     }
@@ -92,7 +92,7 @@ class MemoryStore:
         Returns:
             Participant binding used by the operation.
         """
-        return {"issue_id": "AGENT-30", "binding_generation": 2}
+        return {"issue_id": "TEST-30", "binding_generation": 2}
 
     def view(self, identifier: str) -> None:
         """Record that the issue view is exposed to this participant.
@@ -122,7 +122,7 @@ class MemoryIssue:
             acknowledged: Whether the participant starts with a current packet acknowledgment.
         """
         # Initialize issue identity, control handle, and transaction logs.
-        self.id = "AGENT-30"
+        self.id = "TEST-30"
         self.control = MemoryControl()
         self.store = MemoryStore()
         self.recoveries = 0
@@ -242,20 +242,41 @@ def test_read_returns_only_assigned_matching_references_without_commit() -> None
 
 
 def test_diagnose_reports_absent_and_present_issue_without_binding_read() -> None:
-    """Diagnosis reveals only committed issue presence and storage state."""
+    """Diagnosis reveals committed presence, storage and only the caller's own packet."""
     # Create a modeled store and issue at the active revision.
     store, issue = MemoryStore(), MemoryIssue()
+    before = copy.deepcopy(issue.state)
+    key = core.participant_key(base_request("diagnose"))
     # Dispatch the diagnose request against the modeled issue.
     result = core.operate(store, issue, base_request("diagnose"))  # type: ignore[arg-type]
-    # Confirm the exact participant and issue report a present binding.
+    # A recorded participant also receives its committed packet exactly as stored.
     assert result == {
         "ok": True,
         "code": "PRESENT",
         "repo_id": "repo",
-        "issue_id": "AGENT-30",
+        "issue_id": "TEST-30",
         "revision": 7,
         "storage": "present",
+        "packet": before["participants"][key]["packet"],
+        "sources": [
+            {
+                "id": "roadmap",
+                "locator": "roadmap.md",
+                "recorded_sha256": core.sha(b"approved roadmap"),
+                "current_sha256": core.sha(b"approved roadmap"),
+                "available": True,
+            }
+        ],
     }
+    assert all("available" not in ref for ref in result["packet"])
+    # The returned packet is a copy; changing it cannot alter committed state.
+    result["packet"][0]["sha256"] = "0" * 64
+    assert issue.state == before
+    # A session that is not a recorded participant gets no packet.
+    other = core.operate(  # type: ignore[arg-type]
+        store, issue, base_request("diagnose", session_id="other-session")
+    )
+    assert "packet" not in other and "sources" not in other and other["code"] == "PRESENT"
     # Model an absent issue record even though the store wrapper exists.
     issue.state = {}
     # Dispatch the diagnose request against the modeled issue.
@@ -265,11 +286,149 @@ def test_diagnose_reports_absent_and_present_issue_without_binding_read() -> Non
         "ok": True,
         "code": "ABSENT",
         "repo_id": "repo",
-        "issue_id": "AGENT-30",
+        "issue_id": "TEST-30",
         "revision": None,
         "storage": "absent",
     }
     assert issue.commits == []
+
+
+def stale_packet_issue(tmp_path: Path) -> tuple[MemoryIssue, dict[str, Any]]:
+    """Model a coordinator whose packet mixes current, changed and unreadable sources.
+
+    Args:
+        tmp_path: Temporary directory holding the external governing sources.
+
+    Returns:
+        The modeled issue and the caller's participant record.
+    """
+    # Write one changed and one unchanged external source; leave a third absent.
+    # Write through the lifecycle directory boundary so every native backend can read them.
+    with core.Directory.absolute(tmp_path) as sources:
+        sources.write("AGENTS.md", b"edited rules\n")
+        sources.write("development.md", b"unchanged\n")
+    issue = MemoryIssue()
+    key = core.participant_key(base_request("diagnose"))
+    member = issue.state["participants"][key]
+    template = member["packet"][0]
+    # Append references for the changed, unchanged, missing and unknown payload sources.
+    member["packet"] = [
+        template,
+        {
+            **template,
+            "id": "rules",
+            "locator": str(tmp_path / "AGENTS.md"),
+            "sha256": core.sha(b"original rules\n"),
+        },
+        {
+            **template,
+            "id": "dev",
+            "locator": str(tmp_path / "development.md"),
+            "sha256": core.sha(b"unchanged\n"),
+        },
+        {
+            **template,
+            "id": "gone",
+            "locator": str(tmp_path / "missing.md"),
+            "sha256": core.sha(b"gone\n"),
+            "required": False,
+        },
+        {
+            **template,
+            "id": "note",
+            "locator": "context/absent.md",
+            "sha256": core.sha(b"absent\n"),
+            "required": False,
+        },
+    ]
+    member["ack"] = core.sha(core.canonical(member["packet"]))
+    return issue, member
+
+
+def test_diagnose_sources_report_current_digests_for_every_reference(tmp_path: Path) -> None:
+    """Diagnose aligns each packet reference with its current digest and availability.
+
+    Args:
+        tmp_path: Temporary directory holding the external governing sources.
+    """
+    # Model a coordinator with changed, unchanged and unreadable references.
+    issue, member = stale_packet_issue(tmp_path)
+    before = copy.deepcopy(issue.state)
+    result = core.operate(MemoryStore(), issue, base_request("diagnose"))  # type: ignore[arg-type]
+    # The packet stays exactly as stored and sources align with it one to one.
+    assert result["packet"] == member["packet"]
+    assert [s["id"] for s in result["sources"]] == [r["id"] for r in member["packet"]]
+    assert [s["locator"] for s in result["sources"]] == [r["locator"] for r in member["packet"]]
+    assert [s["recorded_sha256"] for s in result["sources"]] == [
+        r["sha256"] for r in member["packet"]
+    ]
+    # Current digests come from the manifest or the external bytes; unreadable is null.
+    assert [s["current_sha256"] for s in result["sources"]] == [
+        core.sha(b"approved roadmap"),
+        core.sha(b"edited rules\n"),
+        core.sha(b"unchanged\n"),
+        None,
+        None,
+    ]
+    assert [s["available"] for s in result["sources"]] == [True, False, True, False, False]
+    # Diagnosis stays read-only and event-free.
+    assert issue.state == before
+    assert issue.commits == []
+
+
+def test_read_stale_failure_names_every_changed_reference(tmp_path: Path) -> None:
+    """A required stale source fails read with the changed references and their digests.
+
+    Args:
+        tmp_path: Temporary directory holding the external governing sources.
+    """
+    # Model a coordinator whose required governing source changed after acknowledgment.
+    issue, _member = stale_packet_issue(tmp_path)
+    before = copy.deepcopy(issue.state)
+    with pytest.raises(core.StaleSourceError) as captured:
+        core.operate(MemoryStore(), issue, base_request("read"))  # type: ignore[arg-type]
+    # The failure keeps its public code and lists only the mismatched references.
+    assert captured.value.code == "SOURCE_STALE"
+    assert captured.value.stale == [
+        {
+            "id": "rules",
+            "locator": str(tmp_path / "AGENTS.md"),
+            "recorded_sha256": core.sha(b"original rules\n"),
+            "current_sha256": core.sha(b"edited rules\n"),
+            "available": False,
+        },
+        {
+            "id": "gone",
+            "locator": str(tmp_path / "missing.md"),
+            "recorded_sha256": core.sha(b"gone\n"),
+            "current_sha256": None,
+            "available": False,
+        },
+        {
+            "id": "note",
+            "locator": "context/absent.md",
+            "recorded_sha256": core.sha(b"absent\n"),
+            "current_sha256": None,
+            "available": False,
+        },
+    ]
+    assert issue.state == before
+    assert issue.commits == []
+
+
+def test_read_tolerates_changed_optional_sources_only(tmp_path: Path) -> None:
+    """Optional unreadable references stay unavailable without blocking read.
+
+    Args:
+        tmp_path: Temporary directory holding the external governing sources.
+    """
+    # Restore the required governing source so only optional references differ.
+    issue, member = stale_packet_issue(tmp_path)
+    member["packet"][1]["sha256"] = core.sha(b"edited rules\n")
+    result = core.operate(MemoryStore(), issue, base_request("read"))  # type: ignore[arg-type]
+    # Read succeeds and reports the optional references as unavailable.
+    assert result["ok"] is True
+    assert [ref["available"] for ref in result["references"]] == [True, True, True, False, False]
 
 
 def test_ready_rejects_unacknowledged_packet_without_commit() -> None:
@@ -320,7 +479,7 @@ def test_update_replaces_owned_note_with_attributable_provenance() -> None:
         path="context/note.md",
         old_digest=core.sha(b"old note"),
         content="new note é",
-        provenance={"sources": [source], "applicability": "AGENT-30", "status": "draft"},
+        provenance={"sources": [source], "applicability": "TEST-30", "status": "draft"},
     )
     # Check the operation response and committed issue state.
     assert core.operate(store, issue, request)["ok"] is True  # type: ignore[arg-type]
@@ -1066,7 +1225,7 @@ def test_existing_create_reuses_explicit_coordinator_binding() -> None:
     # Confirm the result remains bound to the requested issue.
     assert result["ok"] is True
     assert store.saved == [key]
-    assert store.views[-1] == "AGENT-30"
+    assert store.views[-1] == "TEST-30"
     assert issue.commits[-1][0] == "attach"
 
 
@@ -1090,7 +1249,7 @@ def test_create_initializes_packaged_roadmap_only_for_absent_issue() -> None:
                 Whether the requested test entry exists.
             """
             # Confirm the result remains bound to the requested issue.
-            assert identifier == "AGENT-30"
+            assert identifier == "TEST-30"
             return False
 
     # Attach the modeled canonical issue directory to the store.
@@ -1104,7 +1263,7 @@ def test_create_initializes_packaged_roadmap_only_for_absent_issue() -> None:
     assert result["ok"] is True
     assert result["binding_generation"] == 1
     assert issue.payload["events.jsonl"] == b""
-    assert b"AGENT-30" in issue.payload["roadmap.md"]
+    assert b"TEST-30" in issue.payload["roadmap.md"]
     assert issue.state["coordinator"] == key
     assert issue.commits[-1][0] == "create"
     assert store.saved == [key]
@@ -1279,7 +1438,7 @@ def test_reconcile_imports_only_inspected_markdown_with_unchanged_event_history(
                 Fake child directory or issue context for the caller.
             """
             # Confirm the result remains bound to the requested issue.
-            assert (identifier, private) == ("AGENT-30", False)
+            assert (identifier, private) == ("TEST-30", False)
             return Payload()
 
     # Install fake inventory calls.
@@ -1742,7 +1901,7 @@ def test_adopt_requires_exact_existing_payload_inventory_and_owners(
                 Whether the requested test entry exists.
             """
             # Confirm the result remains bound to the requested issue.
-            assert identifier == "AGENT-30"
+            assert identifier == "TEST-30"
             return True
 
         def child(self, identifier: str, *, private: bool) -> Payload:
@@ -1756,7 +1915,7 @@ def test_adopt_requires_exact_existing_payload_inventory_and_owners(
                 Fake child directory or issue context for the caller.
             """
             # Confirm the result remains bound to the requested issue.
-            assert (identifier, private) == ("AGENT-30", False)
+            assert (identifier, private) == ("TEST-30", False)
             return Payload()
 
     # Install fake inventory calls.
@@ -2032,7 +2191,7 @@ def test_replayed_create_restores_saved_result_and_binding_without_new_commit() 
         "participant_id": key,
     }
     assert store.saved == [key]
-    assert store.views == ["AGENT-30"]
+    assert store.views == ["TEST-30"]
     assert issue.commits == []
 
 
@@ -2214,3 +2373,110 @@ def test_repeated_unknown_process_observation_does_not_append_event() -> None:
     assert next(iter(issue.state["participants"].values()))["pending"] == {
         "process": {"status": "unknown", "handle": "pid-7"}
     }
+
+
+def source_ref(locator: str, digest: str) -> dict[str, Any]:
+    """Build one required coordinator source reference.
+
+    Args:
+        locator: Managed or absolute source locator.
+        digest: Recorded SHA-256 digest of the source bytes.
+
+    Returns:
+        A packet reference shaped like an assigned source.
+    """
+    return {
+        "id": locator,
+        "locator": locator,
+        "sha256": digest,
+        "required": True,
+        "authority": "fixture",
+        "reason": "own",
+        "stage": "planning",
+        "reader": "coordinator",
+    }
+
+
+@pytest.mark.parametrize("status", ["ready", "detached"])
+def test_roadmap_refresh_clears_ack_without_reviving_detached(status: str) -> None:
+    """Refresh only the roadmap digest and never revive a detached coordinator.
+
+    Args:
+        status: Coordinator participant status before the refresh.
+    """
+    # Model a coordinator packet holding a roadmap and an external reference.
+    packet = [source_ref("roadmap.md", "a" * 64), source_ref("/external.md", "b" * 64)]
+    state: dict[str, Any] = {
+        "participants": {
+            "coordinator": {"packet": copy.deepcopy(packet), "ack": "c" * 64, "status": status}
+        },
+        "assignments": {"coordinator": {"packet": copy.deepcopy(packet)}},
+    }
+    # Refresh the roadmap reference to new committed bytes.
+    core.refresh_roadmap_reference(state, "coordinator", "d" * 64)  # type: ignore[arg-type]
+    participant = state["participants"]["coordinator"]
+    assert [ref["sha256"] for ref in participant["packet"]] == ["d" * 64, "b" * 64]
+    assert state["assignments"]["coordinator"]["packet"] == participant["packet"]
+    assert participant["ack"] is None
+    assert participant["status"] == ("attached" if status == "ready" else "detached")
+
+
+def test_roadmap_refresh_keeps_readiness_without_changed_roadmap_reference() -> None:
+    """Leave a packet without a changed roadmap reference acknowledged and ready."""
+    # Model one packet without a roadmap reference and one already at the new digest.
+    for packet in [[source_ref("/external.md", "b" * 64)], [source_ref("roadmap.md", "d" * 64)]]:
+        state: dict[str, Any] = {
+            "participants": {"coordinator": {"packet": packet, "ack": "c" * 64, "status": "ready"}}
+        }
+        before = copy.deepcopy(state)
+        # Refreshing must not change readiness when no recorded digest differs.
+        core.refresh_roadmap_reference(state, "coordinator", "d" * 64)  # type: ignore[arg-type]
+        assert state == before
+
+
+def test_roadmap_refresh_ignores_unscoped_coordinator_and_missing_assignment() -> None:
+    """An absent or unscoped coordinator refreshes nothing; a missing assignment is fine."""
+    # No participant record and a participant without a packet both return unchanged.
+    for participants in [{}, {"coordinator": {"packet": None, "ack": None, "status": "ready"}}]:
+        state: dict[str, Any] = {"participants": copy.deepcopy(participants)}
+        core.refresh_roadmap_reference(state, "coordinator", "d" * 64)  # type: ignore[arg-type]
+        assert state == {"participants": participants}
+    # Without a stored assignment only the participant packet is refreshed.
+    packet = [source_ref("roadmap.md", "a" * 64)]
+    state = {
+        "participants": {"coordinator": {"packet": packet, "ack": "c" * 64, "status": "ready"}}
+    }
+    core.refresh_roadmap_reference(state, "coordinator", "d" * 64)  # type: ignore[arg-type]
+    participant = state["participants"]["coordinator"]
+    assert participant == {
+        "packet": [source_ref("roadmap.md", "d" * 64)],
+        "ack": None,
+        "status": "attached",
+    }
+    assert "assignments" not in state
+
+
+def test_coordinator_roadmap_update_refreshes_its_own_packet_reference() -> None:
+    """A coordinator's roadmap update re-points its packet and requires a new ack."""
+    store, issue = MemoryStore(), MemoryIssue()
+    key = issue.state["coordinator"]
+    source = {"id": "issue", "locator": "context/issue.md", "sha256": core.sha(b"source")}
+    request = base_request(
+        "update",
+        expected_revision=7,
+        path="roadmap.md",
+        old_digest=core.sha(b"approved roadmap"),
+        content="revised roadmap",
+        provenance={"sources": [source], "applicability": "TEST-30", "status": "draft"},
+    )
+    assert core.operate(store, issue, request)["ok"] is True  # type: ignore[arg-type]
+    participant = issue.state["participants"][key]
+    assert participant["packet"][0]["sha256"] == core.sha(b"revised roadmap")
+    assert participant["ack"] is None
+    assert participant["status"] == "attached"
+    assert issue.payload["roadmap.md"] == b"revised roadmap"
+    # A note update by the same coordinator leaves its roadmap reference untouched.
+    store, issue = MemoryStore(), MemoryIssue()
+    note = {**request, "path": "context/note.md", "old_digest": core.sha(b"old note")}
+    assert core.operate(store, issue, note)["ok"] is True  # type: ignore[arg-type]
+    assert issue.state["participants"][key]["status"] == "ready"
