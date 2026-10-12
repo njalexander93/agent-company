@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from agent_company.adapters import common
-from agent_company.lifecycle import task_workspace as core
+from nplet.adapters import common
+from nplet.lifecycle import task_workspace as core
 from tests.types import JsonObject
 
 pytestmark = pytest.mark.unit
@@ -23,7 +23,7 @@ def test_connector_binding_requires_matching_host_provenance(
         source: Accepted documented remote-server source.
     """
     # Configure a single verified connector and construct its exact read operation.
-    monkeypatch.setenv("AGENT_COMPANY_CLAUDE_LINEAR_CONNECTOR_ID", CONNECTOR)
+    monkeypatch.setenv("NPLET_CLAUDE_LINEAR_CONNECTOR_ID", CONNECTOR)
     event: JsonObject = {
         "tool_name": f"mcp__{CONNECTOR}__get_issue",
         "mcp_server": {"name": CONNECTOR, "source": source},
@@ -49,7 +49,7 @@ def test_connector_binding_requires_matching_host_provenance(
     assert failure.value.code == "INVALID_REQUEST"
     # Invalid configuration must neither admit the opaque connector nor affect named Linear.
     for configured in ["", "*", "linear", CONNECTOR + ",other", CONNECTOR.upper()]:
-        monkeypatch.setenv("AGENT_COMPANY_CLAUDE_LINEAR_CONNECTOR_ID", configured)
+        monkeypatch.setenv("NPLET_CLAUDE_LINEAR_CONNECTOR_ID", configured)
         assert common._linear_tool(event, "claude-code") is None
     named = {
         **event,
@@ -70,7 +70,7 @@ def test_provider_admission_accepts_only_allowlisted_configured_operations(
         operation: One allowlisted Linear operation.
     """
     # Configure one connector and build its operation event.
-    monkeypatch.setenv("AGENT_COMPANY_CLAUDE_LINEAR_CONNECTOR_ID", CONNECTOR)
+    monkeypatch.setenv("NPLET_CLAUDE_LINEAR_CONNECTOR_ID", CONNECTOR)
     event: JsonObject = {
         "tool_name": f"mcp__{CONNECTOR}__{operation}",
         "mcp_server": {"name": CONNECTOR, "source": "sdk"},
@@ -109,7 +109,7 @@ def test_provider_admission_rejects_other_operations(
         operation: An operation outside the allowlist.
     """
     # Even the configured connector cannot run an unlisted operation.
-    monkeypatch.setenv("AGENT_COMPANY_CLAUDE_LINEAR_CONNECTOR_ID", CONNECTOR)
+    monkeypatch.setenv("NPLET_CLAUDE_LINEAR_CONNECTOR_ID", CONNECTOR)
     event: JsonObject = {
         "tool_name": f"mcp__{CONNECTOR}__{operation}",
         "mcp_server": {"name": CONNECTOR, "source": "sdk"},
@@ -131,7 +131,7 @@ def test_native_tool_routes_providers_and_no_effect_tools_by_host(
         monkeypatch: Scoped configuration for the verified Linear connector.
     """
     # A configured Claude provider write is an ordinary correlated tool.
-    monkeypatch.setenv("AGENT_COMPANY_CLAUDE_LINEAR_CONNECTOR_ID", CONNECTOR)
+    monkeypatch.setenv("NPLET_CLAUDE_LINEAR_CONNECTOR_ID", CONNECTOR)
     save: JsonObject = {
         "tool_name": f"mcp__{CONNECTOR}__save_issue",
         "mcp_server": {"name": CONNECTOR, "source": "claudeai"},
@@ -216,7 +216,7 @@ def test_preparation_tool_bounds_tool_search_and_paths(
         tmp_path: Disposable checkout root.
     """
     # Resolve every event to the disposable checkout.
-    monkeypatch.setenv("AGENT_COMPANY_CLAUDE_LINEAR_CONNECTOR_ID", CONNECTOR)
+    monkeypatch.setenv("NPLET_CLAUDE_LINEAR_CONNECTOR_ID", CONNECTOR)
     monkeypatch.setattr(common.core, "repository", lambda _path: (tmp_path, tmp_path, [tmp_path]))
     agents = str(tmp_path / "AGENTS.md")
 

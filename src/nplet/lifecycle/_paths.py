@@ -1,6 +1,6 @@
 """Validate portable direct entry names before either filesystem backend sees them."""
 
-from agent_company.lifecycle._errors import require
+from nplet.lifecycle._errors import require
 
 
 def entry_name(name: str) -> None:

@@ -1,7 +1,7 @@
 # Template resources
 
 This folder holds authoritative framework content shipped inside the
-`agent_company` package: the definition format, the Role template and the
+`nplet` package: the definition format, the Role template and the
 Profile template. Authors copy a template to start a new definition.
 
 No loader or activation mechanism reads these files. Publishing the package,

@@ -6,12 +6,12 @@ import subprocess
 
 import pytest
 
-from agent_company.adapters import codex as hook
+from nplet.adapters import codex as hook
 from tests.support import ROOT, Fixture
 
 pytestmark = pytest.mark.integration
 
-RESOURCES = ROOT / "src/agent_company/resources"
+RESOURCES = ROOT / "src/nplet/resources"
 FOLDERS = ("organization", "templates", "roles", "profiles")
 
 
@@ -32,7 +32,7 @@ import json
 import sys
 from importlib.resources import files
 
-base = files('agent_company').joinpath('resources')
+base = files('nplet').joinpath('resources')
 found = {}
 
 def walk(node, prefix):

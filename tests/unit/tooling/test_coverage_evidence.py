@@ -28,20 +28,20 @@ def test_regeneration_retains_a_measured_file_with_no_arcs(tmp_path: Path) -> No
         tmp_path: Disposable directory supplied by pytest for this case.
     """
     # Create a measured source that has no executed branch arcs.
-    source = tmp_path / "src/agent_company/sample.py"
+    source = tmp_path / "src/nplet/sample.py"
     source.parent.mkdir(parents=True)
     source.write_text("value = 1\n")
     (tmp_path / "pyproject.toml").write_text("[tool.coverage.run]\nbranch = true\n")
     database = CoverageData(basename=str(tmp_path / ".coverage"))
     database.add_arcs({})
-    database.touch_file("src/agent_company/sample.py")
+    database.touch_file("src/nplet/sample.py")
     database.write()
     database.close()
     database = CoverageData(basename=str(tmp_path / ".coverage"))
     database.read()
     report = evidence.regenerated_report(database, tmp_path, False)
     database.close()
-    row = report["files"]["src/agent_company/sample.py"]
+    row = report["files"]["src/nplet/sample.py"]
     # Require its source row to survive report regeneration.
     assert row["executed_lines"] == []
     assert row["missing_lines"] == [1]
@@ -51,7 +51,7 @@ def test_regeneration_retains_a_measured_file_with_no_arcs(tmp_path: Path) -> No
     ("measured", "reason"),
     [
         ("../outside.py", "unsafe or duplicate measured source"),
-        ("src/agent_company/missing.py", "missing or unsafe source file"),
+        ("src/nplet/missing.py", "missing or unsafe source file"),
     ],
 )
 def test_regeneration_rejects_unsafe_or_absent_source(
@@ -88,12 +88,12 @@ def test_regeneration_rejects_output_path_aliases(
         monkeypatch: Pytest fixture that restores patched dependencies after this case.
     """
     # Create source and branch data with colliding native path spellings.
-    source = tmp_path / "src/agent_company/sample.py"
+    source = tmp_path / "src/nplet/sample.py"
     source.parent.mkdir(parents=True)
     source.write_text("value = 1\n")
     (tmp_path / "pyproject.toml").write_text("[tool.coverage.run]\nbranch = true\n")
     database = CoverageData(basename=str(tmp_path / ".coverage"))
-    database.add_arcs({"src/agent_company/sample.py": [(-1, 1), (1, -1)]})
+    database.add_arcs({"src/nplet/sample.py": [(-1, 1), (1, -1)]})
     database.write()
     database.close()
     database = CoverageData(basename=str(tmp_path / ".coverage"))
@@ -115,7 +115,7 @@ def test_regeneration_rejects_output_path_aliases(
         path = Path(outfile)
         report = json.loads(path.read_text())
         row = next(iter(report["files"].values()))
-        report["files"]["src/agent_company/sample.py"] = row
+        report["files"]["src/nplet/sample.py"] = row
         path.write_text(json.dumps(report))
         return result
 

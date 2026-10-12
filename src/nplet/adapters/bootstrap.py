@@ -6,7 +6,7 @@ import base64
 import binascii
 import sys
 
-from agent_company.lifecycle import task_workspace as core
+from nplet.lifecycle import task_workspace as core
 
 
 def decode_request(encoded: str) -> core.JSONObject:

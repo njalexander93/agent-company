@@ -10,7 +10,7 @@ import unittest
 import uuid
 from pathlib import Path
 
-from agent_company.lifecycle import task_workspace as w
+from nplet.lifecycle import task_workspace as w
 from tests.types import JsonObject, JsonValue
 
 ROOT = Path(__file__).resolve().parents[1]

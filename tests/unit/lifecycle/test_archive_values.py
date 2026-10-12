@@ -6,7 +6,7 @@ import base64
 
 import pytest
 
-from agent_company.lifecycle import task_workspace as core
+from nplet.lifecycle import task_workspace as core
 
 pytestmark = pytest.mark.unit
 

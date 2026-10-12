@@ -96,7 +96,7 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
         exitstatus: Final pytest exit status written into the receipt.
     """
     # Honor the configured receipt path only when evidence was requested.
-    destination = os.environ.get("AGENT_COMPANY_PYTEST_EVIDENCE")
+    destination = os.environ.get("NPLET_PYTEST_EVIDENCE")
     # Leave ordinary pytest sessions without a generated receipt.
     if not destination:
         return

@@ -1,7 +1,7 @@
-# Profile definitions
+# Role definitions
 
-This folder is reserved for Profile definitions shipped inside the
-`agent_company` package. It is currently empty apart from this README. Definitions placed here are
+This folder is reserved for Role definitions shipped inside the
+`nplet` package. It is currently empty apart from this README. Definitions placed here are
 authoritative framework content, with the same status as the organization
 and template resources.
 

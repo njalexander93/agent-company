@@ -5,8 +5,8 @@ import shlex
 
 import pytest
 
-from agent_company.adapters import claude, common
-from agent_company.lifecycle import task_workspace as core
+from nplet.adapters import claude, common
+from nplet.lifecycle import task_workspace as core
 from tests.integration.adapters.test_native_hosts import native_event, ticket_callbacks
 from tests.platform_support import link_directory, unlink_directory
 from tests.support import Fixture
@@ -29,7 +29,7 @@ def test_desktop_connector_requires_mapping_and_exact_correlated_read(
     """
     # Create a disposable repository; never register the user's active session.
     monkeypatch.delenv("CURSOR_VERSION", raising=False)
-    monkeypatch.delenv("AGENT_COMPANY_CLAUDE_LINEAR_CONNECTOR_ID", raising=False)
+    monkeypatch.delenv("NPLET_CLAUDE_LINEAR_CONNECTOR_ID", raising=False)
     case = Fixture()
     case.setUp()
     case.base["host"] = claude.HOST
@@ -51,7 +51,7 @@ def test_desktop_connector_requires_mapping_and_exact_correlated_read(
             )
         # A UUID alone grants no exception, even when the host reports a known source.
         assert "TICKET_READ_REQUIRED" in str(claude.handle(before[0]))
-        monkeypatch.setenv("AGENT_COMPANY_CLAUDE_LINEAR_CONNECTOR_ID", CONNECTOR)
+        monkeypatch.setenv("NPLET_CLAUDE_LINEAR_CONNECTOR_ID", CONNECTOR)
         # Wrong issues remain denied and must not create a workspace.
         wrong = {**before[0], "tool_input": {"id": "TEST-2"}}
         assert "BINDING_CONFLICT" in str(claude.handle(wrong))
@@ -115,7 +115,7 @@ def _desktop_case(monkeypatch: pytest.MonkeyPatch) -> Fixture:
     """
     # Remove imported-hook markers and map one verified connector.
     monkeypatch.delenv("CURSOR_VERSION", raising=False)
-    monkeypatch.setenv("AGENT_COMPANY_CLAUDE_LINEAR_CONNECTOR_ID", CONNECTOR)
+    monkeypatch.setenv("NPLET_CLAUDE_LINEAR_CONNECTOR_ID", CONNECTOR)
     case = Fixture()
     case.setUp()
     case.base["host"] = claude.HOST

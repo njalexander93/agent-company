@@ -288,7 +288,7 @@ def main() -> int:
         print(
             "Platform checks only; combined native Windows + Linux coverage gate remains pending."
         )
-        environment["AGENT_COMPANY_COVERAGE_CONTEXT"] = (
+        environment["NPLET_COVERAGE_CONTEXT"] = (
             platform.system() + "-" + platform.python_version() + "-" + args.task
         )
         manifest["coverage_gate"] = "pending native Windows + Linux combination"
@@ -354,9 +354,7 @@ def main() -> int:
             # Assign receipt paths and persistent logs for test commands.
             if evidence and task in {*TEST_TASKS, "test-tooling", "test-tooling-unit"}:
                 command.extend(["-p", "scripts.pytest_evidence", "--durations=20"])
-                environment["AGENT_COMPANY_PYTEST_EVIDENCE"] = str(
-                    evidence / "pytest-evidence.json"
-                )
+                environment["NPLET_PYTEST_EVIDENCE"] = str(evidence / "pytest-evidence.json")
                 command.append(f"--junitxml={evidence / 'tests.xml'}")
                 # Keep collection evidence separate for each native test suite.
                 if task in {"test", "test-tooling", "test-tooling-unit"} or args.platform_coverage:

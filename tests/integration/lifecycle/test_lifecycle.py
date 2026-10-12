@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_company.lifecycle import task_workspace as w
+from nplet.lifecycle import task_workspace as w
 from tests.support import ROOT, Fixture, call_process
 from tests.types import JsonObject
 
@@ -625,7 +625,7 @@ class LifecycleTests(Fixture):
         kept = [
             "docs/runtime/task-workspace.md",
             ".codex/hooks.json",
-            "src/agent_company/resources/task_workspace/roadmap.md",
+            "src/nplet/resources/task_workspace/roadmap.md",
             "nested/product.ini",
             "product.cab",
             ".env.example",

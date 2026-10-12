@@ -89,7 +89,7 @@ def test_tooling_unit_run_has_separate_script_coverage_and_receipt(
         seen.append(command)
         assert log is not None
         assert environment["COVERAGE_FILE"] == str(tmp_path / "evidence/.coverage")
-        assert environment["AGENT_COMPANY_PYTEST_EVIDENCE"] == str(
+        assert environment["NPLET_PYTEST_EVIDENCE"] == str(
             tmp_path / "evidence/pytest-evidence.json"
         )
         log.write_text("tooling unit passed\n")

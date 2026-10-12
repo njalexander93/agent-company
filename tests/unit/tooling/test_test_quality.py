@@ -41,13 +41,13 @@ def test_source_functions_finds_methods_and_nested_calls(tmp_path: Path) -> None
 def test_native_applicability_is_exact() -> None:
     """Treat native-only modules as applicable on their real hosts."""
     # Provide platform-specific and portable module paths.
-    assert quality.applicable("src/agent_company/lifecycle/_filesystem_windows.py") == {"Windows"}
+    assert quality.applicable("src/nplet/lifecycle/_filesystem_windows.py") == {"Windows"}
     # Compare each path with its exact native system set.
-    assert quality.applicable("src/agent_company/lifecycle/_filesystem_posix.py") == {
+    assert quality.applicable("src/nplet/lifecycle/_filesystem_posix.py") == {
         "Linux",
         "Darwin",
     }
-    assert quality.applicable("src/agent_company/lifecycle/task_workspace.py") == {
+    assert quality.applicable("src/nplet/lifecycle/task_workspace.py") == {
         "Linux",
         "Windows",
         "Darwin",
@@ -65,7 +65,7 @@ def test_function_gap_repair_is_measured_by_unit_report(
     """
     # Create per-function unit rows with a controlled missing path.
     monkeypatch.setattr(quality, "ROOT", tmp_path)
-    source = tmp_path / "src/agent_company/logic.py"
+    source = tmp_path / "src/nplet/logic.py"
     source.parent.mkdir(parents=True)
     source.write_text("def choose(value):\n    if value:\n        return 1\n    return 0\n")
     (source.parent / "__init__.py").write_text("")
@@ -75,9 +75,7 @@ def test_function_gap_repair_is_measured_by_unit_report(
     for system in quality.SYSTEMS:
         directory = tmp_path / "evidence" / system / "unit"
         directory.mkdir(parents=True)
-        source_key = (
-            "src\\agent_company\\logic.py" if system == "Windows" else "src/agent_company/logic.py"
-        )
+        source_key = "src\\nplet\\logic.py" if system == "Windows" else "src/nplet/logic.py"
         (directory / "coverage.json").write_text(
             json.dumps(
                 {
@@ -100,7 +98,7 @@ def test_function_gap_repair_is_measured_by_unit_report(
     assert all(gap["missing_lines"] == [4] and gap["missing_arcs"] == [[2, 4]] for gap in gaps)
     path = records[("Linux", "unit")].parent / "coverage.json"
     report = json.loads(path.read_text())
-    row = report["files"]["src/agent_company/logic.py"]
+    row = report["files"]["src/nplet/logic.py"]
     row["executed_lines"].append(4)
     row["missing_lines"] = []
     row["executed_branches"].append([2, 4])
@@ -127,7 +125,7 @@ def test_function_gap_flags_unmeasured_and_unmapped_source(
     """
     # Prepare source functions missing from native coverage rows.
     monkeypatch.setattr(quality, "ROOT", tmp_path)
-    source = tmp_path / "src/agent_company/logic.py"
+    source = tmp_path / "src/nplet/logic.py"
     source.parent.mkdir(parents=True)
     source.write_text("def choose():\n    return 1\n")
     (tmp_path / "scripts").mkdir()
@@ -152,7 +150,7 @@ def test_function_gap_flags_unmeasured_and_unmapped_source(
             json.dumps(
                 {
                     "files": {
-                        "src/agent_company/logic.py": {
+                        "src/nplet/logic.py": {
                             "executed_lines": [],
                             "missing_lines": [],
                             "executed_branches": [],
@@ -178,7 +176,7 @@ def test_function_exception_requires_exact_executed_case_and_missing_path(
     """
     # Create a reviewed exception and its cited exact test outcome.
     monkeypatch.setattr(quality, "ROOT", tmp_path)
-    source = tmp_path / "src/agent_company/logic.py"
+    source = tmp_path / "src/nplet/logic.py"
     source.parent.mkdir(parents=True)
     source.write_text("def choose():\n    return 1\n")
     (tmp_path / "scripts").mkdir()
@@ -207,7 +205,7 @@ def test_function_exception_requires_exact_executed_case_and_missing_path(
             json.dumps(
                 {
                     "files": {
-                        "src/agent_company/logic.py": {
+                        "src/nplet/logic.py": {
                             "executed_lines": [1] if linux_gap else [1, 2],
                             "missing_lines": [2] if linux_gap else [],
                             "executed_branches": [],
@@ -219,9 +217,9 @@ def test_function_exception_requires_exact_executed_case_and_missing_path(
         )
     exception = {
         "id": "EX-1",
-        "source_path": "src/agent_company/logic.py",
+        "source_path": "src/nplet/logic.py",
         "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
-        "symbol": "agent_company.logic:choose",
+        "symbol": "nplet.logic:choose",
         "platforms": ["Linux"],
         "missing_lines": [2],
         "missing_arcs": [],
@@ -256,7 +254,7 @@ def test_function_exception_requires_exact_executed_case_and_missing_path(
     # Reject an exception assigned to a source or function that does not match.
     with pytest.raises(ValueError, match="unused or mismatched"):
         quality.function_gaps(records, tooling, [stale_source])
-    invalid_symbol = {**exception, "symbol": "agent_company.logic:other"}
+    invalid_symbol = {**exception, "symbol": "nplet.logic:other"}
     # Reject an exception bound to a stale source digest.
     with pytest.raises(ValueError, match="unused or mismatched"):
         quality.function_gaps(records, tooling, [invalid_symbol])
@@ -266,7 +264,7 @@ def test_function_exception_requires_exact_executed_case_and_missing_path(
         quality.function_gaps(records, tooling, [empty])
     unit = records[("Linux", "unit")].parent / "coverage.json"
     report = json.loads(unit.read_text())
-    row = report["files"]["src/agent_company/logic.py"]
+    row = report["files"]["src/nplet/logic.py"]
     row["executed_lines"].append(2)
     row["missing_lines"] = []
     unit.write_text(json.dumps(report))
@@ -286,7 +284,7 @@ def test_exception_ledger_rejects_stale_or_unreviewed_record(
     """
     # Write a reviewed exception ledger with controlled provenance fields.
     monkeypatch.setattr(quality, "ROOT", tmp_path)
-    source = tmp_path / "src/agent_company/logic.py"
+    source = tmp_path / "src/nplet/logic.py"
     source.parent.mkdir(parents=True)
     source.write_text("def choose():\n    return 1\n")
     case = tmp_path / "tests/integration/test_logic.py"
@@ -295,7 +293,7 @@ def test_exception_ledger_rejects_stale_or_unreviewed_record(
     record = {
         "id": "EX-1",
         "symbol": "choose",
-        "source_path": "src/agent_company/logic.py",
+        "source_path": "src/nplet/logic.py",
         "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
         "platforms": ["Linux"],
         "missing_lines": [2],
@@ -340,7 +338,7 @@ def test_exception_ledger_rejects_stale_or_unreviewed_record(
     # Reject a traversal or unsupported source locator in an exception.
     with pytest.raises(ValueError, match="invalid exception source path"):
         quality.exception_records(ledger)
-    record["source_path"] = "src/agent_company/logic.py"
+    record["source_path"] = "src/nplet/logic.py"
     record["compensating_case_ids"] = ["not-a-node"]
     ledger.write_text(json.dumps([record]))
     # Reject an exception with no compensating test case.
@@ -811,7 +809,7 @@ def test_probe_runner_requires_intended_assertions_after_baselines(
         attempt = len(calls)
         environment = kwargs["env"]
         assert isinstance(environment, dict)
-        receipt = Path(environment["AGENT_COMPANY_PYTEST_EVIDENCE"])
+        receipt = Path(environment["NPLET_PYTEST_EVIDENCE"])
         mutant = receipt.name == "mutant.json"
         calls.append(receipt.name)
         # Make selected baseline or mutation invocations time out without changing other runs.
@@ -1036,7 +1034,7 @@ def test_advisory_reports_show_native_totals_and_diff_failure(
 
         returncode = 0
         stderr = ""
-        stdout = "diff --git a/src/agent_company/a.py b/src/agent_company/a.py\n"
+        stdout = "diff --git a/src/nplet/a.py b/src/nplet/a.py\n"
 
     monkeypatch.setattr(quality.subprocess, "run", lambda *_args, **_kwargs: Success())
     advisory = quality.advisory_reports({("Linux", "unit"): directory / ".coverage"}, "base")

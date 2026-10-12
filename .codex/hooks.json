@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "git -c alias.task-workspace-hook=!./src/agent_company/adapters/launch.sh task-workspace-hook codex",
+            "command": "git -c alias.task-workspace-hook=!./src/nplet/adapters/launch.sh task-workspace-hook codex",
             "timeout": 10
           }
         ]
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "git -c alias.task-workspace-hook=!./src/agent_company/adapters/launch.sh task-workspace-hook codex",
+            "command": "git -c alias.task-workspace-hook=!./src/nplet/adapters/launch.sh task-workspace-hook codex",
             "timeout": 10
           }
         ]
@@ -28,7 +28,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "git -c alias.task-workspace-hook=!./src/agent_company/adapters/launch.sh task-workspace-hook codex",
+            "command": "git -c alias.task-workspace-hook=!./src/nplet/adapters/launch.sh task-workspace-hook codex",
             "timeout": 10
           }
         ]
@@ -39,7 +39,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "git -c alias.task-workspace-hook=!./src/agent_company/adapters/launch.sh task-workspace-hook codex",
+            "command": "git -c alias.task-workspace-hook=!./src/nplet/adapters/launch.sh task-workspace-hook codex",
             "timeout": 10
           }
         ]
@@ -50,7 +50,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "git -c alias.task-workspace-hook=!./src/agent_company/adapters/launch.sh task-workspace-hook codex",
+            "command": "git -c alias.task-workspace-hook=!./src/nplet/adapters/launch.sh task-workspace-hook codex",
             "timeout": 10
           }
         ]
@@ -61,7 +61,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "git -c alias.task-workspace-hook=!./src/agent_company/adapters/launch.sh task-workspace-hook codex",
+            "command": "git -c alias.task-workspace-hook=!./src/nplet/adapters/launch.sh task-workspace-hook codex",
             "timeout": 10
           }
         ]
@@ -72,7 +72,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "git -c alias.task-workspace-hook=!./src/agent_company/adapters/launch.sh task-workspace-hook codex",
+            "command": "git -c alias.task-workspace-hook=!./src/nplet/adapters/launch.sh task-workspace-hook codex",
             "timeout": 10
           }
         ]
@@ -83,7 +83,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "git -c alias.task-workspace-hook=!./src/agent_company/adapters/launch.sh task-workspace-hook codex",
+            "command": "git -c alias.task-workspace-hook=!./src/nplet/adapters/launch.sh task-workspace-hook codex",
             "timeout": 10
           }
         ]
@@ -94,7 +94,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "git -c alias.task-workspace-hook=!./src/agent_company/adapters/launch.sh task-workspace-hook codex",
+            "command": "git -c alias.task-workspace-hook=!./src/nplet/adapters/launch.sh task-workspace-hook codex",
             "timeout": 10
           }
         ]
@@ -105,7 +105,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "git -c alias.task-workspace-hook=!./src/agent_company/adapters/launch.sh task-workspace-hook codex",
+            "command": "git -c alias.task-workspace-hook=!./src/nplet/adapters/launch.sh task-workspace-hook codex",
             "timeout": 10
           }
         ]
@@ -116,7 +116,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "git -c alias.task-workspace-hook=!./src/agent_company/adapters/launch.sh task-workspace-hook codex",
+            "command": "git -c alias.task-workspace-hook=!./src/nplet/adapters/launch.sh task-workspace-hook codex",
             "timeout": 3
           }
         ]
@@ -127,7 +127,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "git -c alias.task-workspace-hook=!./src/agent_company/adapters/launch.sh task-workspace-hook codex",
+            "command": "git -c alias.task-workspace-hook=!./src/nplet/adapters/launch.sh task-workspace-hook codex",
             "timeout": 3
           }
         ]

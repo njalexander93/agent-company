@@ -2,8 +2,8 @@
 
 import pytest
 
-from agent_company.lifecycle._errors import WorkspaceError
-from agent_company.lifecycle._paths import entry_name
+from nplet.lifecycle._errors import WorkspaceError
+from nplet.lifecycle._paths import entry_name
 
 pytestmark = pytest.mark.unit
 

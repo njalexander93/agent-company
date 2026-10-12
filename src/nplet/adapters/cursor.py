@@ -5,8 +5,8 @@ from __future__ import annotations
 import os
 import sys
 
-from agent_company.adapters import common
-from agent_company.lifecycle import task_workspace as core
+from nplet.adapters import common
+from nplet.lifecycle import task_workspace as core
 
 HOST = "cursor"
 PYTHON = common.PYTHON

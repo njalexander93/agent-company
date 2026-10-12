@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_company.adapters import codex as hook
+from nplet.adapters import codex as hook
 from tests.support import ROOT, Fixture
 
 pytestmark = pytest.mark.integration
@@ -28,11 +28,11 @@ import json
 import sys
 from importlib.resources import files
 from pathlib import Path
-from agent_company.lifecycle import task_workspace as core
-from agent_company.adapters import codex
+from nplet.lifecycle import task_workspace as core
+from nplet.adapters import codex
 
 request = json.loads(sys.argv[1])
-resource = files('agent_company').joinpath('resources/task_workspace/roadmap.md').read_text()
+resource = files('nplet').joinpath('resources/task_workspace/roadmap.md').read_text()
 result = core.execute(request)
 print(json.dumps({
     'result': result,
@@ -54,9 +54,9 @@ print(json.dumps({
         observed = json.loads(result.stdout)
         self.require_ok(observed["result"])
         self.assertEqual(
-            Path(observed["module_path"]), ROOT / "src/agent_company/lifecycle/task_workspace.py"
+            Path(observed["module_path"]), ROOT / "src/nplet/lifecycle/task_workspace.py"
         )
         self.assertTrue(observed["shared_identity"])
-        self.assertEqual(observed["core_module_names"], ["agent_company.lifecycle.task_workspace"])
+        self.assertEqual(observed["core_module_names"], ["nplet.lifecycle.task_workspace"])
         # Compare actual creation bytes with the package resource loaded in that process.
         self.assertEqual((self.root / ".task/TEST-1/roadmap.md").read_text(), observed["template"])

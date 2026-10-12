@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_company.lifecycle import task_workspace as core
+from nplet.lifecycle import task_workspace as core
 
 pytestmark = pytest.mark.integration
 
@@ -191,7 +191,7 @@ def test_lock_contention_and_process_exit_release(tmp_path: Path) -> None:
     root = tmp_path.resolve()
     script = """
 import sys
-from agent_company.lifecycle.task_workspace import Directory
+from nplet.lifecycle.task_workspace import Directory
 with Directory.absolute(sys.argv[1]) as directory, directory.lock():
     print('locked', flush=True)
     sys.stdin.read()

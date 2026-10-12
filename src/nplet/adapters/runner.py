@@ -12,7 +12,7 @@ import threading
 import time
 from collections.abc import Callable
 
-from agent_company.lifecycle import task_workspace as core
+from nplet.lifecycle import task_workspace as core
 
 INPUT_LIMIT = 1024 * 1024
 DEADLINE_SECONDS = 2.0
@@ -91,7 +91,7 @@ def run(
         core.require(module in {"codex", "claude", "cursor"}, "INVALID_REQUEST")
         # Isolate lifecycle mutation in a disposable child process.
         with subprocess.Popen(
-            [sys.executable, "-m", "agent_company.adapters.runner", "--worker", module],
+            [sys.executable, "-m", "nplet.adapters.runner", "--worker", module],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -147,7 +147,7 @@ def main() -> int:
         # Signal a bad worker command without loading an adapter.
         return 2
     # Parse one bounded event and execute only its selected adapter.
-    adapter = importlib.import_module("agent_company.adapters." + sys.argv[2])
+    adapter = importlib.import_module("nplet.adapters." + sys.argv[2])
     event = core.strict_json(sys.stdin.buffer.read(INPUT_LIMIT + 1))
     status = 0
     # Keep adapter exceptions inside the worker's bounded response shape.

@@ -7,8 +7,8 @@ from typing import Any
 
 import pytest
 
-from agent_company.adapters import startup
-from agent_company.lifecycle import task_workspace as core
+from nplet.adapters import startup
+from nplet.lifecycle import task_workspace as core
 
 pytestmark = pytest.mark.unit
 

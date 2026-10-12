@@ -23,7 +23,7 @@ def test_receipt_keeps_collection_errors_and_subtest_outcomes(
     """
     # Feed the pytest hooks a collection error and indexed subtests.
     destination = tmp_path / "receipt.json"
-    monkeypatch.setenv("AGENT_COMPANY_PYTEST_EVIDENCE", str(destination))
+    monkeypatch.setenv("NPLET_PYTEST_EVIDENCE", str(destination))
     # Exercise a separate module instance. Reloading the active pytest plugin
     # erases this parent run's collection and corrupts its native receipt.
     active_items = list(evidence._items)
@@ -97,7 +97,7 @@ def test_receipt_keeps_collection_errors_and_subtest_outcomes(
     assert receipt["reports"][node][2]["reason"] == "skip reason"
 
     isolated.pytest_sessionstart(SimpleNamespace())
-    monkeypatch.delenv("AGENT_COMPANY_PYTEST_EVIDENCE")
+    monkeypatch.delenv("NPLET_PYTEST_EVIDENCE")
     isolated.pytest_sessionfinish(SimpleNamespace(), 0)
     assert isolated._items == []
     assert isolated._reports == {}

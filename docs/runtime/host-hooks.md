@@ -5,9 +5,9 @@ implements three native adapters over that shared core:
 
 | Host | Project configuration | Python entry | Participant host |
 | --- | --- | --- | --- |
-| Codex | `.codex/hooks.json` | `agent_company.adapters.codex` | `codex` |
-| Claude Code | `.claude/settings.json` | `agent_company.adapters.claude` | `claude-code` |
-| Cursor Agent | `.cursor/hooks.json` | `agent_company.adapters.cursor` | `cursor` |
+| Codex | `.codex/hooks.json` | `nplet.adapters.codex` | `codex` |
+| Claude Code | `.claude/settings.json` | `nplet.adapters.claude` | `claude-code` |
+| Cursor Agent | `.cursor/hooks.json` | `nplet.adapters.cursor` | `cursor` |
 
 The integration targets local macOS, Linux and native Windows checkouts with an
 editable Poetry installation. Native Windows requires Git for Windows and local
@@ -80,7 +80,7 @@ local lifecycle integration, not proposal approval.
    read moves it (step 5). If that read or the move fails, the old binding remains;
    a Task line for the bound issue returns to it and drops the unfinished switch's
    lookup correlation.
-4. Recover with `agent_company.adapters.common.bootstrap_command(request, host)`
+4. Recover with `nplet.adapters.common.bootstrap_command(request, host)`
    from the intended worktree's Poetry environment. On POSIX and Claude's Bash
    tool it emits the exact `shlex.join` lifecycle invocation. Native Windows
    Codex/Cursor use a quoted PowerShell call to `adapters/bootstrap.py` with one
@@ -140,6 +140,20 @@ local lifecycle integration, not proposal approval.
    `adapters/common.py`. Wrappers, chaining, redirection, alternate interpreters,
    conflicting worktrees, and cross-host/session bootstrap requests receive no exemption.
 
+### After pulling the rename
+
+A checkout installed before the 2026-10 rename of the package to `nplet` needs
+these steps once:
+
+1. Pull `main`.
+2. Delete `.venv/` and run `poetry sync`, so the environment holds only the `nplet` distribution.
+3. In the ignored `.claude/settings.local.json`, rename the
+   [connector mapping](#claude-desktop-connector-mapping) key to
+   `NPLET_CLAUDE_LINEAR_CONNECTOR_ID`, keeping the same UUID value.
+4. Restart every Codex, Claude Code and Cursor session on the checkout. Hosts
+   capture hook commands at session start, so open sessions still call the old launcher path.
+5. Leave `.task/` data as it is. It stores checkout paths and lifecycle state, not package names.
+
 ### Ticket-read protocols
 
 Every supported adapter follows the same sequence: record the requested ticket,
@@ -175,7 +189,7 @@ identify Linear. Merge this environment setting into the ignored
 ```json
 {
   "env": {
-    "AGENT_COMPANY_CLAUDE_LINEAR_CONNECTOR_ID": "<verified-linear-connector-uuid>"
+    "NPLET_CLAUDE_LINEAR_CONNECTOR_ID": "<verified-linear-connector-uuid>"
   }
 }
 ```
@@ -264,7 +278,7 @@ with the exact command from step 4 (use the corresponding Windows shell there):
 The only accepted input fields are `command`, `cmd`, `login`, `shell`, `workdir`,
 `yield_time_ms`, `max_output_tokens`, `sandbox_permissions`, `justification`, and `prefix_rule`.
 Use one command field. These requirements come from the
-[Codex bootstrap parser](../../src/agent_company/adapters/codex.py); they do not change host
+[Codex bootstrap parser](../../src/nplet/adapters/codex.py); they do not change host
 permission requirements. Claude and Cursor use their own native tool-input shapes.
 
 ### Bounded hook processes

@@ -251,10 +251,10 @@ def regenerated_report(data: CoverageData, source_root: Path, tooling: bool) -> 
     """
     # Resolve only the expected source tree from this checkout.
     root = source_root.resolve()
-    prefix = "scripts/" if tooling else "src/agent_company/"
+    prefix = "scripts/" if tooling else "src/nplet/"
     measured: dict[str, str] = {}
     # Regenerate a report in a disposable database without altering native data.
-    with tempfile.TemporaryDirectory(prefix="agent-company-coverage-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="nplet-coverage-") as temporary:
         database = Path(temporary) / ".coverage"
         copy = CoverageData(basename=str(database))
         # Populate the temporary database and always release its handle.

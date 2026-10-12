@@ -1,7 +1,7 @@
 [
   {
-    "source_path": "src/agent_company/lifecycle/task_workspace.py",
-    "source_sha256": "55a68ab85da5afdb94123322bb73ac50cfa52aa7d39d171016b98555ed4023bd",
+    "source_path": "src/nplet/lifecycle/task_workspace.py",
+    "source_sha256": "427545c871fa54a9fb13c82291e377f66f0204b291929c3ba8ba4717a0e8cabe",
     "timeout_seconds": 20,
     "kind": "wrong_result",
     "old": "return hashlib.sha256(data).hexdigest()",
@@ -13,8 +13,8 @@
     "expected_failure_type": "AssertionError"
   },
   {
-    "source_path": "src/agent_company/lifecycle/task_workspace.py",
-    "source_sha256": "55a68ab85da5afdb94123322bb73ac50cfa52aa7d39d171016b98555ed4023bd",
+    "source_path": "src/nplet/lifecycle/task_workspace.py",
+    "source_sha256": "427545c871fa54a9fb13c82291e377f66f0204b291929c3ba8ba4717a0e8cabe",
     "timeout_seconds": 20,
     "kind": "missing_exception",
     "old": "require(isinstance(value, str) and ISSUE.fullmatch(value), \"INVALID_ISSUE\")",
@@ -26,8 +26,8 @@
     "expected_failure_type": "Failed"
   },
   {
-    "source_path": "src/agent_company/lifecycle/task_workspace.py",
-    "source_sha256": "55a68ab85da5afdb94123322bb73ac50cfa52aa7d39d171016b98555ed4023bd",
+    "source_path": "src/nplet/lifecycle/task_workspace.py",
+    "source_sha256": "427545c871fa54a9fb13c82291e377f66f0204b291929c3ba8ba4717a0e8cabe",
     "timeout_seconds": 20,
     "kind": "omitted_effect",
     "old": "        FAILPOINT(point)",

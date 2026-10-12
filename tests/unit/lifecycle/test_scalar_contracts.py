@@ -7,9 +7,9 @@ from datetime import datetime, timezone
 
 import pytest
 
-from agent_company.lifecycle import task_workspace as core
-from agent_company.lifecycle._errors import WorkspaceError, require
-from agent_company.lifecycle._paths import entry_name
+from nplet.lifecycle import task_workspace as core
+from nplet.lifecycle._errors import WorkspaceError, require
+from nplet.lifecycle._paths import entry_name
 
 pytestmark = pytest.mark.unit
 

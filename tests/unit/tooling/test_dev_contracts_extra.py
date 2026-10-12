@@ -349,9 +349,7 @@ def test_main_evidence_replaces_stale_files_and_hashes_completed_artifacts(
             Controlled process exit status for this test.
         """
         assert environment["COVERAGE_FILE"] == str(evidence / ".coverage")
-        assert environment["AGENT_COMPANY_PYTEST_EVIDENCE"] == str(
-            evidence / "pytest-evidence.json"
-        )
+        assert environment["NPLET_PYTEST_EVIDENCE"] == str(evidence / "pytest-evidence.json")
         assert "--cov=scripts" in command
         assert any(arg.startswith("--junitxml=") for arg in command)
         assert log is not None
@@ -450,7 +448,7 @@ def test_main_unit_evidence_without_platform_gate_has_outcomes_but_no_coverage_r
     """
     # Run unit evidence without enabling the platform coverage flag.
     evidence = tmp_path / "unit"
-    monkeypatch.delenv("AGENT_COMPANY_COVERAGE_CONTEXT", raising=False)
+    monkeypatch.delenv("NPLET_COVERAGE_CONTEXT", raising=False)
     monkeypatch.setattr(dev, "ROOT", tmp_path)
     state = {"sha": "head", "status": "", "tracked_digest": "bytes"}
     monkeypatch.setattr(dev, "identity", lambda: dict(state))
@@ -470,7 +468,7 @@ def test_main_unit_evidence_without_platform_gate_has_outcomes_but_no_coverage_r
         """
         assert "-p" in command and "scripts.pytest_evidence" in command
         assert not any(arg.startswith("--cov-report=") for arg in command)
-        assert "AGENT_COMPANY_COVERAGE_CONTEXT" not in environment
+        assert "NPLET_COVERAGE_CONTEXT" not in environment
         assert log is not None
         log.write_text("unit passed")
         return 0
@@ -541,7 +539,7 @@ def test_main_platform_smoke_falls_back_to_launcher_and_keeps_suite_result(
         """
         calls.append(command)
         assert log is not None
-        assert "AGENT_COMPANY_COVERAGE_CONTEXT" in environment
+        assert "NPLET_COVERAGE_CONTEXT" in environment
         log.write_text("failed smoke" if len(calls) == 1 else "suite complete")
         return 5 if len(calls) == 1 else 0
 

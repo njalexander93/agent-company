@@ -94,7 +94,7 @@ bootstrap route (`diagnose`, `register`, `resume`, `read`, `acknowledge`); this
 is an explicit boundary, not a per-code route.
 
 ```python
-from agent_company.adapters.common import bootstrap_command
+from nplet.adapters.common import bootstrap_command
 
 command = bootstrap_command(request, host=request["host"])
 ```

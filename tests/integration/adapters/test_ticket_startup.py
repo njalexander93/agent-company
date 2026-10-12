@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from agent_company.adapters import codex, common, startup
-from agent_company.lifecycle import task_workspace as core
+from nplet.adapters import codex, common, startup
+from nplet.lifecycle import task_workspace as core
 
 pytestmark = pytest.mark.integration
 

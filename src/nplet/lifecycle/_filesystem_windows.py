@@ -26,8 +26,8 @@ from ctypes import wintypes as w
 from pathlib import Path
 from typing import Any, Self
 
-from agent_company.lifecycle._errors import require
-from agent_company.lifecycle._paths import entry_name
+from nplet.lifecycle._errors import require
+from nplet.lifecycle._paths import entry_name
 
 assert sys.platform == "win32"
 

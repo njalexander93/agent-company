@@ -1,8 +1,8 @@
-# Agent Company
+# nplet
 
 **A modular framework for running an agent-powered company under human leadership.**
 
-Agent Company brings organizational structure to AI work: specialized roles, shared rules, clear responsibilities and coordinated handoffs. The goal is to help people build teams of agents that work toward a common purpose while humans retain direction and approval of consequential decisions.
+The nplet framework brings organizational structure to AI work: specialized roles, shared rules, clear responsibilities and coordinated handoffs. The goal is to help people build teams of agents that work toward a common purpose while humans retain direction and approval of consequential decisions.
 
 ## What we're building
 
@@ -13,7 +13,7 @@ Agent Company brings organizational structure to AI work: specialized roles, sha
 
 ## Current development
 
-Agent Company is in **early development**. This repository currently contains the framework's published rules, role and profile templates, worked examples, and Python tooling for shared local task workspaces.
+The nplet framework is in **early development**. This repository currently contains the framework's published rules, role and profile templates, worked examples, and Python tooling for shared local task workspaces.
 
 The workspace tooling includes integrations for Codex, Claude Code and Cursor. The broader company runtime and complete set of executable roles are still being developed.
 
@@ -29,8 +29,8 @@ For contributions, follow the [local checks](docs/runtime/development.md#checks)
 
 ## Explore the framework
 
-- [Organization and teams](src/agent_company/resources/organization/team-map.md)
-- [Role and profile definitions](src/agent_company/resources/templates/definition-format.md)
+- [Organization and teams](src/nplet/resources/organization/team-map.md)
+- [Role and profile definitions](src/nplet/resources/templates/definition-format.md)
 - [Documentation index](docs/README.md)
 
 ## License

@@ -8,7 +8,7 @@ This case adds one evidence requirement to an internal Issue Delivery Manager co
 
 | Input | Exact identity / use |
 | --- | --- |
-| Product guidance | [Baseline](../../src/agent_company/resources/organization/baseline.md), [map](../../src/agent_company/resources/organization/team-map.md), [coverage](../framework/role-coverage.md) and [format](../../src/agent_company/resources/templates/definition-format.md). Pin their containing Git commit when using this case. They are authoring guidance, not accepted runtime contracts. |
+| Product guidance | [Baseline](../../src/nplet/resources/organization/baseline.md), [map](../../src/nplet/resources/organization/team-map.md), [coverage](../framework/role-coverage.md) and [format](../../src/nplet/resources/templates/definition-format.md). Pin their containing Git commit when using this case. They are authoring guidance, not accepted runtime contracts. |
 | Parent execution gap | The permitted retained inputs do not provide a separately versioned approved Initiative roadmap/Epic plan, their exact human decisions or a Wave Admission Record. If the walkthrough advances to actual plan authorization/admission, Issue Planner must retrieve these through Product Planning and Human Leadership. Stop that transition until exact inputs exist. This gap does **not** prevent bounded paper authoring. |
 | Definition gaps | See the [coverage record](../framework/role-coverage.md). Incomplete definitions/shared contracts must be resolved for their operational use; bounded authoring can proceed. The AGO worked example is not a loading input or execution prerequisite. |
 
@@ -24,7 +24,7 @@ The following labels identify **scenario records defined by this text**, not rea
 | `G-CAND-1` | Same contract plus **one required completion-evidence table**: for every required governing input, give registered source ID, pinned revision/content identity and a status of verified-current, missing, stale or conflicting. Any missing/stale/conflicting required input identifies the affected stopped transition and escalation destination. The table contains references/status, never raw secrets or upstream private reasoning. |
 | `G-REQ-1` | Hypothetical Human Leadership requirement to add exactly that table in one candidate contract. It is a proposed scenario premise; no real human authorization is claimed. Before actual work, replace it with authenticated exact-scope requirements and authorization. |
 
-**Mechanism:** Direct versioned candidate Role-contract authorship, already supported by the [governance ownership rule](../../src/agent_company/resources/organization/baseline.md#governance-and-technical-ownership). The baseline supplies [source pinning](../../src/agent_company/resources/organization/baseline.md#source-authority-and-retrieval), [evidence and stale-input rules](../../src/agent_company/resources/organization/baseline.md#handoffs-and-outcomes); the delta makes their application explicit in one Role's completion evidence. It introduces no new field-resolution algorithm, schema, technical validator, loader or live-policy edit. Do not invent a machine manifest field or assume an implementation exists. If an eventual runtime cannot carry this evidence through its existing contract mechanism, stop and separately scope Tooling Engineer work.
+**Mechanism:** Direct versioned candidate Role-contract authorship, already supported by the [governance ownership rule](../../src/nplet/resources/organization/baseline.md#governance-and-technical-ownership). The baseline supplies [source pinning](../../src/nplet/resources/organization/baseline.md#source-authority-and-retrieval), [evidence and stale-input rules](../../src/nplet/resources/organization/baseline.md#handoffs-and-outcomes); the delta makes their application explicit in one Role's completion evidence. It introduces no new field-resolution algorithm, schema, technical validator, loader or live-policy edit. Do not invent a machine manifest field or assume an implementation exists. If an eventual runtime cannot carry this evidence through its existing contract mechanism, stop and separately scope Tooling Engineer work.
 
 ## Governing rules for this case
 
@@ -32,12 +32,12 @@ Use only the assignment's permitted sections and pin their repository revision. 
 
 | Public rule | Application |
 | --- | --- |
-| [Authority and Role boundaries](../../src/agent_company/resources/organization/baseline.md#authority-and-role-boundaries) | No authority from tools/access; human-reserved decisions and dependent stops. |
-| [Source integrity](../../src/agent_company/resources/organization/baseline.md#source-authority-and-retrieval) | Exact accessible identities, approved revisions and conflict handling. |
-| [Governance/technical ownership](../../src/agent_company/resources/organization/baseline.md#governance-and-technical-ownership) | Candidate governance versus technical implementation and exact activation. |
-| [Assurance ownership](../../src/agent_company/resources/organization/baseline.md#assurance-ownership) and [permitted context](../../src/agent_company/resources/organization/baseline.md#context-and-independent-assurance) | Independent tests/reviews, applicable Security subjects and staged disclosure. |
-| [Handoffs/outcomes](../../src/agent_company/resources/organization/baseline.md#handoffs-and-outcomes) and [publication](../framework/baseline.md#authoring-and-publication-rules) | Separate receipts, human decisions, publication, merge and effectiveness. |
-| [Planning/Waves](../../src/agent_company/resources/organization/baseline.md#planning-and-wave-boundaries) and [team map](../../src/agent_company/resources/organization/team-map.md) | Parent planning, actual admission, coordination and retrospective boundaries. |
+| [Authority and Role boundaries](../../src/nplet/resources/organization/baseline.md#authority-and-role-boundaries) | No authority from tools/access; human-reserved decisions and dependent stops. |
+| [Source integrity](../../src/nplet/resources/organization/baseline.md#source-authority-and-retrieval) | Exact accessible identities, approved revisions and conflict handling. |
+| [Governance/technical ownership](../../src/nplet/resources/organization/baseline.md#governance-and-technical-ownership) | Candidate governance versus technical implementation and exact activation. |
+| [Assurance ownership](../../src/nplet/resources/organization/baseline.md#assurance-ownership) and [permitted context](../../src/nplet/resources/organization/baseline.md#context-and-independent-assurance) | Independent tests/reviews, applicable Security subjects and staged disclosure. |
+| [Handoffs/outcomes](../../src/nplet/resources/organization/baseline.md#handoffs-and-outcomes) and [publication](../framework/baseline.md#authoring-and-publication-rules) | Separate receipts, human decisions, publication, merge and effectiveness. |
+| [Planning/Waves](../../src/nplet/resources/organization/baseline.md#planning-and-wave-boundaries) and [team map](../../src/nplet/resources/organization/team-map.md) | Parent planning, actual admission, coordination and retrospective boundaries. |
 
 ## Expected transitions — not observations
 
