@@ -1,0 +1,650 @@
+"""Verify the PR Discord announcer's trigger safety and webhook delivery behavior.
+
+The workflow's inline script runs unmodified in a subprocess. A test-only wrapper
+replaces urllib's transport and ``time.sleep`` before executing it, so requests
+reach a local fake Discord server and retries finish instantly. The production
+script has no test branch.
+"""
+
+import json
+import os
+import re
+import subprocess
+import sys
+import threading
+from collections.abc import Iterator
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+from urllib.parse import parse_qs
+
+import pytest
+import yaml
+
+from tests.support import ROOT
+
+pytestmark = pytest.mark.integration
+WORKFLOW = ROOT / ".github/workflows/pr-announce.yml"
+CANARY = "leak-canary-5c1e7d"
+WEBHOOK = f"https://discord.com/api/webhooks/4242/{CANARY}"
+OFFLINE = "offline"
+JOB_IF = (
+    "github.event.action == 'opened' || "
+    "(github.event.action == 'closed' && github.event.pull_request.merged == true)"
+)
+KIND = "${{ github.event.action == 'closed' && 'merged' || 'opened' }}"
+# Expressions the evaluator accepts: event paths, quoted literals, comparisons,
+# logical operators, parentheses and booleans. Anything else fails the test.
+EXPRESSION = re.compile(r"(?:github(?:\.\w+)+|'[a-z]*'|==|&&|\|\||[()]|true|false|\s+)+")
+
+# Swap urllib's transport for a proxy-free opener aimed at the fake server, record
+# sleeps instead of waiting, then run the unmodified announcer as __main__.
+WRAPPER = """
+import sys, time, urllib.error, urllib.parse, urllib.request
+
+address, script = sys.argv[1], sys.argv[2]
+opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+def redirected(request, *args, **kwargs):
+    if address == "offline":
+        raise urllib.error.URLError(ConnectionRefusedError(61, "refused " + request.full_url))
+    parts = urllib.parse.urlsplit(request.full_url)
+    request.full_url = urllib.parse.urlunsplit(("http", address, parts.path, parts.query, ""))
+    return opener.open(request, *args, **kwargs)
+
+urllib.request.urlopen = redirected
+time.sleep = lambda seconds: print(f"fake-sleep {seconds:g}", file=sys.stderr)
+with open(script, encoding="utf-8") as handle:
+    code = compile(handle.read(), script, "exec")
+exec(code, {"__name__": "__main__"})
+"""
+
+
+class FakeDiscord:
+    """Scripted stand-in for a Discord execute-webhook endpoint.
+
+    Attributes:
+        address: ``host:port`` of the running server, set by the fixture.
+        responses: Queued ``(status, headers, body)`` replies, served in order.
+        requests: Recorded path, query, headers and JSON body of each POST.
+    """
+
+    def __init__(self) -> None:
+        """Start with no queued replies, so every POST receives a 200 message."""
+        self.address = ""
+        self.responses: list[tuple[int, dict[str, str], dict[str, Any]]] = []
+        self.requests: list[dict[str, Any]] = []
+
+    def handler(self) -> type[BaseHTTPRequestHandler]:
+        """Build a request handler class bound to this fake's queue and log.
+
+        Returns:
+            Handler class that records each POST and replays the next reply.
+        """
+        fake = self
+
+        class Handler(BaseHTTPRequestHandler):
+            """Record one webhook POST and answer with the next scripted reply."""
+
+            def do_POST(self) -> None:
+                """Record the request, then send the queued or default reply."""
+                # Record the request exactly as the announcer sent it.
+                length = int(self.headers.get("Content-Length", "0"))
+                path, _, query = self.path.partition("?")
+                fake.requests.append(
+                    {
+                        "path": path,
+                        "query": parse_qs(query),
+                        "headers": dict(self.headers),
+                        "json": json.loads(self.rfile.read(length)),
+                    }
+                )
+                # Reply with the next scripted response, or a Discord-like success.
+                status, headers, body = (
+                    fake.responses.pop(0) if fake.responses else (200, {}, {"id": "1"})
+                )
+                encoded = json.dumps(body).encode("utf-8")
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(encoded)))
+                for name, value in headers.items():
+                    self.send_header(name, value)
+                self.end_headers()
+                self.wfile.write(encoded)
+
+            def log_message(self, format: str, *args: Any) -> None:
+                """Silence per-request logging in test output.
+
+                Args:
+                    format: Ignored log format string.
+                    *args: Ignored log arguments.
+                """
+
+        return Handler
+
+
+@pytest.fixture
+def discord() -> Iterator[FakeDiscord]:
+    """Serve a fake Discord webhook on an ephemeral loopback port.
+
+    Yields:
+        The running fake, whose requests and responses tests inspect and script.
+    """
+    # Start the server on a free 127.0.0.1 port in a background thread.
+    fake = FakeDiscord()
+    server = ThreadingHTTPServer(("127.0.0.1", 0), fake.handler())
+    # A short poll interval keeps shutdown from adding half a second per test.
+    thread = threading.Thread(
+        target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True
+    )
+    thread.start()
+    fake.address = f"127.0.0.1:{server.server_address[1]}"
+    # Stop and release the port even when the test fails.
+    try:
+        yield fake
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def load_workflow() -> dict[Any, Any]:
+    """Parse the announcer workflow file.
+
+    Returns:
+        Workflow mapping; PyYAML reads the bare ``on`` key as boolean ``True``.
+    """
+    return yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+
+
+def announce_step() -> dict[str, Any]:
+    """Return the single step of the single announcer job.
+
+    Returns:
+        Step mapping containing the inline Python script and its env.
+    """
+    # Require exactly one job with exactly one step before returning it.
+    jobs = load_workflow()["jobs"]
+    assert list(jobs) == ["announce"]
+    steps = jobs["announce"]["steps"]
+    assert len(steps) == 1
+    return steps[0]
+
+
+def evaluate(expression: str, action: str, merged: bool) -> object:
+    """Evaluate a simple GitHub Actions expression against a pull request event.
+
+    Only the subset used by the announcer is supported. GitHub's ``&&`` and ``||``
+    return operand values like Python's ``and`` and ``or``, so a token-for-token
+    translation preserves both boolean conditions and ``a && 'x' || 'y'`` selection.
+
+    Args:
+        expression: Condition or value, with or without ``${{ }}`` delimiters.
+        action: Pull request event action, such as ``opened`` or ``closed``.
+        merged: Value of ``github.event.pull_request.merged``.
+
+    Returns:
+        Expression result as GitHub would compute it.
+
+    Raises:
+        AssertionError: The expression uses syntax outside the supported subset.
+    """
+    # Strip optional delimiters and reject anything beyond the supported grammar.
+    text = expression.strip().removeprefix("${{").removesuffix("}}").strip()
+    assert EXPRESSION.fullmatch(text), text
+    # Translate operators and literals to their Python equivalents.
+    python = (
+        text.replace("&&", " and ")
+        .replace("||", " or ")
+        .replace("true", "True")
+        .replace("false", "False")
+    )
+    # Evaluate with only the event context in scope.
+    event = SimpleNamespace(action=action, pull_request=SimpleNamespace(merged=merged))
+    context = {"__builtins__": {}, "github": SimpleNamespace(event=event)}
+    return eval(python, context)  # noqa: S307 - grammar-checked, repository-owned text
+
+
+def announce(
+    tmp_path: Path,
+    discord: FakeDiscord | None,
+    webhook: str | None = WEBHOOK,
+    title: str = "Add widget registry",
+    kind: str = "opened",
+    merged_by: str = "",
+) -> subprocess.CompletedProcess[str]:
+    """Run the workflow's announcer script through the redirecting wrapper.
+
+    Args:
+        tmp_path: Directory receiving the extracted script.
+        discord: Fake server to receive requests, or None for a network failure.
+        webhook: Value for the webhook env var, or None to leave it unset.
+        title: Pull request title passed as event data.
+        kind: Announcement kind the workflow derives from the event action.
+        merged_by: Merger login; empty as on an opened event.
+
+    Returns:
+        Completed process with captured stdout and stderr.
+    """
+    # Extract the run body verbatim so the test executes the shipped program.
+    script = tmp_path / "announce.py"
+    script.write_text(announce_step()["run"], encoding="utf-8")
+    # Pass event data only through env, as the workflow does, without host leftovers.
+    env = {
+        key: value for key, value in os.environ.items() if not key.startswith(("DISCORD_", "PR_"))
+    }
+    env.update(
+        ANNOUNCE_KIND=kind,
+        PR_MERGED_BY=merged_by,
+        PR_NUMBER="17",
+        PR_TITLE=title,
+        PR_AUTHOR="octo-dev",
+        PR_URL="https://github.com/example/repo/pull/17",
+        PYTHONIOENCODING="utf-8",
+    )
+    if webhook is not None:
+        env["DISCORD_WEBHOOK_URL"] = webhook
+    # Execute the script in a fresh interpreter, never inside the test process.
+    address = discord.address if discord is not None else OFFLINE
+    return subprocess.run(
+        [sys.executable, "-c", WRAPPER, address, str(script)],
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=60,
+        check=False,
+    )
+
+
+def output(result: subprocess.CompletedProcess[str]) -> str:
+    """Join both captured streams for content assertions.
+
+    Args:
+        result: Completed announcer process.
+
+    Returns:
+        Combined stdout and stderr text.
+    """
+    return result.stdout + result.stderr
+
+
+def test_workflow_trigger_and_permissions_cannot_run_pr_code() -> None:
+    """Pin the pull_request_target safety envelope of the announcer workflow.
+
+    Raises:
+        AssertionError: The trigger widens, permissions appear, an action or checkout
+            is used, or event expressions reach the script body.
+    """
+    # Require the opened/closed pull_request_target trigger and an empty token scope.
+    workflow = load_workflow()
+    trigger = workflow.get("on", workflow.get(True))
+    assert trigger == {"pull_request_target": {"types": ["opened", "closed"]}}
+    assert workflow["permissions"] == {}
+    # Require one bounded Linux job that cannot regain permissions or run actions.
+    job = workflow["jobs"]["announce"]
+    assert job["name"] == "Announce PR in Discord"
+    assert job["runs-on"] == "ubuntu-24.04"
+    assert 0 < job["timeout-minutes"] <= 10
+    assert "permissions" not in job
+    step = announce_step()
+    assert all("uses" not in item for item in job["steps"])
+    assert step["shell"] == "python"
+    # Require metadata to arrive only as env data and the secret to be the named one.
+    assert "${{" not in step["run"]
+    assert step["env"]["DISCORD_WEBHOOK_URL"] == "${{ secrets.DISCORD_PR_WEBHOOK_URL }}"
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert re.findall(r"secrets\.\w+", text) == ["secrets.DISCORD_PR_WEBHOOK_URL"]
+    assert set(step["env"]) == {
+        "DISCORD_WEBHOOK_URL",
+        "ANNOUNCE_KIND",
+        "PR_NUMBER",
+        "PR_TITLE",
+        "PR_AUTHOR",
+        "PR_URL",
+        "PR_MERGED_BY",
+    }
+    assert step["env"]["PR_MERGED_BY"] == "${{ github.event.pull_request.merged_by.login }}"
+
+
+@pytest.mark.parametrize(
+    ("action", "merged", "kind"),
+    [
+        ("opened", False, "opened"),
+        ("closed", True, "merged"),
+        ("closed", False, None),
+        ("reopened", False, None),
+        ("edited", False, None),
+        ("synchronize", False, None),
+    ],
+)
+def test_job_runs_only_for_opened_or_merged_prs(
+    action: str, merged: bool, kind: str | None
+) -> None:
+    """Announce opened and merged PRs, and skip every other pull request action.
+
+    Args:
+        action: Pull request event action GitHub would deliver.
+        merged: Whether the pull request is merged in that event.
+        kind: Expected announcement kind, or None when the job must be skipped.
+
+    Raises:
+        AssertionError: The job condition or derived kind diverges from the policy.
+    """
+    # Pin the exact expressions so the evaluator checks what GitHub will run.
+    job = load_workflow()["jobs"]["announce"]
+    assert job["if"] == JOB_IF
+    assert announce_step()["env"]["ANNOUNCE_KIND"] == KIND
+    # Require the job to run exactly for opened and merged events.
+    runs = evaluate(job["if"], action, merged)
+    assert runs is (kind is not None)
+    # For running jobs, require the env to carry the matching announcement kind.
+    if kind is not None:
+        assert evaluate(KIND, action, merged) == kind
+
+
+@pytest.mark.parametrize(
+    ("webhook", "query"),
+    [
+        (WEBHOOK, {"wait": ["true"]}),
+        (f"{WEBHOOK}?thread_id=99&wait=false", {"thread_id": ["99"], "wait": ["true"]}),
+        (f"https://discordapp.com/api/webhooks/4242/{CANARY}", {"wait": ["true"]}),
+    ],
+)
+def test_announcement_posts_pr_embed_once(
+    tmp_path: Path, discord: FakeDiscord, webhook: str, query: dict[str, list[str]]
+) -> None:
+    """Post one embed carrying the PR title, link, number and author.
+
+    Args:
+        tmp_path: Directory for the extracted script.
+        discord: Fake webhook endpoint recording the request.
+        webhook: Accepted webhook form, with or without an existing query.
+        query: Query the endpoint must receive, always forcing wait=true.
+
+    Raises:
+        AssertionError: The request is missing, repeated or malformed, or output leaks.
+    """
+    # Run a successful delivery.
+    result = announce(tmp_path, discord, webhook=webhook)
+    assert result.returncode == 0, output(result)
+    assert "Announced opened pull request #17 in Discord." in result.stdout
+    assert CANARY not in output(result)
+    # Require exactly one request to the webhook path with the forced wait flag.
+    assert len(discord.requests) == 1
+    request = discord.requests[0]
+    assert request["path"] == f"/api/webhooks/4242/{CANARY}"
+    assert request["query"] == query
+    assert "Python-urllib" not in request["headers"]["User-Agent"]
+    # Require the embed to carry the PR data with mentions disabled.
+    body = request["json"]
+    embed = body["embeds"][0]
+    assert embed["title"] == "Add widget registry"
+    assert embed["url"] == "https://github.com/example/repo/pull/17"
+    values = {field["name"]: field["value"] for field in embed["fields"]}
+    assert values == {"Pull request": "#17", "Author": "octo-dev"}
+    assert "opened" in body["content"]
+    assert body["allowed_mentions"] == {"parse": []}
+
+
+def test_merge_announcement_names_merger_and_differs_from_opened(
+    tmp_path: Path, discord: FakeDiscord
+) -> None:
+    """Post a merge message that names who merged it and looks unlike an opening.
+
+    Args:
+        tmp_path: Directory for the extracted script.
+        discord: Fake webhook endpoint recording both requests.
+
+    Raises:
+        AssertionError: The merge message omits the merger, says opened, or shares
+            the opened message's color.
+    """
+    # Announce the same PR as opened and then as merged.
+    opened = announce(tmp_path, discord)
+    merged = announce(tmp_path, discord, kind="merged", merged_by="maint-lead")
+    assert opened.returncode == 0, output(opened)
+    assert merged.returncode == 0, output(merged)
+    assert "Announced merged pull request #17 in Discord." in merged.stdout
+    assert CANARY not in output(merged)
+    # Require the merge embed to keep the PR data and add the merger.
+    opened_body, merged_body = (request["json"] for request in discord.requests)
+    embed = merged_body["embeds"][0]
+    assert embed["title"] == "Add widget registry"
+    assert embed["url"] == "https://github.com/example/repo/pull/17"
+    values = {field["name"]: field["value"] for field in embed["fields"]}
+    assert values == {"Pull request": "#17", "Author": "octo-dev", "Merged by": "maint-lead"}
+    assert "merged by maint-lead" in merged_body["content"]
+    assert "opened" not in merged_body["content"]
+    assert merged_body["allowed_mentions"] == {"parse": []}
+    # Require visually distinct colors for the two kinds.
+    assert embed["color"] != opened_body["embeds"][0]["color"]
+
+
+@pytest.mark.parametrize(
+    ("kind", "merged_by", "message"),
+    [
+        ("merged", "", "metadata is missing: PR_MERGED_BY"),
+        ("", "", "ANNOUNCE_KIND must be 'opened' or 'merged'"),
+        ("closed", "maint-lead", "ANNOUNCE_KIND must be 'opened' or 'merged'"),
+    ],
+)
+def test_invalid_event_data_fails_before_any_request(
+    tmp_path: Path, discord: FakeDiscord, kind: str, merged_by: str, message: str
+) -> None:
+    """Refuse to post when the kind is unknown or a merge lacks its merger.
+
+    Args:
+        tmp_path: Directory for the extracted script.
+        discord: Fake webhook endpoint that must stay unused.
+        kind: Announcement kind passed by the workflow.
+        merged_by: Merger login passed by the workflow.
+        message: Expected diagnostic fragment.
+
+    Raises:
+        AssertionError: The job passes, sends a request or leaks the webhook URL.
+    """
+    # Run with inconsistent event data.
+    result = announce(tmp_path, discord, kind=kind, merged_by=merged_by)
+    # Require an annotated failure without any delivery or URL echo.
+    assert result.returncode != 0
+    assert "::error::" in result.stdout
+    assert message in result.stdout
+    assert CANARY not in output(result)
+    assert discord.requests == []
+
+
+@pytest.mark.parametrize(
+    ("title", "expected"),
+    [
+        ("Ping @everyone @here <@123> <@&456>", "Ping @everyone @here <@123> <@&456>"),
+        ("x" * 300, "x" * 255 + "…"),
+        ("\U0001f680" * 200, "\U0001f680" * 127 + "…"),
+    ],
+)
+def test_untrusted_title_stays_inert_data(
+    tmp_path: Path, discord: FakeDiscord, title: str, expected: str
+) -> None:
+    """Send hostile or oversized titles as literal, bounded text that pings nobody.
+
+    Args:
+        tmp_path: Directory for the extracted script.
+        discord: Fake webhook endpoint recording the request.
+        title: Untrusted pull request title.
+        expected: Embed title Discord must receive.
+
+    Raises:
+        AssertionError: The title is altered unexpectedly, exceeds 256 characters,
+            or mentions are not suppressed.
+    """
+    # Deliver the untrusted title.
+    result = announce(tmp_path, discord, title=title)
+    assert result.returncode == 0, output(result)
+    # Require literal, length-bounded data with every mention type disabled.
+    body = discord.requests[0]["json"]
+    assert body["embeds"][0]["title"] == expected
+    assert len(body["embeds"][0]["title"].encode("utf-16-le")) // 2 <= 256
+    assert body["allowed_mentions"] == {"parse": []}
+    assert title not in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("webhook", "message"),
+    [
+        (None, "secret is missing or empty"),
+        ("", "secret is missing or empty"),
+        (f"https://example.com/api/webhooks/4242/{CANARY}", "is not a Discord webhook URL"),
+        (f"http://discord.com/api/webhooks/4242/{CANARY}", "is not a Discord webhook URL"),
+        (
+            f"https://discord.com.evil.example/api/webhooks/4242/{CANARY}",
+            "is not a Discord webhook URL",
+        ),
+    ],
+)
+def test_invalid_secret_fails_before_any_request(
+    tmp_path: Path, discord: FakeDiscord, webhook: str | None, message: str
+) -> None:
+    """Reject a missing or non-Discord secret with a named fix and no echo.
+
+    Args:
+        tmp_path: Directory for the extracted script.
+        discord: Fake webhook endpoint that must stay unused.
+        webhook: Missing, empty or lookalike secret value.
+        message: Expected diagnostic fragment.
+
+    Raises:
+        AssertionError: The job passes, sends a request, omits the secret name,
+            or prints the secret value.
+    """
+    # Run with the invalid secret.
+    result = announce(tmp_path, discord, webhook=webhook)
+    # Require an annotated failure that names the secret but never its value.
+    assert result.returncode != 0
+    assert "::error::" in result.stdout
+    assert message in result.stdout
+    assert "DISCORD_PR_WEBHOOK_URL" in result.stdout
+    assert CANARY not in output(result)
+    assert discord.requests == []
+
+
+@pytest.mark.parametrize(
+    ("status", "discord_message", "hint"),
+    [
+        (404, "Unknown Webhook", "webhook was deleted or DISCORD_PR_WEBHOOK_URL is wrong"),
+        (400, f"Invalid body for /api/webhooks/4242/{CANARY}", "rejected the message payload"),
+    ],
+)
+def test_rejected_request_fails_without_retry(
+    tmp_path: Path, discord: FakeDiscord, status: int, discord_message: str, hint: str
+) -> None:
+    """Fail a client-error response once, with an actionable hint and redacted detail.
+
+    Args:
+        tmp_path: Directory for the extracted script.
+        discord: Fake webhook endpoint answering with a client error.
+        status: Non-retryable HTTP status.
+        discord_message: Discord error text, possibly echoing the webhook path.
+        hint: Expected remediation fragment.
+
+    Raises:
+        AssertionError: The failure retries, passes, lacks guidance or leaks the URL.
+    """
+    # Answer the only attempt with a Discord JSON error.
+    discord.responses.append((status, {}, {"message": discord_message, "code": 10015}))
+    result = announce(tmp_path, discord)
+    # Require one attempt and a status-specific, redacted annotation.
+    assert result.returncode != 0
+    assert len(discord.requests) == 1
+    assert f"::error::Discord announcement failed with HTTP {status}." in result.stdout
+    assert "code=10015" in result.stdout
+    assert hint in result.stdout
+    assert CANARY not in output(result)
+
+
+def test_rate_limit_retries_once_after_discord_delay(tmp_path: Path, discord: FakeDiscord) -> None:
+    """Retry a 429 once after Discord's body retry_after, then succeed.
+
+    Args:
+        tmp_path: Directory for the extracted script.
+        discord: Fake webhook endpoint that throttles the first attempt.
+
+    Raises:
+        AssertionError: The retry is missing, waits for the wrong delay or changes data.
+    """
+    # Throttle once; the body delay must win over the larger header.
+    discord.responses.append(
+        (429, {"Retry-After": "5"}, {"message": "rate limited", "retry_after": 0.01})
+    )
+    result = announce(tmp_path, discord)
+    # Require success on the identical second request after the recorded delay.
+    assert result.returncode == 0, output(result)
+    assert len(discord.requests) == 2
+    assert discord.requests[0]["json"] == discord.requests[1]["json"]
+    assert "fake-sleep 0.01" in result.stderr
+    assert "Announced opened pull request #17 in Discord." in result.stdout
+    assert CANARY not in output(result)
+
+
+def test_retry_delay_is_capped(tmp_path: Path, discord: FakeDiscord) -> None:
+    """Bound an excessive Discord retry_after to the workflow's maximum delay.
+
+    Args:
+        tmp_path: Directory for the extracted script.
+        discord: Fake webhook endpoint requesting a long wait.
+
+    Raises:
+        AssertionError: The requested delay is not capped at ten seconds.
+    """
+    # Request a one-minute wait, then accept the retry.
+    discord.responses.append((429, {}, {"message": "rate limited", "retry_after": 60}))
+    result = announce(tmp_path, discord)
+    # Require the capped delay and a successful second attempt.
+    assert result.returncode == 0, output(result)
+    assert "fake-sleep 10" in result.stderr
+    assert len(discord.requests) == 2
+    assert CANARY not in output(result)
+
+
+def test_repeated_server_error_fails_after_two_attempts(
+    tmp_path: Path, discord: FakeDiscord
+) -> None:
+    """Stop after two 5xx responses and advise a re-run.
+
+    Args:
+        tmp_path: Directory for the extracted script.
+        discord: Fake webhook endpoint failing both attempts.
+
+    Raises:
+        AssertionError: The job passes, retries more than once, or leaks the URL.
+    """
+    # Fail both attempts with Retry-After: 0.
+    discord.responses.extend([(500, {"Retry-After": "0"}, {}), (500, {"Retry-After": "0"}, {})])
+    result = announce(tmp_path, discord)
+    # Require exactly two attempts and a re-run hint.
+    assert result.returncode != 0
+    assert len(discord.requests) == 2
+    assert "fake-sleep 0" in result.stderr
+    assert "::error::Discord announcement failed with HTTP 500." in result.stdout
+    assert "re-run this job" in result.stdout
+    assert CANARY not in output(result)
+
+
+def test_network_failure_retries_and_redacts_reason(tmp_path: Path) -> None:
+    """Retry an unreachable Discord once and report a reason without the URL.
+
+    Args:
+        tmp_path: Directory for the extracted script.
+
+    Raises:
+        AssertionError: The job passes, skips the retry, or echoes the webhook URL
+            embedded in the network error.
+    """
+    # Raise a connection error whose text contains the full webhook URL.
+    result = announce(tmp_path, None)
+    # Require one retry, a typed failure annotation and redaction of the URL.
+    assert result.returncode != 0
+    assert result.stdout.count("Could not reach Discord") == 2
+    assert "::error::Could not reach Discord (ConnectionRefusedError" in result.stdout
+    assert "<redacted>" in result.stdout
+    assert CANARY not in output(result)
