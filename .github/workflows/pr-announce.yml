@@ -1,0 +1,338 @@
+name: PR Discord Announcement
+
+# pull_request_target runs from the default branch in the base repository, so
+# fork PRs can use the webhook secret and a PR cannot edit its own announcer.
+# That is safe here only because this job never checks out or runs PR code,
+# grants the token no permissions and receives PR metadata solely as env data.
+# "closed" also fires for PRs closed without merging; the job condition skips those.
+on:
+  pull_request_target:
+    types: [opened, closed]
+
+permissions: {}
+
+jobs:
+  announce:
+    name: Announce PR in Discord
+    # One job serves both announcements so the delivery logic exists once; a
+    # PR closed without merging (or any other action) leaves the job skipped.
+    if: github.event.action == 'opened' || (github.event.action == 'closed' && github.event.pull_request.merged == true)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      # Keep ${{ }} out of the script body: the title is attacker-controlled
+      # text and must stay data, never become part of the program.
+      - name: Post announcement to Discord
+        shell: python
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_PR_WEBHOOK_URL }}
+          ANNOUNCE_KIND: ${{ github.event.action == 'closed' && 'merged' || 'opened' }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          # Empty for opened PRs; required by the script only for merges.
+          PR_MERGED_BY: ${{ github.event.pull_request.merged_by.login }}
+        run: |
+          # Announce one opened or merged pull request through a Discord webhook.
+          # Diagnostics never print the webhook URL, which embeds its token.
+          import http.client
+          import json
+          import os
+          import time
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+
+          SECRET = "DISCORD_PR_WEBHOOK_URL"
+          PREFIXES = (
+              "https://discord.com/api/webhooks/",
+              "https://discordapp.com/api/webhooks/",
+          )
+          # Embed colors distinguish the two kinds at a glance (GitHub's open
+          # green and merged purple).
+          COLORS = {"opened": 0x2DA44E, "merged": 0x8250DF}
+          TITLE_LIMIT = 256
+          MAX_ATTEMPTS = 2
+          MAX_DELAY = 10.0
+          DEFAULT_DELAY = 2.0
+
+
+          def escape(text):
+              """Encode text as one workflow-command value.
+
+              Args:
+                  text: Diagnostic text that may contain line breaks or percent signs.
+
+              Returns:
+                  Text that cannot start another workflow command line.
+              """
+              return text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+
+          def fail(message):
+              """Report an annotated failure and stop the job.
+
+              Args:
+                  message: Actionable diagnostic that contains no webhook URL.
+
+              Raises:
+                  SystemExit: Always, with a non-zero status.
+              """
+              print(f"::error::{escape(message)}", flush=True)
+              raise SystemExit(1)
+
+
+          def redact(text, webhook):
+              """Remove the webhook URL and its secret path from diagnostic text.
+
+              Args:
+                  text: Diagnostic text from Discord or the network stack.
+                  webhook: Configured webhook URL whose parts must stay hidden.
+
+              Returns:
+                  Text with every webhook fragment replaced by a placeholder.
+              """
+              # Hide the whole URL first, then any bare id/token path segment.
+              secret_path = urllib.parse.urlsplit(webhook).path.rpartition("/api/webhooks/")[2]
+              for fragment in (webhook, secret_path):
+                  if fragment:
+                      text = text.replace(fragment, "<redacted>")
+              return text
+
+
+          def endpoint(webhook):
+              """Add wait=true so Discord confirms delivery with a status code.
+
+              Args:
+                  webhook: Validated webhook URL, possibly carrying a query string.
+
+              Returns:
+                  Webhook URL whose query keeps existing pairs and sets wait=true.
+              """
+              # Replace any existing wait flag while preserving other parameters.
+              parts = urllib.parse.urlsplit(webhook)
+              query = [
+                  pair
+                  for pair in urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
+                  if pair[0] != "wait"
+              ]
+              query.append(("wait", "true"))
+              return urllib.parse.urlunsplit(parts._replace(query=urllib.parse.urlencode(query)))
+
+
+          def clip(title):
+              """Fit a title into Discord's embed title limit.
+
+              Discord may count UTF-16 code units, so astral characters count twice.
+
+              Args:
+                  title: Untrusted pull request title.
+
+              Returns:
+                  Non-empty title of at most TITLE_LIMIT UTF-16 code units.
+              """
+              # Substitute a placeholder for a blank title, which Discord rejects.
+              title = title.strip() or "(untitled)"
+              # Drop trailing characters until the text plus an ellipsis fits.
+              if len(title.encode("utf-16-le")) // 2 <= TITLE_LIMIT:
+                  return title
+              while len(title.encode("utf-16-le")) // 2 > TITLE_LIMIT - 1:
+                  title = title[:-1]
+              return title + "…"
+
+
+          def payload(kind, number, title, author, url, merged_by):
+              """Build a message whose PR text cannot mention anyone.
+
+              Args:
+                  kind: "opened" or "merged".
+                  number: Pull request number.
+                  title: Pull request title, treated as untrusted text.
+                  author: Login of the pull request author.
+                  url: Browser URL of the pull request.
+                  merged_by: Login of the merger; used only when kind is "merged".
+
+              Returns:
+                  Discord execute-webhook JSON body.
+              """
+              # Describe the event and list the people involved for its kind.
+              fields = [
+                  {"name": "Pull request", "value": f"#{number}", "inline": True},
+                  {"name": "Author", "value": author, "inline": True},
+              ]
+              if kind == "merged":
+                  content = f"Pull request #{number} by {author} was merged by {merged_by}"
+                  fields.append({"name": "Merged by", "value": merged_by, "inline": True})
+              else:
+                  content = f"Pull request #{number} opened by {author}"
+              # Suppress every mention type so @everyone or <@id> stays plain text.
+              return {
+                  "content": content,
+                  "embeds": [
+                      {
+                          "title": clip(title),
+                          "url": url,
+                          "color": COLORS[kind],
+                          "fields": fields,
+                      }
+                  ],
+                  "allowed_mentions": {"parse": []},
+              }
+
+
+          def discord_error(error, webhook):
+              """Summarize Discord's JSON error body without echoing the request.
+
+              Args:
+                  error: HTTP error returned by Discord.
+                  webhook: Configured webhook URL to redact from the summary.
+
+              Returns:
+                  Parsed body, or an empty dict, and a short sanitized summary.
+              """
+              # Read a bounded body; non-JSON bodies carry no usable detail.
+              try:
+                  body = json.loads(error.read(4096).decode("utf-8", "replace"))
+              except (OSError, ValueError, http.client.HTTPException):
+                  return {}, ""
+              # Ignore bodies that are valid JSON but not Discord's error object.
+              if not isinstance(body, dict):
+                  return {}, ""
+              # Keep only Discord's documented message and code fields.
+              detail = []
+              if isinstance(body.get("message"), str):
+                  detail.append(f"message={redact(body['message'], webhook)[:200]!r}")
+              if isinstance(body.get("code"), int):
+                  detail.append(f"code={body['code']}")
+              return body, f" Discord said: {', '.join(detail)}." if detail else ""
+
+
+          def retry_delay(error, body):
+              """Choose a bounded wait before retrying a throttled or failed request.
+
+              Args:
+                  error: HTTP error, or None for a network failure.
+                  body: Parsed Discord error body, possibly empty.
+
+              Returns:
+                  Delay in seconds between zero and MAX_DELAY.
+              """
+              # Prefer Discord's retry_after, then the Retry-After header.
+              candidates = [body.get("retry_after")]
+              if error is not None and error.headers is not None:
+                  candidates.append(error.headers.get("Retry-After"))
+              for value in candidates:
+                  try:
+                      return min(max(float(value), 0.0), MAX_DELAY)
+                  except (TypeError, ValueError):
+                      continue
+              return DEFAULT_DELAY
+
+
+          def hint(status):
+              """Explain how to fix a final HTTP failure.
+
+              Args:
+                  status: HTTP status returned by Discord.
+
+              Returns:
+                  Actionable guidance for the status class.
+              """
+              # Map each status class to the action that resolves it.
+              if status in (401, 403, 404):
+                  return (
+                      f"The webhook was deleted or {SECRET} is wrong; create a channel webhook "
+                      f"in Discord and update the {SECRET} repository secret."
+                  )
+              if status == 400:
+                  return "Discord rejected the message payload; check the error detail above."
+              if status == 429 or status >= 500:
+                  return "Discord is rate limiting or unavailable; re-run this job later."
+              return "Unexpected Discord response; re-run this job and check Discord status."
+
+
+          def main():
+              """Validate inputs, post the announcement and report the outcome.
+
+              Raises:
+                  SystemExit: Configuration is invalid or Discord delivery failed.
+              """
+              # Validate the secret without ever printing its value.
+              webhook = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
+              if not webhook:
+                  fail(
+                      f"The {SECRET} secret is missing or empty. Add a Discord channel "
+                      "webhook URL as a repository Actions secret with that name."
+                  )
+              if not webhook.startswith(PREFIXES):
+                  fail(
+                      f"The {SECRET} secret is not a Discord webhook URL. Set it to a URL "
+                      f"starting with {PREFIXES[0]} (value not shown)."
+                  )
+              # Require a known event kind; the workflow derives it from the action.
+              kind = os.environ.get("ANNOUNCE_KIND", "")
+              if kind not in COLORS:
+                  fail(f"ANNOUNCE_KIND must be 'opened' or 'merged', not {kind[:20]!r}.")
+              # Require the event metadata that the workflow passes as env data.
+              names = ["PR_NUMBER", "PR_AUTHOR", "PR_URL"]
+              if kind == "merged":
+                  names.append("PR_MERGED_BY")
+              fields = {name: os.environ.get(name, "") for name in [*names, "PR_TITLE"]}
+              missing = [name for name in names if not fields[name]]
+              if missing:
+                  fail(f"Pull request event metadata is missing: {', '.join(missing)}.")
+              # Encode the request once; retries resend identical bytes.
+              number = fields["PR_NUMBER"]
+              message = payload(
+                  kind,
+                  number,
+                  fields["PR_TITLE"],
+                  fields["PR_AUTHOR"],
+                  fields["PR_URL"],
+                  fields.get("PR_MERGED_BY", ""),
+              )
+              data = json.dumps(message).encode("utf-8")
+              headers = {
+                  "Content-Type": "application/json",
+                  "User-Agent": "nplet-pr-announce (GitHub Actions, 1.0)",
+              }
+              # Attempt delivery, retrying once on throttling, 5xx or network failure.
+              for attempt in range(1, MAX_ATTEMPTS + 1):
+                  request = urllib.request.Request(
+                      endpoint(webhook), data=data, headers=headers, method="POST"
+                  )
+                  try:
+                      with urllib.request.urlopen(request, timeout=15) as response:
+                          status = response.status
+                  except urllib.error.HTTPError as error:
+                      # Report HTTP failures by status and Discord's sanitized detail.
+                      status = error.code
+                      body, detail = discord_error(error, webhook)
+                      retryable = status == 429 or status >= 500
+                      if retryable and attempt < MAX_ATTEMPTS:
+                          delay = retry_delay(error, body)
+                          print(f"Discord returned HTTP {status}; retrying in {delay:g}s.")
+                          time.sleep(delay)
+                          continue
+                      fail(
+                          f"Discord announcement failed with HTTP {status}.{detail} {hint(status)}"
+                      )
+                  except (OSError, http.client.HTTPException) as error:
+                      # Report network failures by type and redacted reason only; the
+                      # exception text may embed the request URL.
+                      reason = getattr(error, "reason", error)
+                      summary = redact(f"{type(reason).__name__}: {reason}", webhook)[:200]
+                      if attempt < MAX_ATTEMPTS:
+                          print(f"Could not reach Discord ({summary}); retrying.")
+                          time.sleep(DEFAULT_DELAY)
+                          continue
+                      fail(f"Could not reach Discord ({summary}). Re-run this job later.")
+                  # Confirm success without echoing the webhook or the title.
+                  if 200 <= status < 300:
+                      print(f"Announced {kind} pull request #{number} in Discord.")
+                      return
+                  fail(f"Discord announcement failed with HTTP {status}. {hint(status)}")
+
+
+          main()
