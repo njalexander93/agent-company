@@ -31,12 +31,19 @@ WEBHOOK = f"https://discord.com/api/webhooks/4242/{CANARY}"
 OFFLINE = "offline"
 JOB_IF = (
     "github.event.action == 'opened' || "
-    "(github.event.action == 'closed' && github.event.pull_request.merged == true)"
+    "(github.event.action == 'closed' && github.event.pull_request.merged == true) || "
+    "github.event.action == 'review_requested'"
 )
-KIND = "${{ github.event.action == 'closed' && 'merged' || 'opened' }}"
-# Expressions the evaluator accepts: event paths, quoted literals, comparisons,
-# logical operators, parentheses and booleans. Anything else fails the test.
-EXPRESSION = re.compile(r"(?:github(?:\.\w+)+|'[a-z]*'|==|&&|\|\||[()]|true|false|\s+)+")
+KIND = (
+    "${{ github.event.action == 'closed' && 'merged' || "
+    "github.event.action == 'review_requested' && 'review' || 'opened' }}"
+)
+# Actions that must never announce, so they must stay out of the trigger types.
+UNSUBSCRIBED = ("review_request_removed", "assigned", "unassigned")
+# Expressions the evaluator accepts: event paths, quoted lowercase/underscore
+# literals, comparisons, logical operators, parentheses and booleans. Anything
+# else fails the test.
+EXPRESSION = re.compile(r"(?:github(?:\.\w+)+|'[a-z_]*'|==|&&|\|\||[()]|true|false|\s+)+")
 
 # Swap urllib's transport for a proxy-free opener aimed at the fake server, record
 # sleeps instead of waiting, then run the unmodified announcer as __main__.
@@ -213,6 +220,9 @@ def announce(
     title: str = "Add widget registry",
     kind: str = "opened",
     merged_by: str = "",
+    reviewer: str = "",
+    team: str = "",
+    requested_by: str = "",
 ) -> subprocess.CompletedProcess[str]:
     """Run the workflow's announcer script through the redirecting wrapper.
 
@@ -223,6 +233,10 @@ def announce(
         title: Pull request title passed as event data.
         kind: Announcement kind the workflow derives from the event action.
         merged_by: Merger login; empty as on an opened event.
+        reviewer: Requested reviewer login; empty unless a user review request.
+        team: Requested team name; empty unless a team review request.
+        requested_by: Login of who requested the review; empty unless a review
+            request.
 
     Returns:
         Completed process with captured stdout and stderr.
@@ -231,12 +245,16 @@ def announce(
     script = tmp_path / "announce.py"
     script.write_text(announce_step()["run"], encoding="utf-8")
     # Pass event data only through env, as the workflow does, without host leftovers.
+    # Absent event fields arrive as empty strings, matching GitHub's expression result.
     env = {
         key: value for key, value in os.environ.items() if not key.startswith(("DISCORD_", "PR_"))
     }
     env.update(
         ANNOUNCE_KIND=kind,
         PR_MERGED_BY=merged_by,
+        PR_REVIEWER=reviewer,
+        PR_REVIEW_TEAM=team,
+        PR_REQUESTED_BY=requested_by,
         PR_NUMBER="17",
         PR_TITLE=title,
         PR_AUTHOR="octo-dev",
@@ -277,10 +295,11 @@ def test_workflow_trigger_and_permissions_cannot_run_pr_code() -> None:
         AssertionError: The trigger widens, permissions appear, an action or checkout
             is used, or event expressions reach the script body.
     """
-    # Require the opened/closed pull_request_target trigger and an empty token scope.
+    # Require the opened/closed/review_requested pull_request_target trigger and an
+    # empty token scope.
     workflow = load_workflow()
     trigger = workflow.get("on", workflow.get(True))
-    assert trigger == {"pull_request_target": {"types": ["opened", "closed"]}}
+    assert trigger == {"pull_request_target": {"types": ["opened", "closed", "review_requested"]}}
     assert workflow["permissions"] == {}
     # Require one bounded Linux job that cannot regain permissions or run actions.
     job = workflow["jobs"]["announce"]
@@ -304,8 +323,15 @@ def test_workflow_trigger_and_permissions_cannot_run_pr_code() -> None:
         "PR_AUTHOR",
         "PR_URL",
         "PR_MERGED_BY",
+        "PR_REVIEWER",
+        "PR_REVIEW_TEAM",
+        "PR_REQUESTED_BY",
     }
     assert step["env"]["PR_MERGED_BY"] == "${{ github.event.pull_request.merged_by.login }}"
+    # Require review data to come from the event's own single target and sender.
+    assert step["env"]["PR_REVIEWER"] == "${{ github.event.requested_reviewer.login }}"
+    assert step["env"]["PR_REVIEW_TEAM"] == "${{ github.event.requested_team.name }}"
+    assert step["env"]["PR_REQUESTED_BY"] == "${{ github.event.sender.login }}"
 
 
 @pytest.mark.parametrize(
@@ -317,12 +343,16 @@ def test_workflow_trigger_and_permissions_cannot_run_pr_code() -> None:
         ("reopened", False, None),
         ("edited", False, None),
         ("synchronize", False, None),
+        ("review_requested", False, "review"),
+        ("review_request_removed", False, None),
+        ("assigned", False, None),
+        ("unassigned", False, None),
     ],
 )
-def test_job_runs_only_for_opened_or_merged_prs(
+def test_job_runs_only_for_opened_merged_or_review_requested_prs(
     action: str, merged: bool, kind: str | None
 ) -> None:
-    """Announce opened and merged PRs, and skip every other pull request action.
+    """Announce opened PRs, merged PRs and review requests, and skip other actions.
 
     Args:
         action: Pull request event action GitHub would deliver.
@@ -336,7 +366,11 @@ def test_job_runs_only_for_opened_or_merged_prs(
     job = load_workflow()["jobs"]["announce"]
     assert job["if"] == JOB_IF
     assert announce_step()["env"]["ANNOUNCE_KIND"] == KIND
-    # Require the job to run exactly for opened and merged events.
+    # Require removals and assignee changes to stay outside the subscribed types.
+    workflow = load_workflow()
+    types = workflow.get("on", workflow.get(True))["pull_request_target"]["types"]
+    assert not set(UNSUBSCRIBED) & set(types)
+    # Require the job to run exactly for opened, merged and review-requested events.
     runs = evaluate(job["if"], action, merged)
     assert runs is (kind is not None)
     # For running jobs, require the env to carry the matching announcement kind.
@@ -422,12 +456,182 @@ def test_merge_announcement_names_merger_and_differs_from_opened(
     assert embed["color"] != opened_body["embeds"][0]["color"]
 
 
+def test_review_request_names_reviewer_and_differs_from_other_kinds(
+    tmp_path: Path, discord: FakeDiscord
+) -> None:
+    """Post one review-request message naming the reviewer, requester and PR.
+
+    Args:
+        tmp_path: Directory for the extracted script.
+        discord: Fake webhook endpoint recording the opened, merged and review posts.
+
+    Raises:
+        AssertionError: The review message is repeated, omits the reviewer, PR or
+            requester, enables mentions, or looks like an opened or merged message.
+    """
+    # Announce the same PR as opened, merged and then as a review request.
+    opened = announce(tmp_path, discord)
+    merged = announce(tmp_path, discord, kind="merged", merged_by="maint-lead")
+    review = announce(
+        tmp_path, discord, kind="review", reviewer="octo-reviewer", requested_by="maint-lead"
+    )
+    for result in (opened, merged, review):
+        assert result.returncode == 0, output(result)
+    assert "Announced review request on pull request #17 in Discord." in review.stdout
+    assert CANARY not in output(review)
+    # Require exactly one review post carrying the PR data and the single reviewer.
+    assert len(discord.requests) == 3
+    opened_body, merged_body, review_body = (request["json"] for request in discord.requests)
+    embed = review_body["embeds"][0]
+    assert embed["title"] == "Add widget registry"
+    assert embed["url"] == "https://github.com/example/repo/pull/17"
+    values = {field["name"]: field["value"] for field in embed["fields"]}
+    assert values == {
+        "Pull request": "#17",
+        "Author": "octo-dev",
+        "Reviewer": "octo-reviewer",
+        "Requested by": "maint-lead",
+    }
+    assert review_body["content"] == (
+        "Review requested from octo-reviewer on pull request #17 by octo-dev"
+    )
+    assert review_body["allowed_mentions"] == {"parse": []}
+    # Require the review kind to read and look unlike opened and merged posts.
+    assert "opened" not in review_body["content"]
+    assert "merged" not in review_body["content"]
+    colors = {body["embeds"][0]["color"] for body in (opened_body, merged_body, review_body)}
+    assert len(colors) == 3
+
+
+def test_team_review_request_identifies_the_team(tmp_path: Path, discord: FakeDiscord) -> None:
+    """Post a team review request that names the team rather than a user.
+
+    Args:
+        tmp_path: Directory for the extracted script.
+        discord: Fake webhook endpoint recording the request.
+
+    Raises:
+        AssertionError: The team request fails, omits the team, or invents a reviewer.
+    """
+    # Announce a request whose event carries only requested_team.
+    result = announce(
+        tmp_path, discord, kind="review", team="core-maintainers", requested_by="maint-lead"
+    )
+    assert result.returncode == 0, output(result)
+    # Require the team to be named and labelled as a team, with no user reviewer.
+    body = discord.requests[0]["json"]
+    values = {field["name"]: field["value"] for field in body["embeds"][0]["fields"]}
+    assert values == {
+        "Pull request": "#17",
+        "Author": "octo-dev",
+        "Team": "core-maintainers",
+        "Requested by": "maint-lead",
+    }
+    assert body["content"] == (
+        "Review requested from team core-maintainers on pull request #17 by octo-dev"
+    )
+    assert body["allowed_mentions"] == {"parse": []}
+
+
+def test_each_review_request_names_only_its_own_reviewer(
+    tmp_path: Path, discord: FakeDiscord
+) -> None:
+    """Name only the reviewer carried by each event across consecutive requests.
+
+    Args:
+        tmp_path: Directory for the extracted script.
+        discord: Fake webhook endpoint recording both requests.
+
+    Raises:
+        AssertionError: A later request repeats an earlier reviewer or lists both.
+    """
+    # Request a first reviewer, then a second (or a re-request) as a separate event.
+    first = announce(tmp_path, discord, kind="review", reviewer="alice", requested_by="maint-lead")
+    second = announce(tmp_path, discord, kind="review", reviewer="bob", requested_by="maint-lead")
+    assert first.returncode == 0, output(first)
+    assert second.returncode == 0, output(second)
+    # Require each post to name its own reviewer and never the other one.
+    first_body, second_body = (request["json"] for request in discord.requests)
+    for body, own, other in ((first_body, "alice", "bob"), (second_body, "bob", "alice")):
+        values = {field["name"]: field["value"] for field in body["embeds"][0]["fields"]}
+        assert values["Reviewer"] == own
+        assert own in body["content"]
+        assert other not in json.dumps(body)
+
+
+@pytest.mark.parametrize(
+    ("reviewer", "team", "requested_by", "message"),
+    [
+        ("", "", "maint-lead", "must name exactly one of PR_REVIEWER or PR_REVIEW_TEAM"),
+        ("octo-reviewer", "core", "maint-lead", "must name exactly one of PR_REVIEWER"),
+        ("octo-reviewer", "", "", "metadata is missing: PR_REQUESTED_BY"),
+    ],
+)
+def test_invalid_review_data_fails_before_any_request(
+    tmp_path: Path,
+    discord: FakeDiscord,
+    reviewer: str,
+    team: str,
+    requested_by: str,
+    message: str,
+) -> None:
+    """Refuse to post a review request without exactly one target and a requester.
+
+    Args:
+        tmp_path: Directory for the extracted script.
+        discord: Fake webhook endpoint that must stay unused.
+        reviewer: Requested reviewer login passed by the workflow.
+        team: Requested team name passed by the workflow.
+        requested_by: Requester login passed by the workflow.
+        message: Expected diagnostic fragment.
+
+    Raises:
+        AssertionError: The job passes, sends a request or leaks the webhook URL.
+    """
+    # Run a review request with inconsistent event data.
+    result = announce(
+        tmp_path, discord, kind="review", reviewer=reviewer, team=team, requested_by=requested_by
+    )
+    # Require an annotated failure without any delivery or URL echo.
+    assert result.returncode != 0
+    assert "::error::" in result.stdout
+    assert message in result.stdout
+    assert CANARY not in output(result)
+    assert discord.requests == []
+
+
+def test_untrusted_team_name_stays_inert_data(tmp_path: Path, discord: FakeDiscord) -> None:
+    """Send a hostile team name as literal text that pings nobody.
+
+    Args:
+        tmp_path: Directory for the extracted script.
+        discord: Fake webhook endpoint recording the request.
+
+    Raises:
+        AssertionError: The team name is altered, breaks the workflow command
+            output, or mentions are not suppressed.
+    """
+    # Deliver a team name containing mention syntax and a forged annotation line.
+    team = "core @everyone <@123>\n::error::forged"
+    result = announce(tmp_path, discord, kind="review", team=team, requested_by="maint-lead")
+    assert result.returncode == 0, output(result)
+    # Require the name to reach Discord verbatim with every mention type disabled.
+    body = discord.requests[0]["json"]
+    values = {field["name"]: field["value"] for field in body["embeds"][0]["fields"]}
+    assert values["Team"] == team
+    assert f"team {team}" in body["content"]
+    assert body["allowed_mentions"] == {"parse": []}
+    # Require the job log to neither echo the name nor emit a forged annotation.
+    assert "::error::" not in result.stdout
+    assert "@everyone" not in output(result)
+
+
 @pytest.mark.parametrize(
     ("kind", "merged_by", "message"),
     [
         ("merged", "", "metadata is missing: PR_MERGED_BY"),
-        ("", "", "ANNOUNCE_KIND must be 'opened' or 'merged'"),
-        ("closed", "maint-lead", "ANNOUNCE_KIND must be 'opened' or 'merged'"),
+        ("", "", "ANNOUNCE_KIND must be 'opened', 'merged' or 'review'"),
+        ("closed", "maint-lead", "ANNOUNCE_KIND must be 'opened', 'merged' or 'review'"),
     ],
 )
 def test_invalid_event_data_fails_before_any_request(

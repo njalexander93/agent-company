@@ -1,7 +1,8 @@
 name: PR Discord Announcement
 
-# Posts opened and merged pull requests to the team's Discord channel through the
-# repository Actions secret DISCORD_PR_WEBHOOK_URL. Its value is the channel's
+# Posts opened and merged pull requests, and review requests on them, to the
+# team's Discord channel through the repository Actions secret
+# DISCORD_PR_WEBHOOK_URL. Its value is the channel's
 # incoming webhook URL (Discord: Edit Channel > Integrations > Webhooks); never
 # paste it anywhere else. Failed runs print an ::error:: line saying what to fix.
 #
@@ -10,18 +11,23 @@ name: PR Discord Announcement
 # That is safe here only because this job never checks out or runs PR code,
 # grants the token no permissions and receives PR metadata solely as env data.
 # "closed" also fires for PRs closed without merging; the job condition skips those.
+# GitHub sends one review_requested event per requested reviewer or team, including
+# re-requests, carrying either requested_reviewer or requested_team; the message
+# names only that event's target, never every pending reviewer. Review-request
+# removals, assignee changes and review submissions (a separate
+# pull_request_review event) are deliberately not subscribed.
 on:
   pull_request_target:
-    types: [opened, closed]
+    types: [opened, closed, review_requested]
 
 permissions: {}
 
 jobs:
   announce:
     name: Announce PR in Discord
-    # One job serves both announcements so the delivery logic exists once; a
-    # PR closed without merging (or any other action) leaves the job skipped.
-    if: github.event.action == 'opened' || (github.event.action == 'closed' && github.event.pull_request.merged == true)
+    # One job serves all three announcements so the delivery logic exists once;
+    # a PR closed without merging (or any other action) leaves the job skipped.
+    if: github.event.action == 'opened' || (github.event.action == 'closed' && github.event.pull_request.merged == true) || github.event.action == 'review_requested'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -31,15 +37,21 @@ jobs:
         shell: python
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_PR_WEBHOOK_URL }}
-          ANNOUNCE_KIND: ${{ github.event.action == 'closed' && 'merged' || 'opened' }}
+          ANNOUNCE_KIND: ${{ github.event.action == 'closed' && 'merged' || github.event.action == 'review_requested' && 'review' || 'opened' }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           PR_URL: ${{ github.event.pull_request.html_url }}
           # Empty for opened PRs; required by the script only for merges.
           PR_MERGED_BY: ${{ github.event.pull_request.merged_by.login }}
+          # Review requests carry exactly one of a user or a team; the other is
+          # empty. Empty for opened and merged events.
+          PR_REVIEWER: ${{ github.event.requested_reviewer.login }}
+          PR_REVIEW_TEAM: ${{ github.event.requested_team.name }}
+          PR_REQUESTED_BY: ${{ github.event.sender.login }}
         run: |
-          # Announce one opened or merged pull request through a Discord webhook.
+          # Announce one opened or merged pull request, or one review request on
+          # it, through a Discord webhook.
           # Diagnostics never print the webhook URL, which embeds its token.
           import http.client
           import json
@@ -54,9 +66,9 @@ jobs:
               "https://discord.com/api/webhooks/",
               "https://discordapp.com/api/webhooks/",
           )
-          # Embed colors distinguish the two kinds at a glance (GitHub's open
-          # green and merged purple).
-          COLORS = {"opened": 0x2DA44E, "merged": 0x8250DF}
+          # Embed colors distinguish the three kinds at a glance (GitHub's open
+          # green, merged purple and attention yellow).
+          COLORS = {"opened": 0x2DA44E, "merged": 0x8250DF, "review": 0xBF8700}
           TITLE_LIMIT = 256
           MAX_ATTEMPTS = 2
           MAX_DELAY = 10.0
@@ -147,16 +159,22 @@ jobs:
               return title + "…"
 
 
-          def payload(kind, number, title, author, url, merged_by):
-              """Build a message whose PR text cannot mention anyone.
+          def payload(kind, number, title, author, url, merged_by, reviewer, team, requested_by):
+              """Build a message whose PR and reviewer text cannot mention anyone.
 
               Args:
-                  kind: "opened" or "merged".
+                  kind: "opened", "merged" or "review".
                   number: Pull request number.
                   title: Pull request title, treated as untrusted text.
                   author: Login of the pull request author.
                   url: Browser URL of the pull request.
                   merged_by: Login of the merger; used only when kind is "merged".
+                  reviewer: Requested reviewer login, or empty for a team request;
+                      used only when kind is "review".
+                  team: Requested team name, treated as untrusted text, or empty for
+                      a user request; used only when kind is "review".
+                  requested_by: Login of who requested the review; used only when
+                      kind is "review".
 
               Returns:
                   Discord execute-webhook JSON body.
@@ -169,6 +187,16 @@ jobs:
               if kind == "merged":
                   content = f"Pull request #{number} by {author} was merged by {merged_by}"
                   fields.append({"name": "Merged by", "value": merged_by, "inline": True})
+              elif kind == "review":
+                  # Name only this event's target: a user, or a team labelled as such.
+                  if team:
+                      target = f"team {team}"
+                      fields.append({"name": "Team", "value": team, "inline": True})
+                  else:
+                      target = reviewer
+                      fields.append({"name": "Reviewer", "value": reviewer, "inline": True})
+                  content = f"Review requested from {target} on pull request #{number} by {author}"
+                  fields.append({"name": "Requested by", "value": requested_by, "inline": True})
               else:
                   content = f"Pull request #{number} opened by {author}"
               # Suppress every mention type so @everyone or <@id> stays plain text.
@@ -278,15 +306,34 @@ jobs:
               # Require a known event kind; the workflow derives it from the action.
               kind = os.environ.get("ANNOUNCE_KIND", "")
               if kind not in COLORS:
-                  fail(f"ANNOUNCE_KIND must be 'opened' or 'merged', not {kind[:20]!r}.")
+                  fail(
+                      f"ANNOUNCE_KIND must be 'opened', 'merged' or 'review', not {kind[:20]!r}."
+                  )
               # Require the event metadata that the workflow passes as env data.
               names = ["PR_NUMBER", "PR_AUTHOR", "PR_URL"]
               if kind == "merged":
                   names.append("PR_MERGED_BY")
-              fields = {name: os.environ.get(name, "") for name in [*names, "PR_TITLE"]}
+              elif kind == "review":
+                  names.append("PR_REQUESTED_BY")
+              optional = [
+                  "PR_TITLE",
+                  "PR_MERGED_BY",
+                  "PR_REVIEWER",
+                  "PR_REVIEW_TEAM",
+                  "PR_REQUESTED_BY",
+              ]
+              fields = {name: os.environ.get(name, "") for name in [*names, *optional]}
               missing = [name for name in names if not fields[name]]
               if missing:
                   fail(f"Pull request event metadata is missing: {', '.join(missing)}.")
+              # Require a review request to name exactly one target, a user or a team.
+              targets = [fields["PR_REVIEWER"], fields["PR_REVIEW_TEAM"]]
+              if kind == "review" and sum(map(bool, targets)) != 1:
+                  fail(
+                      "A review request must name exactly one of PR_REVIEWER or "
+                      "PR_REVIEW_TEAM; check the requested_reviewer and requested_team "
+                      "event fields."
+                  )
               # Encode the request once; retries resend identical bytes.
               number = fields["PR_NUMBER"]
               message = payload(
@@ -295,7 +342,10 @@ jobs:
                   fields["PR_TITLE"],
                   fields["PR_AUTHOR"],
                   fields["PR_URL"],
-                  fields.get("PR_MERGED_BY", ""),
+                  fields["PR_MERGED_BY"],
+                  fields["PR_REVIEWER"],
+                  fields["PR_REVIEW_TEAM"],
+                  fields["PR_REQUESTED_BY"],
               )
               data = json.dumps(message).encode("utf-8")
               headers = {
@@ -333,9 +383,10 @@ jobs:
                           time.sleep(DEFAULT_DELAY)
                           continue
                       fail(f"Could not reach Discord ({summary}). Re-run this job later.")
-                  # Confirm success without echoing the webhook or the title.
+                  # Confirm success without echoing the webhook, title or team name.
                   if 200 <= status < 300:
-                      print(f"Announced {kind} pull request #{number} in Discord.")
+                      subject = "review request on" if kind == "review" else kind
+                      print(f"Announced {subject} pull request #{number} in Discord.")
                       return
                   fail(f"Discord announcement failed with HTTP {status}. {hint(status)}")
 
