@@ -1,9 +1,9 @@
 # Role definitions
 
 This folder is reserved for Role definitions shipped inside the
-`nplet` package. Definitions placed here are
-authoritative framework content, with the same status as the organization
-and template resources.
+`nplet` package. Definitions placed here are framework content shipped
+inside the package; each definition records its own review status and
+exact reviewed revision, and shipping grants no acceptance.
 
 It currently holds four Product Planning Team definitions:
 
