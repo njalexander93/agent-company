@@ -25,8 +25,8 @@ from importlib import resources
 from pathlib import Path
 from typing import Any, NotRequired, TypedDict
 
-from agent_company.lifecycle._errors import WorkspaceError, require
-from agent_company.lifecycle._filesystem import Directory as NativeDirectory
+from nplet.lifecycle._errors import WorkspaceError, require
+from nplet.lifecycle._filesystem import Directory as NativeDirectory
 
 MAX_REQUEST = 96 * 1024 * 1024
 MAX_FILE = 16 * 1024 * 1024
@@ -1866,7 +1866,7 @@ def initial_payload(identifier: str) -> PayloadFiles:
     Raises:
         OSError: If the packaged roadmap template cannot be read.
     """
-    template = resources.files("agent_company").joinpath("resources/task_workspace/roadmap.md")
+    template = resources.files("nplet").joinpath("resources/task_workspace/roadmap.md")
     return {
         "roadmap.md": template.read_text().replace("{{issue_id}}", identifier).encode(),
         "events.jsonl": b"",

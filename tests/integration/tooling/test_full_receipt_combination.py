@@ -96,7 +96,7 @@ def test_standalone_combiner_accepts_only_complete_full_native_records(
 
     checkout = tmp_path / "checkout"
     checkout.mkdir()
-    source = checkout / "src/agent_company/sample.py"
+    source = checkout / "src/nplet/sample.py"
     source.parent.mkdir(parents=True)
     source.write_text("value = 1\n")
     policy = checkout / "pyproject.toml"

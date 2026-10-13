@@ -79,8 +79,8 @@ the gate's exception ledger with these exact fields:
 ```json
 {
   "id": "EX-001",
-  "symbol": "agent_company.module:function",
-  "source_path": "src/agent_company/module.py",
+  "symbol": "nplet.module:function",
+  "source_path": "src/nplet/module.py",
   "source_sha256": "64 lowercase hex characters",
   "platforms": ["Linux", "Windows", "Darwin"],
   "missing_lines": [12],

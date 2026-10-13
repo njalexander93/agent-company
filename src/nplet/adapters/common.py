@@ -12,9 +12,9 @@ import uuid
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
-from agent_company.adapters import bootstrap as encoded_bootstrap
-from agent_company.adapters import runner
-from agent_company.lifecycle import task_workspace as core
+from nplet.adapters import bootstrap as encoded_bootstrap
+from nplet.adapters import runner
+from nplet.lifecycle import task_workspace as core
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -52,8 +52,8 @@ COMMON_FIELDS = {
     "binding_generation",
     "expected_revision",
 }
-LIFECYCLE = ROOT / "src/agent_company/lifecycle/task_workspace.py"
-WINDOWS_BOOTSTRAP = ROOT / "src/agent_company/adapters/bootstrap.py"
+LIFECYCLE = ROOT / "src/nplet/lifecycle/task_workspace.py"
+WINDOWS_BOOTSTRAP = ROOT / "src/nplet/adapters/bootstrap.py"
 PYTHON = str(ROOT / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python"))
 
 
@@ -321,7 +321,7 @@ def _claude_linear_providers() -> dict[str, set[str]]:
         "linear-server": {"user", "project", "plugin", "sdk"},
     }
     # Bind opaque Desktop names only through explicit, operator-verified configuration.
-    connector = os.environ.get("AGENT_COMPANY_CLAUDE_LINEAR_CONNECTOR_ID", "")
+    connector = os.environ.get("NPLET_CLAUDE_LINEAR_CONNECTOR_ID", "")
     if re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", connector):
         providers[connector] = {"claudeai", "dynamic", "sdk"}
     return providers
@@ -716,7 +716,7 @@ def native_ticket_lookup(
             except ValueError as error:
                 # Preserve malformed-data identity instead of calling it missing.
                 raise core.WorkspaceError("PROVIDER_RESPONSE_INVALID") from error
-        from agent_company.adapters import startup
+        from nplet.adapters import startup
 
         # Desktop reports successful MCP content blocks directly on PostToolUse.
         # Restore only that envelope; the shared parser still validates every block and ID.

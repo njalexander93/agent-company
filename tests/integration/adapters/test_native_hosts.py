@@ -15,8 +15,8 @@ from typing import Literal, cast
 
 import pytest
 
-from agent_company.adapters import claude, codex, common, cursor, startup
-from agent_company.lifecycle import task_workspace as core
+from nplet.adapters import claude, codex, common, cursor, startup
+from nplet.lifecycle import task_workspace as core
 from tests.platform_support import link_directory, shell_command, unlink_directory
 from tests.support import ROOT, Fixture
 from tests.types import JsonObject, JsonValue
@@ -834,7 +834,7 @@ def test_native_process_rejects_invalid_or_oversized_json(host: NativeHost, payl
     environment = os.environ.copy()
     environment.pop("CURSOR_VERSION", None)
     result = subprocess.run(
-        [codex.PYTHON, "-m", "agent_company.adapters." + host],
+        [codex.PYTHON, "-m", "nplet.adapters." + host],
         input=payload,
         text=True,
         capture_output=True,
@@ -982,7 +982,7 @@ def test_native_config_quotes_checkout_and_reports_missing_environment(
         assert imported.returncode == 0
         assert imported.stdout == imported.stderr == ""
     # Failure before the launcher starts is Git/shell discovery failure, not hook exit 2.
-    (root / "src/agent_company/adapters/launch.sh").unlink()
+    (root / "src/nplet/adapters/launch.sh").unlink()
     absent_launcher = subprocess.run(
         shell_command(shell, command, preserve_native_exit=True),
         cwd=nested,

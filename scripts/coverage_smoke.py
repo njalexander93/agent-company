@@ -44,7 +44,7 @@ def probe(*, instrumented: bool = True, isolated_child: bool = False) -> dict[st
     # Time the child-only probe for native evidence.
     started = time.monotonic()
     # Build and run the child case in a disposable directory.
-    with tempfile.TemporaryDirectory(prefix="agent-company-coverage-smoke-") as name:
+    with tempfile.TemporaryDirectory(prefix="nplet-coverage-smoke-") as name:
         directory = Path(name)
         child = directory / "child_only.py"
         child.write_text(
@@ -76,7 +76,7 @@ def probe(*, instrumented: bool = True, isolated_child: bool = False) -> dict[st
         ]
         environment = os.environ.copy()
         environment.pop("COVERAGE_PROCESS_CONFIG", None)
-        environment.pop("AGENT_COMPANY_PYTEST_EVIDENCE", None)
+        environment.pop("NPLET_PYTEST_EVIDENCE", None)
         environment["COVERAGE_FILE"] = str(data_file)
         # Disable only the startup hook for the negative control.
         if not instrumented:

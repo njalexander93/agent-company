@@ -6,8 +6,8 @@ from unittest import mock
 
 import pytest
 
-from agent_company.adapters import codex as hook
-from agent_company.lifecycle import task_workspace as w
+from nplet.adapters import codex as hook
+from nplet.lifecycle import task_workspace as w
 from tests.support import Fixture
 from tests.types import JsonObject, JsonValue
 

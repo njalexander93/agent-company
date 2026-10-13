@@ -25,9 +25,11 @@ Runtime metadata accepts **Python >=3.12,<3.15**. The reproducible development i
 Python environments are separate per worktree. Commit the lock and project
 configuration, never environments, caches or task data. Use `poetry sync` for
 reproduction; change and review the lock deliberately when updating dependencies.
-`poetry sync` also installs `agent_company` in editable mode from `src/`. Run it
+`poetry sync` also installs `nplet` in editable mode from `src/`. Run it
 after switching to this layout or creating a new worktree. Source edits then use
-the same package import without copying files into the environment.
+the same package import without copying files into the environment. A checkout
+installed before the package rename follows
+[After pulling the rename](host-hooks.md#after-pulling-the-rename).
 
 ## Source documentation and logic comments
 
@@ -118,7 +120,7 @@ server checks. See [Git's pre-commit contract](https://git-scm.com/docs/githooks
 ## Source layout
 
 ```text
-src/agent_company/
+src/nplet/
   lifecycle/task_workspace.py       # shared lifecycle implementation and JSON entry point
   lifecycle/_filesystem*.py         # platform filesystem implementations
   adapters/                         # native host adapters over the shared lifecycle
@@ -174,7 +176,7 @@ native scenarios, per-function obligations, and coverage exceptions.
 | `make validate-config` | Validate project metadata, lock consistency and hook configuration. |
 | `make format-check` | Ruff formatting without changing files. |
 | `make lint` | Ruff errors, warnings, imports, docstrings and logging rules; no automatic fixes. |
-| `make type-check` | Mypy on production code under `src/agent_company/`. |
+| `make type-check` | Mypy on production code under `src/nplet/`. |
 | `make ticket-references` | Fail on Linear issue identifiers or issue URLs in tracked files; describe events instead. |
 | `make test-unit` | Run `tests/unit` without imposing aggregate coverage on the subset. |
 | `make test-integration` | Run `tests/integration` without a subset coverage gate. |

@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from agent_company.lifecycle._errors import WorkspaceError
+from nplet.lifecycle._errors import WorkspaceError
 
 pytestmark = [
     pytest.mark.unit,
@@ -27,7 +27,7 @@ def windows() -> Any:
     Returns:
         Imported Windows filesystem module.
     """
-    from agent_company.lifecycle import _filesystem_windows
+    from nplet.lifecycle import _filesystem_windows
 
     return _filesystem_windows
 

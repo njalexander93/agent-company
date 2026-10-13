@@ -7,7 +7,7 @@ from unittest import mock
 
 import pytest
 
-from agent_company.lifecycle import task_workspace as w
+from nplet.lifecycle import task_workspace as w
 from tests.platform_support import link_directory, unlink_directory
 from tests.support import Fixture, call_process
 from tests.types import JsonObject

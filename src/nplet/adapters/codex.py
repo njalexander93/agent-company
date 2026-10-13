@@ -8,8 +8,8 @@ import os
 import sys
 from pathlib import Path
 
-from agent_company.adapters import common, runner, startup
-from agent_company.lifecycle import task_workspace as core
+from nplet.adapters import common, runner, startup
+from nplet.lifecycle import task_workspace as core
 
 ROOT = Path(__file__).resolve().parents[3]
 

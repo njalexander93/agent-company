@@ -11,8 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from agent_company.adapters import codex as hook
-from agent_company.adapters import common
+from nplet.adapters import codex as hook
+from nplet.adapters import common
 from tests.support import Fixture
 
 pytestmark = pytest.mark.integration

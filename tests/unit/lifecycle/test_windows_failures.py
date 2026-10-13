@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_company.lifecycle._errors import WorkspaceError
+from nplet.lifecycle._errors import WorkspaceError
 
 pytestmark = [
     pytest.mark.unit,
@@ -20,7 +20,7 @@ pytestmark = [
 
 def test_extended_path_uses_local_namespace() -> None:
     """Preserve the exact drive path behind the extended local prefix."""
-    from agent_company.lifecycle import _filesystem_windows as windows
+    from nplet.lifecycle import _filesystem_windows as windows
 
     # Confirm the extended local prefix preserves the drive path.
     assert windows.extended(Path(r"C:\work\TEST-30")) == r"\\?\C:\work\TEST-30"
@@ -35,7 +35,7 @@ def test_open_handle_surfaces_native_failure_without_accepting_invalid_handle(
         monkeypatch: Pytest fixture used to replace the dependency under test.
     """
     # Install fake CreateFile, get_last_error calls.
-    from agent_company.lifecycle import _filesystem_windows as windows
+    from nplet.lifecycle import _filesystem_windows as windows
 
     monkeypatch.setattr(windows, "CreateFile", lambda *_args: windows.INVALID_HANDLE)
     monkeypatch.setattr(windows.c, "get_last_error", lambda: 5)
@@ -54,7 +54,7 @@ def test_information_rejects_non_disk_handle(
         monkeypatch: Pytest fixture used to replace the dependency under test.
     """
     # Install fake GetFileInformation, GetFileType calls.
-    from agent_company.lifecycle import _filesystem_windows as windows
+    from nplet.lifecycle import _filesystem_windows as windows
 
     monkeypatch.setattr(windows, "GetFileInformation", lambda *_args: True)
     monkeypatch.setattr(windows, "GetFileType", lambda _handle: 0)

@@ -6,8 +6,8 @@ from typing import Any
 
 import pytest
 
-from agent_company.adapters import codex
-from agent_company.lifecycle import task_workspace as core
+from nplet.adapters import codex
+from nplet.lifecycle import task_workspace as core
 
 pytestmark = pytest.mark.unit
 

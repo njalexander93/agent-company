@@ -1,15 +1,15 @@
 [project]
-name = "agent-company"
+name = "nplet"
 version = "0.1.0"
-description = "Agent Company definitions and local task workspace tooling"
+description = "nplet definitions and local task workspace tooling"
 requires-python = ">=3.12,<3.15"
 dependencies = []
 
 [project.urls]
-Repository = "https://github.com/njalexander93/agent-company"
+Repository = "https://github.com/njalexander93/nplet"
 
 [tool.poetry]
-packages = [{ include = "agent_company", from = "src" }]
+packages = [{ include = "nplet", from = "src" }]
 requires-poetry = "==2.4.2"
 
 [tool.poetry.group.lint.dependencies]
@@ -82,8 +82,8 @@ branch = true
 core = "ctrace"
 patch = ["subprocess"]
 relative_files = true
-context = "${AGENT_COMPANY_COVERAGE_CONTEXT-local}"
-source = ["agent_company"]
+context = "${NPLET_COVERAGE_CONTEXT-local}"
+source = ["nplet"]
 omit = ["*/__init__.py"]
 
 [tool.coverage.report]

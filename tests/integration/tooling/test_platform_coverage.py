@@ -25,8 +25,8 @@ def test_combination_normalizes_windows_paths_and_preserves_contexts(tmp_path: P
     files = []
     # Create one native artifact directory for each requested operating system.
     for system, name in (
-        ("synthetic-posix", "src/agent_company/lifecycle/task_workspace.py"),
-        ("synthetic-windows", "src\\agent_company\\lifecycle\\task_workspace.py"),
+        ("synthetic-posix", "src/nplet/lifecycle/task_workspace.py"),
+        ("synthetic-windows", "src\\nplet\\lifecycle\\task_workspace.py"),
     ):
         path = tmp_path / system
         data = CoverageData(basename=str(path))
@@ -41,7 +41,7 @@ def test_combination_normalizes_windows_paths_and_preserves_contexts(tmp_path: P
     coverage.combine(files, strict=True, keep=True)
     data = coverage.get_data()
     # Check normalized combined paths without discarding contexts.
-    assert data.measured_files() == {str(Path("src/agent_company/lifecycle/task_workspace.py"))}
+    assert data.measured_files() == {str(Path("src/nplet/lifecycle/task_workspace.py"))}
     assert data.measured_contexts() == {"synthetic-posix", "synthetic-windows"}
     assert all(Path(path).exists() for path in files)
 

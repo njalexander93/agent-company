@@ -10,7 +10,7 @@ import json
 import uuid
 from pathlib import Path
 
-from agent_company.lifecycle import task_workspace as core
+from nplet.lifecycle import task_workspace as core
 
 
 def _linear_missing_issue(response: dict[str, object]) -> bool:

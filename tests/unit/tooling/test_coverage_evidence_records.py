@@ -31,14 +31,14 @@ def record(root: Path, system: str, suite: str) -> Path:
     """
     directory = root / system / suite
     directory.mkdir(parents=True)
-    source = root / "src/agent_company/sample.py"
+    source = root / "src/nplet/sample.py"
     source.parent.mkdir(parents=True, exist_ok=True)
     source.write_text("value = 1\n")
     (root / "pyproject.toml").write_text(
         "[tool.coverage.run]\nbranch = true\nrelative_files = true\n"
     )
     data = CoverageData(basename=str(directory / ".coverage"))
-    data.add_arcs({"src/agent_company/sample.py": [(-1, 1), (1, -1)]})
+    data.add_arcs({"src/nplet/sample.py": [(-1, 1), (1, -1)]})
     data.write()
     data.close()
     data = CoverageData(basename=str(directory / ".coverage"))
@@ -140,7 +140,7 @@ def test_native_record_accepts_windows_json_paths_and_rejects_collisions(tmp_pat
     report_path = directory / "coverage.json"
     manifest_path = directory / "manifest.json"
     report = json.loads(report_path.read_text())
-    source = "src/agent_company/sample.py"
+    source = "src/nplet/sample.py"
     windows_source = source.replace("/", "\\")
     row = report["files"].pop(source)
     report["files"][windows_source] = row
@@ -207,7 +207,7 @@ def test_native_record_rejects_invalid_evidence(tmp_path: Path, defect: str) -> 
             # Replace branch data with a line-only database to test instrumentation rejection.
             database.unlink()
             data = CoverageData(basename=str(database))
-            data.add_lines({"src/agent_company/sample.py": {1}})
+            data.add_lines({"src/nplet/sample.py": {1}})
             data.write()
             data.close()
     # Remove the coverage JSON artifact while retaining its manifest reference.
@@ -547,13 +547,13 @@ def test_native_record_rejects_precise_receipt_corruption(
         # Load the coverage report before altering its measurement claims.
         report_path = directory / "coverage.json"
         report = json.loads(report_path.read_text())
-        source = "src/agent_company/sample.py"
+        source = "src/nplet/sample.py"
         # Claim line-only JSON while the native gate requires branch coverage.
         if defect == "branch-json":
             report["meta"]["branch_coverage"] = False
         # Rename the measured source to a file absent from the tested source tree.
         elif defect == "unmapped-file":
-            report["files"]["src/agent_company/other.py"] = report["files"].pop(source)
+            report["files"]["src/nplet/other.py"] = report["files"].pop(source)
         # Alter executed-line claims without changing the underlying database.
         elif defect == "line-disagreement":
             report["files"][source]["executed_lines"] = [2]

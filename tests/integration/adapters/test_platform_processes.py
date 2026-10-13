@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_company.adapters import common
+from nplet.adapters import common
 from tests.platform_support import environment_python, link_directory, shell_command
 from tests.support import ROOT
 
@@ -35,7 +35,7 @@ def test_hook_bounds_malformed_and_open_stdin(
         AssertionError: Input handling hangs, crashes or loses the host failure convention.
     """
     monkeypatch.delenv("CURSOR_VERSION", raising=False)
-    argv = [sys.executable, "-m", "agent_company.adapters." + host]
+    argv = [sys.executable, "-m", "nplet.adapters." + host]
     malformed = subprocess.run(argv, input="{", capture_output=True, text=True, timeout=6)
     assert malformed.returncode == status, malformed.stderr
     assert isinstance(json.loads(malformed.stdout), dict)
@@ -97,7 +97,7 @@ def test_supervisor_reaps_worker_and_preserves_failure_contract(
     """
     source = tmp_path / "src"
     shutil.copytree(ROOT / "src", source, ignore=shutil.ignore_patterns("__pycache__"))
-    path = source / "agent_company/adapters" / (host + ".py")
+    path = source / "nplet/adapters" / (host + ".py")
     sentinel = tmp_path / "late-write"
     started = tmp_path / "worker-started"
     # Choose a worker that writes late or one that loops forever.
@@ -158,7 +158,7 @@ def test_supervisor_rejects_oversized_worker_output(tmp_path: Path) -> None:
     """
     source = tmp_path / "src"
     shutil.copytree(ROOT / "src", source, ignore=shutil.ignore_patterns("__pycache__"))
-    adapter = source / "agent_company/adapters/codex.py"
+    adapter = source / "nplet/adapters/codex.py"
     original = adapter.read_text(encoding="utf-8")
     marker = '\nif __name__ == "__main__":'
     assert marker in original
@@ -208,7 +208,7 @@ def test_windows_bootstrap_survives_literal_paths_and_json(
     subprocess.run(["git", "init", "-q", str(root)], check=True, capture_output=True)
     link_directory(root / ".venv", Path(sys.prefix))
     script = root / "bootstrap helper.py"
-    shutil.copy2(ROOT / "src/agent_company/adapters/bootstrap.py", script)
+    shutil.copy2(ROOT / "src/nplet/adapters/bootstrap.py", script)
     monkeypatch.setattr(common, "PYTHON", str(environment_python(root / ".venv")))
     monkeypatch.setattr(common, "WINDOWS_BOOTSTRAP", script)
     request = {

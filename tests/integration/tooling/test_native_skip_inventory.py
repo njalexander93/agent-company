@@ -31,7 +31,7 @@ def test_parameterized_native_skip_ledger_matches_collection(tmp_path: Path) -> 
     # Collect exact native pytest node IDs into a disposable receipt.
     output = tmp_path / "collection.json"
     environment = os.environ.copy()
-    environment["AGENT_COMPANY_PYTEST_EVIDENCE"] = str(output)
+    environment["NPLET_PYTEST_EVIDENCE"] = str(output)
     environment.pop("COVERAGE_PROCESS_CONFIG", None)
     result = subprocess.run(
         [

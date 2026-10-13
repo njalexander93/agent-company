@@ -19,7 +19,7 @@ REGISTER_CASE = (
     "tests/unit/lifecycle/test_repository_model.py::"
     "test_register_persists_only_explicit_coordinator_startup_packet"
 )
-SOURCE = Path("src/agent_company/lifecycle/task_workspace.py")
+SOURCE = Path("src/nplet/lifecycle/task_workspace.py")
 
 
 def _binding_arcs() -> set[tuple[int, int]]:
@@ -82,7 +82,7 @@ def _run_register_case(tmp_path: Path, tracer: str | None) -> set[tuple[int, int
             "--tb=short",
             REGISTER_CASE,
             f"--junitxml={junit}",
-            "--cov=agent_company",
+            "--cov=nplet",
             f"--cov-config={ROOT / 'pyproject.toml'}",
             f"--cov-report=json:{report}",
             "--cov-fail-under=0",

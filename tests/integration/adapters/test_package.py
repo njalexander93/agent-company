@@ -5,8 +5,8 @@ import subprocess
 
 import pytest
 
-from agent_company.adapters import codex as hook
-from agent_company.lifecycle import task_workspace as w
+from nplet.adapters import codex as hook
+from nplet.lifecycle import task_workspace as w
 from tests.support import Fixture
 
 pytestmark = pytest.mark.integration
@@ -29,7 +29,7 @@ class PackageEntryPointTests(Fixture):
                 hook.PYTHON,
                 "-I",
                 "-m",
-                "agent_company.lifecycle.task_workspace",
+                "nplet.lifecycle.task_workspace",
                 "--request-json",
                 json.dumps(request),
             ],
@@ -41,7 +41,7 @@ class PackageEntryPointTests(Fixture):
         self.require_ok(json.loads(core.stdout))
         # Invoke the adapter's JSON wire entry point with an ordinary permission request.
         adapter = subprocess.run(
-            [hook.PYTHON, "-I", "-m", "agent_company.adapters.codex"],
+            [hook.PYTHON, "-I", "-m", "nplet.adapters.codex"],
             cwd=self.root,
             input=json.dumps({"hook_event_name": "PermissionRequest"}),
             capture_output=True,

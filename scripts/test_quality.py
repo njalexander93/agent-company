@@ -395,7 +395,7 @@ def function_gaps(
     }
     # Prepare gap output after loading unit reports for each native system.
     gaps: list[dict[str, Any]] = []
-    sources = sorted((ROOT / "src/agent_company").rglob("*.py"))
+    sources = sorted((ROOT / "src/nplet").rglob("*.py"))
     sources += sorted((ROOT / "scripts").glob("*.py"))
     # Compare each source file with the reports from applicable systems.
     for source in sources:
@@ -746,7 +746,7 @@ def run_probes(spec: Path, output: Path) -> dict[str, Any]:
             ]
             environment = os.environ.copy()
             environment["COVERAGE_FILE"] = str(copy / ".coverage.probe")
-            environment["AGENT_COMPANY_PYTEST_EVIDENCE"] = str(copy / "baseline.json")
+            environment["NPLET_PYTEST_EVIDENCE"] = str(copy / "baseline.json")
             # Establish a passing selected baseline before editing the source.
             try:
                 baseline = subprocess.run(
@@ -780,7 +780,7 @@ def run_probes(spec: Path, output: Path) -> dict[str, Any]:
                 )
                 continue
             target.write_text(original.replace(old, new), encoding="utf-8")
-            environment["AGENT_COMPANY_PYTEST_EVIDENCE"] = str(copy / "mutant.json")
+            environment["NPLET_PYTEST_EVIDENCE"] = str(copy / "mutant.json")
             # Run the mutated case with its own receipt and timeout.
             try:
                 mutant = subprocess.run(

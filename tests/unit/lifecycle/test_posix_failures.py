@@ -9,12 +9,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from agent_company.lifecycle._errors import WorkspaceError
+from nplet.lifecycle._errors import WorkspaceError
 
 # Select the native POSIX backend only when available.
 if os.name == "posix":
     # Import POSIX descriptor operations for failure injection.
-    from agent_company.lifecycle import _filesystem_posix as posix
+    from nplet.lifecycle import _filesystem_posix as posix
 else:
     # Keep the backend absent on unsupported hosts.
     posix = None

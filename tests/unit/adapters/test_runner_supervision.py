@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from agent_company.adapters import runner
+from nplet.adapters import runner
 
 pytestmark = pytest.mark.unit
 
@@ -27,7 +27,7 @@ def handler(_event: dict[str, object]) -> dict[str, object]:
     return {}
 
 
-handler.__module__ = "agent_company.adapters.codex"
+handler.__module__ = "nplet.adapters.codex"
 
 
 def failure(name: str, code: str) -> dict[str, object]:
@@ -179,7 +179,7 @@ def test_runner_selects_script_entrypoint_by_source_stem(
     input_bytes(monkeypatch, b'{"hook_event_name":"PreToolUse"}')
     namespace: dict[str, object] = {
         "__name__": "__main__",
-        "__file__": str(tmp_path / "checkout/src/agent_company/adapters/codex.py"),
+        "__file__": str(tmp_path / "checkout/src/nplet/adapters/codex.py"),
     }
     exec("def direct_handler(event):\n    return {}", namespace)
     direct_handler = namespace["direct_handler"]

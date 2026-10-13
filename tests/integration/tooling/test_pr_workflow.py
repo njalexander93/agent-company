@@ -100,7 +100,7 @@ def test_workflow_collectors_retain_failure_and_run_later_checks(
         program = (
             "import os; from pathlib import Path; "
             f"Path({str(tmp_path / task)!r}).touch(); "
-            "print(os.environ.get('AGENT_COMPANY_COVERAGE_CONTEXT', 'quality')); "
+            "print(os.environ.get('NPLET_COVERAGE_CONTEXT', 'quality')); "
             f"raise SystemExit({7 if index == 0 else 0})"
         )
         commands[task] = [[sys.executable, "-c", program]]

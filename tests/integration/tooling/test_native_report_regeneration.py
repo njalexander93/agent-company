@@ -25,7 +25,7 @@ def test_translated_report_passes_and_fabricated_line_fails(
     """
     # Generate a real native branch database and translated JSON report.
     directory = record(tmp_path, "Darwin", "unit")
-    source = tmp_path / "src/agent_company/sample.py"
+    source = tmp_path / "src/nplet/sample.py"
     source.write_text(
         "def choose(value):\n"
         "    if (\n"
@@ -59,7 +59,7 @@ def test_translated_report_passes_and_fabricated_line_fails(
     report_path = directory / "coverage.json"
     report = json.loads(report_path.read_text())
     source_key = next(
-        key for key in report["files"] if key.replace("\\", "/") == "src/agent_company/sample.py"
+        key for key in report["files"] if key.replace("\\", "/") == "src/nplet/sample.py"
     )
     assert report["files"][source_key]["executed_lines"]
     manifest_path.write_text(json.dumps(manifest))

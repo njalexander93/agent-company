@@ -206,7 +206,7 @@ def test_installed_hook_accepts_clean_staging_and_records_latency(hook_repo: Hoo
         ("tests/hook_probe.py", '"""Supply a staged hook fixture."""\n\nVALUE=2\n', "ruff-format"),
         ("tests/hook_probe.py", '"""Supply a staged hook fixture."""\n\nimport os\n', "F401"),
         (
-            "src/agent_company/hook_probe.py",
+            "src/nplet/hook_probe.py",
             '"""Supply a production type failure."""\n\nVALUE: int = "wrong"\n',
             "[assignment]",
         ),
@@ -281,7 +281,7 @@ def test_installed_hook_checks_types_outside_staged_filenames(hook_repo: HookRep
         AssertionError: Mypy narrows its scope or filenames leak into the Make invocation.
     """
     # Seed an existing type defect through a clone-only fixture bypass before the tested commit.
-    path = "src/agent_company/hook_other.py"
+    path = "src/nplet/hook_other.py"
     hook_repo.stage(path, '"""Supply an existing type failure."""\n\nVALUE: int = "wrong"\n')
     hook_repo.git(
         "-c", "core.hooksPath=.git/fixture-disabled-hooks", "commit", "-qm", "bad baseline"
