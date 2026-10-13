@@ -1,8 +1,8 @@
-# nplet
+# nplet.ai
 
-**A modular framework for running an agent-powered company under human leadership.**
+**A modular framework for running an agent-powered engineering fleet.**
 
-The nplet framework brings organizational structure to AI work: specialized roles, shared rules, clear responsibilities and coordinated handoffs. The goal is to help people build teams of agents that work toward a common purpose while humans retain direction and approval of consequential decisions.
+The Nplet framework brings organizational structure to AI work: specialized roles, shared rules, clear responsibilities and coordinated handoffs. The goal is to help people build teams of agents that work toward a common purpose while humans retain direction and approval of consequential decisions.
 
 ## What we're building
 
@@ -13,7 +13,7 @@ The nplet framework brings organizational structure to AI work: specialized role
 
 ## Current development
 
-The nplet framework is in **early development**. This repository currently contains the framework's published rules, role and profile templates, worked examples, and Python tooling for shared local task workspaces.
+The Nplet framework is in **early development**. This repository currently contains the framework's published rules, role and profile templates, worked examples, and Python tooling for shared local task workspaces.
 
 The workspace tooling includes integrations for Codex, Claude Code and Cursor. The broader company runtime and complete set of executable roles are still being developed.
 
