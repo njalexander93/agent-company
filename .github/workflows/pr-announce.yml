@@ -1,5 +1,10 @@
 name: PR Discord Announcement
 
+# Posts opened and merged pull requests to the team's Discord channel through the
+# repository Actions secret DISCORD_PR_WEBHOOK_URL. Its value is the channel's
+# incoming webhook URL (Discord: Edit Channel > Integrations > Webhooks); never
+# paste it anywhere else. Failed runs print an ::error:: line saying what to fix.
+#
 # pull_request_target runs from the default branch in the base repository, so
 # fork PRs can use the webhook secret and a PR cannot edit its own announcer.
 # That is safe here only because this job never checks out or runs PR code,

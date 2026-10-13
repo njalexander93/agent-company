@@ -4,8 +4,6 @@
 log and evidence artifact. The [PR Pre-Merge Check workflow](../../.github/workflows/pr-checks.yml)
 runs on pull requests targeting `main`, including documentation-only changes.
 Bugbot is an independent check, outside these five jobs.
-The [PR Discord Announcement workflow](pr-announcements.md) also runs on pull
-requests; it is not one of the five checks and is not a merge requirement.
 
 The workflow uses the interpreter in [`.python-version`](../../.python-version),
 Poetry 2.4.2 and locked dependencies. A newer run for the same pull request cancels
