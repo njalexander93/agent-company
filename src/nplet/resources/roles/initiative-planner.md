@@ -3,7 +3,7 @@
 ## Identity and owning unit
 - Canonical identity: Initiative Planner, one of three distinct planner Roles defined by planning scope ([planning boundaries](../organization/baseline.md#planning-and-wave-boundaries); [Product Planning Team](../organization/team-map.md#product-planning-team)). No display alias is defined. Epic Planner and Issue Planner are separate Roles; Plan Reviewer, Triager and Spike Researcher are not planner aliases.
 - Owning unit: Product Management Department → [Product Planning Team](../organization/team-map.md#product-planning-team), which owns Initiative, Epic/Milestone and Work Item planning proposals and governed amendments. Team placement confers no line or approval authority.
-- Definition status and revision: independently reviewed on 2026-10-13 with findings applied; human acceptance is the merge of this file's containing commit into `main`, which is the exact accepted revision. Open gap: reconciliation with the shared-permissions rules (see [Governing sources and open gaps](#governing-sources-and-open-gaps)). Publishing or packaging this file activates nothing and grants no authority.
+- Definition status and revision: this file plus its full containing Git commit identify the definition; review and acceptance records are kept outside the packaged resources. Open gap: reconciliation with the shared-permissions rules (see [Governing sources and open gaps](#governing-sources-and-open-gaps)). Publishing or packaging this file activates nothing and grants no authority.
 
 ## Responsibility
 
@@ -126,14 +126,12 @@ Planning-specific rules that the packaged baseline does not yet carry are stated
 
 | Gap or disposition | Owner / next action | Readiness effect |
 | --- | --- | --- |
-| Known drafting gap: shared permission rows and exact-revision decision fields | Shared-permissions task (planned, not started as of 2026-10-13); reconcile this definition against those rules | Drafting proceeds; reconcile when the shared-permissions rules exist; an accepted definition may need a follow-up edit then |
-| Known drafting gap: handoff, context and outcome field contract | Handoff-contracts task (planned, not started as of 2026-10-13); bind the handoff table and receipt fields to it when drafted | No receipt schema is invented here; operational use waits |
-| Known drafting gap: Issue Delivery Manager and Retrospective Facilitator definitions | Delivery-coordination task (planned, not started as of 2026-10-13); rows naming Issue Delivery Manager rely on its accepted responsibility only | Integrated readiness needs those definitions |
+| Known drafting gap: shared permission rows and exact-revision decision fields | Shared-permissions task (not yet drafted); reconcile this definition against those rules | Drafting proceeds; reconcile when the shared-permissions rules exist; an accepted definition may need a follow-up edit then |
+| Known drafting gap: handoff, context and outcome field contract | Handoff-contracts task (not yet drafted); bind the handoff table and receipt fields to it when drafted | No receipt schema is invented here; operational use waits |
+| Known drafting gap: Issue Delivery Manager and Retrospective Facilitator definitions | Delivery-coordination task (not yet drafted); rows naming Issue Delivery Manager rely on its accepted responsibility only | Integrated readiness needs those definitions |
 | Intentionally absent: Wave admission algorithm and roadmap engine | Excluded from this definition's scope; Wave Controller owns selection; exact algorithm is implementation detail | No Wave behavior is defined here |
 | Intentionally absent: automated review receipts | Excluded from this definition's scope | Review records are described, not implemented |
 | Unknown: amendment-materiality matrix and per-scope plan schemas | Not yet defined by any packaged rule; uncertain materiality goes to Human Leadership | Borderline changes cannot be self-classified as non-material |
 | Unknown: owner of baseline publication and read-back after authorization | Not assigned in the sources read; route to Human Leadership/Product Planning before operational use | This planner does not publish unless an assignment authorizes it |
 | Conditional: approved parent and human authorization absent from the paper fixtures | Product Planning and Human Leadership supply exact records | Blocks actual authorization transitions, not bounded drafting |
 | Reasoned route composition: `INCONCLUSIVE` relay and `INTENT_CONFLICT` parent amendment | The `INCONCLUSIVE` relay through Product Planning and the `INTENT_CONFLICT` route, including the statement that a changed product intent or Company outcome is a Human Leadership decision, are compositions of the packaged planning, context and handoff rules rather than a single stated rule. Decision destination if contested: Human Leadership | A change to those rules invalidates these rows; the affected handoff rows are marked "(composed route; see open gaps)" |
-
-The four Product Planning definitions in this folder (Initiative Planner, Epic Planner, Issue Planner and Plan Reviewer) were reconciled together on 2026-10-13; their exact revision is the containing commit.
