@@ -17,8 +17,10 @@ It currently holds four Product Planning Team definitions:
   Initiative, Epic/Milestone and Work Item planning proposals and
   Controller-generated Wave proposals.
 
-These are draft definitions pending independent review and shared-permissions
-reconciliation. Each one records its own status, sources and open gaps.
+Each definition was independently reviewed on 2026-10-13; the merge of its
+containing commit into `main` is its accepted revision. Each file records its
+own status, sources and open gaps, including the pending reconciliation with
+the shared-permissions rules.
 
 No loader or activation mechanism reads this folder. Publishing the package,
 installing it, or adding a file here does not activate governance and does

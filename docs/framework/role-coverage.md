@@ -60,28 +60,28 @@ Parent: [Product Management Department → Product Planning Team](../../src/nple
 - **Kind/parent:** Role; Product Planning Team.
 - **Participation:** G: Required input — parent planning context; separately approved Initiative roadmap/decisions not supplied. T: Required input — same gap. A new Initiative planning lane is conditional on a material parent amendment.
 - **Responsibility / handoff:** Coordinate Initiative proposal across Epics in one product Project; no self-authorization. Identified parent outcome/roadmap or amendment → independent Plan Reviewer and Human Leadership; approved context → Epic/Issue planning.
-- **Definition / gap / next action:** A [draft definition](../../src/nplet/resources/roles/initiative-planner.md) exists at the packaged path. It is a draft pending independent review and shared-permissions reconciliation; it is not a runtime Role or activated policy. Retain the participation and stop boundaries above.
+- **Definition / gap / next action:** A [definition](../../src/nplet/resources/roles/initiative-planner.md) exists at the packaged path, independently reviewed on 2026-10-13; its containing commit on `main` is the accepted revision. Open gap: reconciliation with the shared-permissions rules. It is not a runtime loader or activated policy. Retain the participation and stop boundaries above.
 
 #### 05. Epic Planner
 
 - **Kind/parent:** Role; Product Planning Team.
 - **Participation:** G: Required input — parent planning context; separately approved Epic plan/decisions not supplied. T: Required input — same gap. A new Epic planning lane is conditional on a material parent amendment.
 - **Responsibility / handoff:** Decompose Epic into Milestones; canonical Role for Epic/Milestone decomposition. Wave proposal selection belongs to deterministic Controller. Epic/Milestone proposal or amendment → independent Plan Reviewer and Human Leadership; approved context → Issue Planner.
-- **Definition / gap / next action:** A [draft definition](../../src/nplet/resources/roles/epic-planner.md) exists at the packaged path. It is a draft pending independent review and shared-permissions reconciliation; it is not a runtime Role or activated policy. Retain the participation and stop boundaries above.
+- **Definition / gap / next action:** A [definition](../../src/nplet/resources/roles/epic-planner.md) exists at the packaged path, independently reviewed on 2026-10-13; its containing commit on `main` is the accepted revision. Open gap: reconciliation with the shared-permissions rules. It is not a runtime loader or activated policy. Retain the participation and stop boundaries above.
 
 #### 06. Issue Planner
 
 - **Kind/parent:** Role; Product Planning Team.
 - **Participation:** G: Required. T: Required.
 - **Responsibility / handoff:** Develop bounded Work Item proposal from accepted parent outcomes; return corrections to its author. Versioned Work Item plan → Plan Reviewer, then Human Leadership; authorized plan → Issue Delivery Manager.
-- **Definition / gap / next action:** A [draft definition](../../src/nplet/resources/roles/issue-planner.md) exists at the packaged path. It is a draft pending independent review and shared-permissions reconciliation; it is not a runtime Role or activated policy. Retain the participation and stop boundaries above.
+- **Definition / gap / next action:** A [definition](../../src/nplet/resources/roles/issue-planner.md) exists at the packaged path, independently reviewed on 2026-10-13; its containing commit on `main` is the accepted revision. Open gap: reconciliation with the shared-permissions rules. It is not a runtime loader or activated policy. Retain the participation and stop boundaries above.
 
 #### 07. Plan Reviewer
 
 - **Kind/parent:** Role; Product Planning Team.
 - **Participation:** G: Required. T: Required.
 - **Responsibility / handoff:** Independently review applicable planning scope; read-only toward proposal, findings separate. Review success is not execution authority. Review findings → originating planner for correction; reviewed exact proposal/evidence → Human Leadership for authorization.
-- **Definition / gap / next action:** A [draft definition](../../src/nplet/resources/roles/plan-reviewer.md) exists at the packaged path. It is a draft pending independent review and shared-permissions reconciliation; it is not a runtime Role or activated policy. Retain the participation and stop boundaries above.
+- **Definition / gap / next action:** A [definition](../../src/nplet/resources/roles/plan-reviewer.md) exists at the packaged path, independently reviewed on 2026-10-13; its containing commit on `main` is the accepted revision. Open gap: reconciliation with the shared-permissions rules. It is not a runtime loader or activated policy. Retain the participation and stop boundaries above.
 
 #### 08. Triager
 
@@ -223,7 +223,7 @@ All four are selected Profile references, not new Roles or installed runtime def
 
 The selected full-definition set contains 12 Roles: Initiative Planner, Epic Planner, Issue Planner, Plan Reviewer, Issue Delivery Manager, Retrospective Facilitator, Tooling Engineer, Test Developer, Code Reviewer, Agent Governance Officer, Internal Security Reviewer and Change Publisher. The other 10 accepted Roles remain supporting references for these fixtures. This selection does not remove their responsibilities elsewhere.
 
-Only the [worked AGO example](../examples/agent-governance-officer.md) is included as a complete authoring example; the four Product Planning definitions (entries 04–07) now exist as packaged drafts under `src/nplet/resources/roles/`, pending independent review. The AGO example is not a packaged runtime definition. Review and acceptance must identify its exact revision. Actual runtime resources belong under `src/nplet/resources/roles/` and are not supplied by this record.
+Only the [worked AGO example](../examples/agent-governance-officer.md) is included as a complete authoring example; the four Product Planning definitions (entries 04–07) now exist as packaged definitions under `src/nplet/resources/roles/`, independently reviewed, with shared-permissions reconciliation pending. The AGO example is not a packaged runtime definition. Review and acceptance must identify its exact revision. Actual runtime resources belong under `src/nplet/resources/roles/` and are not supplied by this record.
 
 Incomplete definitions do not block bounded authoring. They do block claims of operational readiness where the selected path requires their exact inputs, authority, context or evidence contracts.
 
