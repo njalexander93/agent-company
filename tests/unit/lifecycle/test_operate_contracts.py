@@ -2480,3 +2480,109 @@ def test_coordinator_roadmap_update_refreshes_its_own_packet_reference() -> None
     note = {**request, "path": "context/note.md", "old_digest": core.sha(b"old note")}
     assert core.operate(store, issue, note)["ok"] is True  # type: ignore[arg-type]
     assert issue.state["participants"][key]["status"] == "ready"
+
+
+def test_source_read_start_tracks_assigned_preparation_without_acknowledgment() -> None:
+    """Reserve an assigned source read before readiness without granting ordinary authority."""
+    # Model a participant that has not acknowledged its current assigned packet.
+    store, issue = MemoryStore(), MemoryIssue(acknowledged=False)
+    key = issue.state["coordinator"]
+    packet = copy.deepcopy(issue.state["participants"][key]["packet"])
+    original_files = issue.files()
+    request = base_request(
+        "source-read-start",
+        tool_id="source-call",
+        packet_digest=core.sha(core.canonical(packet)),
+        source_locator="roadmap.md",
+    )
+    # Preparation creates pending work under the exact participant and observed call.
+    result = core.operate(store, issue, request)  # type: ignore[arg-type]
+    member = issue.state["participants"][key]
+    assert result["ok"] is True
+    assert member["pending"] == {"source-call": {"status": "pending"}}
+    assert member["packet"] == packet
+    assert member["ack"] is None
+    assert member["status"] == "attached"
+    assert issue.payload == original_files
+    assert [event for event, _state, _files in issue.commits] == ["source-read-start"]
+    assert store.saved == []
+
+
+@pytest.mark.parametrize(
+    "fault,code",
+    [
+        ("wrong-packet", "SOURCE_STALE"),
+        ("changed-source", "SOURCE_STALE"),
+        ("unassigned", "SCOPE_MISSING"),
+        ("unavailable", "SCOPE_MISSING"),
+        ("poll", "SCOPE_MISSING"),
+        ("duplicate", "REQUEST_CONFLICT"),
+    ],
+)
+def test_source_read_start_rejects_invalid_preparation_without_pending_work(
+    fault: str, code: str
+) -> None:
+    """Reject stale or unauthorized preparation while preserving existing work and bytes.
+
+    Args:
+        fault: Independent source-read admission failure under examination.
+        code: Expected public rejection code.
+    """
+    # Build a valid pre-readiness request before selecting one invalid boundary.
+    store, issue = MemoryStore(), MemoryIssue(acknowledged=False)
+    key = issue.state["coordinator"]
+    member = issue.state["participants"][key]
+    request = base_request("source-read-start", tool_id="source-call", source_locator="roadmap.md")
+    if fault == "changed-source":
+        issue.state["files"]["roadmap.md"] = core.sha(b"changed roadmap")
+        issue.payload["roadmap.md"] = b"changed roadmap"
+    elif fault == "unassigned":
+        request["source_locator"] = "context/note.md"
+    elif fault == "unavailable":
+        member["packet"].append(
+            {
+                **member["packet"][0],
+                "id": "optional",
+                "locator": "context/missing.md",
+                "required": False,
+            }
+        )
+        request["source_locator"] = "context/missing.md"
+    elif fault == "poll":
+        request["poll_handle"] = "running-process"
+    elif fault == "duplicate":
+        member["pending"]["source-call"] = {"status": "unknown", "handle": "running-process"}
+    request["packet_digest"] = (
+        "wrong" if fault == "wrong-packet" else core.sha(core.canonical(member["packet"]))
+    )
+    before = copy.deepcopy(issue.state)
+    original_files = issue.files()
+    # A rejected preparation must neither replace pending work nor grant acknowledgment.
+    with pytest.raises(core.WorkspaceError) as captured:
+        core.operate(store, issue, request)  # type: ignore[arg-type]
+    assert captured.value.code == code
+    assert issue.state == before
+    assert issue.payload == original_files
+    assert issue.commits == []
+    assert store.saved == []
+
+
+def test_ordinary_tool_start_cannot_borrow_source_preparation_exception() -> None:
+    """Source fields on an ordinary tool request cannot bypass packet acknowledgment."""
+    # Supply otherwise-valid source preparation evidence on the ordinary tool route.
+    store, issue = MemoryStore(), MemoryIssue(acknowledged=False)
+    member = issue.state["participants"][issue.state["coordinator"]]
+    request = base_request(
+        "tool-start",
+        tool_id="ordinary-call",
+        source_locator="roadmap.md",
+        packet_digest=core.sha(core.canonical(member["packet"])),
+    )
+    before = copy.deepcopy(issue.state)
+    # The operation type retains its readiness requirement despite matching source bytes.
+    with pytest.raises(core.WorkspaceError) as captured:
+        core.operate(store, issue, request)  # type: ignore[arg-type]
+    assert captured.value.code == "NOT_READY"
+    assert issue.state == before
+    assert issue.commits == []
+    assert store.saved == []

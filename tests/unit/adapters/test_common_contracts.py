@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import copy
 import os
+import shlex
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -542,11 +545,41 @@ def test_recovery_message_preserves_exact_diagnostic_without_task_content() -> N
         ),
         ("HOST_UNSUPPORTED_TOOL", "cursor", ["Delete or foreground Shell"]),
         (
+            "HOST_UNSUPPORTED_TOOL",
+            "codex",
+            ["Codex child", "command-only Bash", "canonical lifecycle", "exact packet-source"],
+        ),
+        (
+            "SOURCE_DELIVERY_REQUIRED",
+            "codex",
+            [
+                "cat -- <absolute source path>",
+                "each undelivered or mismatched source",
+                "current packet",
+                "then acknowledge",
+                "then ready",
+            ],
+        ),
+        (
             "HOST_UNSUPPORTED_CHILD_IDENTITY",
             "claude-code",
             ["cannot reuse the parent binding", "foreground Agent", "SubagentStart"],
         ),
         ("HOST_UNSUPPORTED_CHILD_IDENTITY", "cursor", ["cannot reuse the parent binding"]),
+        (
+            "HOST_CHILD_CAPACITY_EXHAUSTED",
+            "codex",
+            [
+                "32-launch lifetime limit",
+                "Do not reset the registry",
+                "explicit coordinator handoff",
+            ],
+        ),
+        (
+            "TICKET_READ_REQUIRED",
+            "codex",
+            ["canonical read-only diagnose", "without clearing the ticket requirement"],
+        ),
         ("BUSY", "claude-code", ["Retry the same operation once", "diagnose"]),
         ("NOT_ACKNOWLEDGED", "cursor", ["diagnose, register, resume, read and acknowledge"]),
     ],
@@ -569,6 +602,10 @@ def test_recovery_names_the_admitted_next_operation_per_code(
     # The route names the specific operation that can change this outcome.
     for fragment in fragments:
         assert fragment in message
+    # Codex children must not receive unsupported Cursor file or Shell advice.
+    if host == "codex" and code == "HOST_UNSUPPORTED_TOOL":
+        for unsupported in ("Read, Write", "Delete", "foreground Shell"):
+            assert unsupported not in message
     # Host-specific Claude routes are not advertised to Cursor.
     if host == "cursor":
         assert "ToolSearch" not in message
@@ -702,3 +739,112 @@ def test_native_pre_records_supported_tool_after_ready(monkeypatch: pytest.Monke
     assert common.native_pre(native_event("Read"), "cursor") is None
     assert [item["operation"] for item in calls] == ["ready", "tool-start"]
     assert calls[-1]["tool_id"] == "tool-1"
+
+
+@pytest.mark.parametrize("prefix", ["cat ", "cat -- "], ids=["plain-cat", "option-terminated-cat"])
+@pytest.mark.parametrize("allowed", [True, False], ids=["governing-path", "foreign-path"])
+def test_codex_preparation_cat_requires_literal_quoting_and_exact_path_check(
+    monkeypatch: pytest.MonkeyPatch, prefix: str, allowed: bool
+) -> None:
+    """Admit canonical cat only through the governing-path boundary without lifecycle writes.
+
+    Args:
+        monkeypatch: Restores isolated path and lifecycle boundaries.
+        prefix: Supported native cat spelling.
+        allowed: Governing-path decision returned by the checkout boundary.
+    """
+    # Keep real shell parsing and quoting while isolating checkout lookup and all lifecycle I/O.
+    path = "/checkout with spaces/AGENTS.md"
+    event = {"tool_name": "Bash", "tool_input": {"command": prefix + shlex.quote(path)}}
+    original = copy.deepcopy(event)
+    path_check = Mock(spec=common._preparation_path, return_value=allowed)
+    execute = Mock(spec=core.execute)
+    monkeypatch.setattr(common, "_preparation_path", path_check)
+    monkeypatch.setattr(core, "execute", execute)
+    # Exact path validation controls admission; preparation never acknowledges or starts work.
+    assert common.preparation_tool(event, "codex") is allowed
+    path_check.assert_called_once_with(event, path, exact=True)
+    execute.assert_not_called()
+    assert event == original
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        None,
+        1,
+        "cat /a\n",
+        "cat /a\r",
+        "cat /a\0",
+        "cat 'unterminated",
+        "cat",
+        "ls /a",
+        "cat /a /b",
+        "cat /a; touch /outside",
+        'cat "/a"',
+        'cat -- "/a"',
+    ],
+    ids=[
+        "missing",
+        "number",
+        "newline",
+        "carriage-return",
+        "nul",
+        "bad-quote",
+        "no-path",
+        "other-program",
+        "two-paths",
+        "chained",
+        "noncanonical-plain",
+        "noncanonical-terminated",
+    ],
+)
+def test_codex_preparation_rejects_invalid_commands_without_path_or_lifecycle_access(
+    monkeypatch: pytest.MonkeyPatch, command: object
+) -> None:
+    """Reject malformed, expanded or noncanonical commands before consulting checkout state.
+
+    Args:
+        monkeypatch: Restores path and lifecycle sentinels.
+        command: Invalid native command payload.
+    """
+    # Sentinels ensure rejected syntax never reaches path approval or lifecycle operations.
+    event = {"tool_name": "Bash", "tool_input": {"command": command}}
+    original = copy.deepcopy(event)
+    path_check = Mock(spec=common._preparation_path)
+    execute = Mock(spec=core.execute)
+    monkeypatch.setattr(common, "_preparation_path", path_check)
+    monkeypatch.setattr(core, "execute", execute)
+    # Parser failures and forbidden spellings are ordinary denials with untouched input.
+    assert common.preparation_tool(event, "codex") is False
+    path_check.assert_not_called()
+    execute.assert_not_called()
+    assert event == original
+
+
+@pytest.mark.parametrize(
+    "error",
+    [OSError("unavailable"), core.WorkspaceError("REPOSITORY_MISMATCH")],
+    ids=["filesystem", "repository"],
+)
+def test_codex_preparation_contains_governing_path_failures(
+    monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    """Contain checkout failures without granting preparation or changing lifecycle state.
+
+    Args:
+        monkeypatch: Restores isolated path and lifecycle boundaries.
+        error: Concrete failure at the governing-path lookup boundary.
+    """
+    # Use a canonical command so the injected failure occurs at the actual path boundary.
+    event = {"tool_name": "Bash", "tool_input": {"command": "cat -- /checkout/AGENTS.md"}}
+    original = copy.deepcopy(event)
+    path_check = Mock(spec=common._preparation_path, side_effect=error)
+    execute = Mock(spec=core.execute)
+    monkeypatch.setattr(common, "_preparation_path", path_check)
+    monkeypatch.setattr(core, "execute", execute)
+    # Neither a filesystem failure nor an invalid repository admits work or escapes as an error.
+    assert common.preparation_tool(event, "codex") is False
+    path_check.assert_called_once_with(event, "/checkout/AGENTS.md", exact=True)
+    execute.assert_not_called()
+    assert event == original

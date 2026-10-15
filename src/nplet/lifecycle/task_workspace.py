@@ -2359,14 +2359,29 @@ def operate(store: Store, issue: Issue, request: JSONObject) -> JSONObject:
             request.get("event", {}).get("code", "OK") in {"OK", "FAILED", "UNKNOWN", "INTERRUPTED"}
         )
         event_type = request["event_type"]
-    # Recheck the acknowledged source packet before admitting new pending work.
-    elif operation == "tool-start":
-        packet_reads(state, participant, files)
-        require(
-            participant["ack"] == sha(canonical(participant["packet"]))
-            and participant["status"] == "ready",
-            "NOT_READY",
-        )
+    # Track exact source preparation before readiness without admitting ordinary work.
+    elif operation in {"tool-start", "source-read-start"}:
+        refs = packet_reads(state, participant, files)
+        if operation == "source-read-start":
+            require(
+                request.get("packet_digest") == sha(canonical(participant["packet"])),
+                "SOURCE_STALE",
+            )
+            require(
+                any(
+                    ref["locator"] == request.get("source_locator") and ref["available"]
+                    for ref in refs
+                )
+                and request.get("poll_handle") is None,
+                "SCOPE_MISSING",
+            )
+        # Ordinary tool admission still requires the acknowledged current source packet.
+        else:
+            require(
+                participant["ack"] == sha(canonical(participant["packet"]))
+                and participant["status"] == "ready",
+                "NOT_READY",
+            )
         tool = token(request["tool_id"])
         require(tool not in participant["pending"], "REQUEST_CONFLICT")
         # Associate an observed polling transport without borrowing another participant's work.

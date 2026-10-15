@@ -14,6 +14,7 @@ from tests.support import ROOT
 pytestmark = pytest.mark.integration
 
 SELECTORS = (
+    "tests/integration/adapters/test_hook_capture_process.py",
     "tests/unit/lifecycle/test_posix_contracts.py",
     "tests/unit/lifecycle/test_posix_failures.py",
     "tests/integration/adapters/test_platform_processes.py::"
@@ -57,7 +58,7 @@ def test_parameterized_native_skip_ledger_matches_collection(tmp_path: Path) -> 
     actual = {item["nodeid"] for item in collected}
     approved = {nodeid for nodeid in APPROVED_NATIVE_SKIPS if nodeid.startswith(SELECTORS)}
     assert actual == approved
-    assert len(actual) == 35
+    assert len(actual) == 38
     # Compare each collected platform skip with its exact approved inventory entry.
     for item in collected:
         assert item["skip_reasons"] == [APPROVED_NATIVE_SKIPS[item["nodeid"]][1]]
