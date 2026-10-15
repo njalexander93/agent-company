@@ -180,8 +180,9 @@ def write_record(path: Path, data: bytes) -> None:
     # Require an existing private POSIX directory and reject a symlink at its boundary.
     if not path.is_absolute() or len(data) > BYTE_LIMIT:
         raise ValueError("Invalid capture boundary")
-    # Open the selected directory without following a symlink and validate its permissions.
-    directory = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    # Resolve required POSIX flags dynamically for cross-platform type checking.
+    # Missing flags still raise; no weaker fallback is permitted.
+    directory = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY") | getattr(os, "O_NOFOLLOW"))
     try:
         if os.fstat(directory).st_mode & 0o077:
             raise OSError("Capture directory must be private")
@@ -190,7 +191,7 @@ def write_record(path: Path, data: bytes) -> None:
             try:
                 fd = os.open(
                     f"event-{slot:04d}.json",
-                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW"),
                     0o600,
                     dir_fd=directory,
                 )

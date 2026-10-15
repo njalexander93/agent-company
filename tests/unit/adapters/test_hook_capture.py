@@ -242,8 +242,13 @@ def test_write_record_failures_close_owned_directory(writer_boundary, monkeypatc
         writer_boundary.stream.write.side_effect = injected
     else:
         writer_boundary.fdopen.side_effect = injected
+    # Select the exact policy or injected diagnostic before exercising cleanup.
+    expected_message = {
+        "private": "Capture directory must be private",
+        "full": "Capture slots exhausted",
+    }.get(fault, "injected writer failure")
     # Failure must retire the directory even when no stream can be constructed.
-    with pytest.raises(OSError) as captured:
+    with pytest.raises(OSError, match="^" + expected_message + "$") as captured:
         hook_capture.write_record(Path.cwd(), b"redacted")
     # Match policy diagnostics exactly; OS failure cases must retain exception identity.
     if fault == "private":
@@ -377,6 +382,7 @@ def test_main_bounds_input_and_reports_writer_failure(monkeypatch, failure):
             },
         ),
     ],
+    ids=["malformed-json", "oversized-string", "bounded-list", "typed-terminal-facts"],
 )
 def test_response_shape_retains_only_bounded_typed_facts(value, expected):
     """Malformed, oversized and structured responses never reveal payload contents.
@@ -473,7 +479,7 @@ def test_writer_directory_failures_close_only_acquired_descriptors(writer_bounda
     else:
         writer_boundary.fstat.side_effect = injected
     # Exercise the selected boundary and require its original failure.
-    with pytest.raises(OSError) as captured:
+    with pytest.raises(OSError, match="^injected directory failure$") as captured:
         hook_capture.write_record(Path.cwd(), b"redacted")
     assert captured.value is injected
     # Only a successfully acquired directory descriptor may be closed.

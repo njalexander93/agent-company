@@ -1009,3 +1009,295 @@ def test_diagnostic_bootstrap_narrows_validated_command(
     # A rejected canonical envelope must never reach operation parsing.
     monkeypatch.setattr(codex, "bootstrap", lambda *_args, **_kwargs: False)
     assert codex.diagnostic_bootstrap({}) is False
+
+
+@pytest.mark.parametrize(
+    "hook,route",
+    [
+        ("SubagentStart", "start"),
+        ("PreToolUse", "child_pre"),
+        ("PostToolUse", "child_post"),
+        ("Stop", "child_end"),
+        ("Interrupt", "child_end"),
+        ("SessionEnd", "child_end"),
+        ("SubagentStop", "child_end"),
+        ("FutureChildEvent", None),
+    ],
+)
+def test_native_child_dispatch_preserves_derived_identity_and_excludes_parent_work(
+    monkeypatch: pytest.MonkeyPatch, hook: str, route: str | None
+) -> None:
+    """Verified child callbacks use only their own route and never parent tool accounting.
+
+    Args:
+        monkeypatch: Fixture isolating stateful lifecycle boundaries.
+        hook: Native child callback under examination.
+        route: Expected child handler, or None for an unknown event.
+    """
+    from unittest.mock import Mock
+
+    # Retain real native identity derivation while modeling persistent child operations.
+    event = {
+        "hook_event_name": hook,
+        "session_id": "parent",
+        "agent_id": "12345678-1234-4234-8234-123456789abc",
+        "cwd": str(Path.cwd()),
+    }
+    handlers = {
+        name: Mock(return_value="reader instructions")
+        for name in ("start", "child_pre", "child_post", "child_end")
+    }
+    for name, handler in handlers.items():
+        # Each callback has its own observable persistence boundary.
+        monkeypatch.setattr(codex.codex_children, name, handler)
+    execute = Mock()
+    monkeypatch.setattr(codex.core, "execute", execute)
+    # Dispatch must preserve both native parent and independently derived child identity.
+    result = codex.handle(event)
+    if route is not None:
+        observed = handlers[route].call_args.args[0]
+        assert observed["parent_session_id"] == "parent"
+        assert observed["session_id"] == "parent/agent/12345678-1234-4234-8234-123456789abc"
+        assert observed["child"] is True
+    # Only the selected route may run; the parent has no generic transaction here.
+    assert {name: handler.call_count for name, handler in handlers.items()} == {
+        name: int(name == route) for name in handlers
+    }
+    assert result == (
+        {
+            "hookSpecificOutput": {
+                "hookEventName": "SubagentStart",
+                "additionalContext": "reader instructions",
+            }
+        }
+        if hook == "SubagentStart"
+        else {}
+    )
+    execute.assert_not_called()
+
+
+def test_invalid_child_identity_cannot_dispatch_or_fall_through(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Malformed child UUIDs cannot borrow generic parent admission.
+
+    Args:
+        monkeypatch: Fixture isolating stateful lifecycle boundaries.
+    """
+    from unittest.mock import Mock
+
+    # Observe both possible authority boundaries before supplying a forged identity.
+    child, parent = Mock(), Mock()
+    monkeypatch.setattr(codex.codex_children, "child_pre", child)
+    monkeypatch.setattr(codex.core, "execute", parent)
+    with pytest.raises(core.WorkspaceError) as captured:
+        codex.handle(
+            {
+                "hook_event_name": "PreToolUse",
+                "session_id": "parent",
+                "agent_id": "forged",
+                "cwd": str(Path.cwd()),
+            }
+        )
+    # Rejection occurs before any child or parent work is admitted.
+    assert captured.value.code == "HOST_UNSUPPORTED_CHILD_IDENTITY"
+    child.assert_not_called()
+    parent.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "tool,route",
+    [
+        ("spawn_agent", "admit_spawn"),
+        ("collaborationspawn_agent", "admit_spawn"),
+        ("multi_agent_v1send_input", "admit_control"),
+        ("multi_agent_v1close_agent", "admit_control"),
+        ("multi_agent_v1wait_agent", "admit_control"),
+        ("collaborationlist_agents", "admit_control"),
+    ],
+)
+@pytest.mark.parametrize("phase", ["PreToolUse", "PostToolUse"])
+def test_parent_collaboration_dispatch_uses_bounded_route_only(
+    monkeypatch: pytest.MonkeyPatch, tool: str, route: str, phase: str
+) -> None:
+    """Supported native calls use adapter-specific admission or completion without duplication.
+
+    Args:
+        monkeypatch: Fixture isolating storage and lifecycle boundaries.
+        tool: Observed native or legacy collaboration tool.
+        route: Bounded pre-admission handler for that tool.
+        phase: Native callback phase.
+    """
+    from unittest.mock import Mock
+
+    # Remove unrelated startup state while retaining actual identity normalization.
+    monkeypatch.setattr(codex, "startup_lookup_state", Mock(return_value=False))
+    monkeypatch.setattr(codex, "bootstrap", Mock(return_value=False))
+    monkeypatch.setattr(codex, "provider_gate", Mock(return_value=False))
+    execute = Mock()
+    monkeypatch.setattr(codex.core, "execute", execute)
+    handlers = {name: Mock() for name in ("admit_spawn", "admit_control", "parent_post")}
+    for name, handler in handlers.items():
+        # Model only the independently tested persistent route boundary.
+        monkeypatch.setattr(codex.codex_children, name, handler)
+    event = {
+        "hook_event_name": phase,
+        "session_id": "parent",
+        "cwd": str(Path.cwd()),
+        "tool_name": tool,
+        "tool_use_id": "native-call",
+        "tool_input": {},
+        "tool_response": {},
+    }
+    # One callback must reach exactly one bounded handler with unchanged call correlation.
+    assert codex.handle(event) == {}
+    selected = route if phase == "PreToolUse" else "parent_post"
+    handlers[selected].assert_called_once_with(event)
+    assert sum(handler.call_count for handler in handlers.values()) == 1
+    execute.assert_not_called()
+
+
+@pytest.mark.parametrize("route", ["preparation", "diagnosis"])
+def test_required_ticket_allows_only_explicit_recovery_without_tool_start(
+    monkeypatch: pytest.MonkeyPatch, route: str
+) -> None:
+    """Named preparation and diagnosis stay reachable before the first ticket read.
+
+    Args:
+        monkeypatch: Fixture isolating startup and persistent readiness boundaries.
+        route: Exact exception recognized by its independently tested admission helper.
+    """
+    from unittest.mock import Mock
+
+    # Model a required ticket marker and one explicitly validated recovery command.
+    marker = Mock(return_value=True)
+    diagnostic = Mock(return_value=route == "diagnosis")
+    monkeypatch.setattr(codex, "startup_lookup_state", marker)
+    monkeypatch.setattr(codex.common, "preparation_tool", Mock(return_value=route == "preparation"))
+    monkeypatch.setattr(codex, "diagnostic_bootstrap", diagnostic)
+    execute, lookup = Mock(), Mock()
+    monkeypatch.setattr(codex.core, "execute", execute)
+    monkeypatch.setattr(codex, "ticket_lookup", lookup)
+    # Recovery admission neither consumes the provider handshake nor starts ordinary work.
+    assert codex.handle({"hook_event_name": "PreToolUse", "tool_name": "Bash"}) == {}
+    execute.assert_not_called()
+    lookup.assert_not_called()
+    if route == "preparation":
+        # Preparation does not need to interpret a diagnostic command.
+        diagnostic.assert_not_called()
+
+
+@pytest.mark.parametrize("route", ["preparation", "bootstrap"])
+def test_preparation_and_bootstrap_post_do_not_settle_unrelated_work(
+    monkeypatch: pytest.MonkeyPatch, route: str
+) -> None:
+    """Callbacks for exempt commands cannot complete generic pending tool work.
+
+    Args:
+        monkeypatch: Fixture isolating exact command gates and lifecycle persistence.
+        route: Preparation read or canonical lifecycle command.
+    """
+    from unittest.mock import Mock
+
+    # These routes own no ordinary tool receipt, even if the callback has a call ID.
+    monkeypatch.setattr(codex.common, "preparation_tool", Mock(return_value=route == "preparation"))
+    monkeypatch.setattr(codex, "startup_lookup_state", Mock(return_value=True))
+    bootstrap = Mock(return_value=route == "bootstrap")
+    monkeypatch.setattr(codex, "bootstrap", bootstrap)
+    execute = Mock()
+    monkeypatch.setattr(codex.core, "execute", execute)
+    # Dispatch must terminate before generic completion settlement.
+    assert (
+        codex.handle(
+            {"hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_use_id": "unrelated"}
+        )
+        == {}
+    )
+    execute.assert_not_called()
+    if route == "preparation":
+        # The earlier preparation exemption does not require lifecycle parsing.
+        bootstrap.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "tool,phase,explicit_error,expected",
+    [
+        ("mcp__codex_apps__linear__get_issue", "PostToolUse", None, None),
+        ("mcp__codex_apps__linear_get_issue", "PostToolUse", None, "PROVIDER_RESPONSE_INVALID"),
+        ("mcp__codex_apps__linear__get_issue", "PreToolUse", None, "PROVIDER_RESPONSE_INVALID"),
+        ("mcp__codex_apps__linear__get_issue", "PostToolUse", True, "PROVIDER_ERROR"),
+    ],
+)
+def test_ticket_completion_normalizes_only_observed_native_success(
+    monkeypatch: pytest.MonkeyPatch,
+    tool: str,
+    phase: str,
+    explicit_error: bool | None,
+    expected: str | None,
+) -> None:
+    """Only the exact native final envelope may omit its optional MCP error flag.
+
+    Args:
+        monkeypatch: Fixture modeling binding storage and workspace startup.
+        tool: Native or legacy issue lookup spelling.
+        phase: Observed callback phase.
+        explicit_error: Optional explicit provider failure flag.
+        expected: Expected diagnostic, or None for verified ticket success.
+    """
+    import json
+    from unittest.mock import MagicMock, Mock
+
+    # Model the exact durable assignment and prior provider-call correlation.
+    key = core.participant_key({"host": "codex", "session_id": "parent"})
+    records = {
+        key + ".assignment.json": {"issue_id": "TEST-30"},
+        key + ".lookup-required.json": {"issue_id": "TEST-30"},
+        key + ".lookup.json": {"id": "TEST-30", "tool_id": "lookup"},
+    }
+    directory = MagicMock()
+    directory.__enter__.return_value = directory
+    directory.child.return_value = directory
+    directory.json.side_effect = records.__getitem__
+    directory.exists.side_effect = records.__contains__
+    monkeypatch.setattr(codex.core, "repository", Mock(return_value=(Path.cwd(), None, None)))
+    monkeypatch.setattr(codex.core.Directory, "absolute", Mock(return_value=directory))
+    startup = Mock(return_value={"participant_id": key, "coordinator": key})
+    monkeypatch.setattr(codex.startup, "start", startup)
+    # Keep the actual provider parser so normalization cannot accept an arbitrary issue.
+    issue = {
+        "id": "12345678-1234-4234-8234-123456789abc",
+        "identifier": "TEST-30",
+        "title": "Assigned task",
+    }
+    response = {"content": [{"type": "text", "text": json.dumps(issue)}]}
+    if explicit_error is not None:
+        # An explicit provider failure must survive native normalization.
+        response["isError"] = explicit_error
+    event = {
+        "hook_event_name": phase,
+        "tool_name": tool,
+        "cwd": str(Path.cwd()),
+        "session_id": "parent",
+        "tool_use_id": "lookup",
+        "tool_input": {"id": "TEST-30"},
+        "tool_response": response,
+    }
+    # Verify successful startup or exact rejection, including marker cleanup effects.
+    if expected is None:
+        result = codex.ticket_lookup(event, complete=True)
+        assert "TASK_WORKSPACE_READY" in result["systemMessage"]
+        assert startup.call_args.args[1]["uuid"] == issue["id"]
+        assert startup.call_args.args[1]["id"] == "TEST-30"
+        assert {call.args[0] for call in directory.unlink.call_args_list} == {
+            key + ".lookup.json",
+            key + ".lookup-required.json",
+        }
+    else:
+        with pytest.raises(core.WorkspaceError) as captured:
+            codex.ticket_lookup(event, complete=True)
+        assert captured.value.code == expected
+        startup.assert_not_called()
+        directory.unlink.assert_called_once_with(key + ".lookup.json")
+    # Provider output remains unchanged and cannot be treated as a mutable authority channel.
+    assert response.get("isError") is explicit_error
+    directory.put.assert_not_called()

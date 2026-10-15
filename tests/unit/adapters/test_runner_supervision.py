@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from nplet.adapters import runner
+from nplet.adapters import hook_capture, runner
 
 pytestmark = pytest.mark.unit
 
@@ -163,6 +163,55 @@ def test_runner_returns_worker_result_after_bounded_input(
     assert worker.calls == [raw]
     assert starts[0][-2:] == ["--worker", "codex"]
     assert json.loads(capsys.readouterr().out) == {"decision": "deny"}
+
+
+@pytest.mark.parametrize("worker_status", [0, 2])
+def test_observer_failure_preserves_completed_worker_decision(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    worker_status: int,
+) -> None:
+    """Keep diagnostic failures separate from authoritative output and exit status.
+
+    Args:
+        monkeypatch: Fixture isolating stdin, worker and observer boundaries.
+        capsys: Captured native response and diagnostic streams.
+        worker_status: Successful or failed authoritative worker exit status.
+    """
+    # Finish one modeled worker before the optional diagnostic boundary is reached.
+    raw = b'{"hook_event_name":"PreToolUse"}'
+    input_bytes(monkeypatch, raw)
+    worker = Worker(output=b'{"decision":"deny"}', returncode=worker_status)
+    starts = install_worker(monkeypatch, worker)
+    observations = []
+
+    def unavailable(event: dict, result: dict, status: int) -> None:
+        """Raise at observation time after checking the worker has already completed.
+
+        Args:
+            event: Parsed native input delivered to the observer.
+            result: Authoritative worker result that must survive the failure.
+            status: Authoritative exit status that must survive the failure.
+
+        Raises:
+            OSError: The optional diagnostic destination is unavailable.
+        """
+        # Confirm ordering and retain the exact observer inputs before failure.
+        assert worker.calls == [raw]
+        observations.append((event, result.copy(), status))
+        raise OSError("diagnostic destination unavailable")
+
+    # The observer exception must not escape or replace a denial with an allow.
+    monkeypatch.setattr(hook_capture, "capture", unavailable)
+    assert runner.run(handler, failure) == worker_status
+    output = capsys.readouterr()
+    assert json.loads(output.out) == {"decision": "deny"}
+    assert output.err == ""
+    assert observations == [
+        ({"hook_event_name": "PreToolUse"}, {"decision": "deny"}, worker_status)
+    ]
+    assert len(starts) == 1
+    assert not worker.killed
 
 
 def test_runner_selects_script_entrypoint_by_source_stem(

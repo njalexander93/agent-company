@@ -6,6 +6,7 @@ provider acceptance, human approval or adversarial runtime isolation.
 
 import json
 import os
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -141,7 +142,7 @@ class LifecycleTests(Fixture):
         event.update(hook_event_name="PreToolUse", tool_name="Bash", tool_use_id="prepare")
         # Both governing paths remain read-only preparation across pre/post callbacks.
         for relative in ("AGENTS.md", "docs/runtime/contributor-workflow.md"):
-            command = "cat -- " + str(self.root / relative)
+            command = "cat -- " + shlex.quote(str(self.root / relative))
             event["tool_input"] = {"command": command}
             assert hook.handle(event) == {}
             assert (

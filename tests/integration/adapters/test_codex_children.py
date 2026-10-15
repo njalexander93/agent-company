@@ -3,6 +3,7 @@
 import shlex
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 
 import pytest
 
@@ -89,9 +90,15 @@ class ChildTests(Fixture):
         for number in range(3):
             children.admit_spawn(self.launch(number))
         peers = [self.child() for _ in range(3)]
-        # Reverse arrival order and overlap native joins through real lock/revision handling.
-        with ThreadPoolExecutor(max_workers=3) as pool:
-            results = list(pool.map(children.start, reversed(peers)))
+        # Isolate cohort semantics from filesystem speed while preserving real locks and sleeps.
+        # The production attempt cap still bounds each join; deadline behavior has its own test.
+        join_clock = SimpleNamespace(monotonic=lambda: 0.0, sleep=common.time.sleep)
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(children, "time", join_clock)
+            patch.setattr(common, "time", join_clock)
+            # Reverse arrival order and overlap real native registration transactions.
+            with ThreadPoolExecutor(max_workers=3) as pool:
+                results = list(pool.map(children.start, reversed(peers)))
         assert all("Reader only" in result for result in results)
         children.start(peers[0])
         with pytest.raises(core.WorkspaceError) as failure:
@@ -367,11 +374,18 @@ class ChildTests(Fixture):
                 return {"ok": False, "code": "REVISION_CONFLICT"}
             return execute(request)
 
+        # This scenario exhausts attempts, not elapsed time on a slower filesystem.
+        before = self.state()
+        join_clock = SimpleNamespace(monotonic=lambda: 0.0, sleep=common.time.sleep)
         with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(children, "time", join_clock)
+            patch.setattr(common, "time", join_clock)
             patch.setattr(core, "execute", conflict)
-            with pytest.raises(core.WorkspaceError, match="REVISION_CONFLICT"):
+            with pytest.raises(core.WorkspaceError) as failure:
                 children.start(peer)
+        assert failure.value.code == "REVISION_CONFLICT"
         assert len(attempts) == common.CHILD_JOIN_ATTEMPTS
+        assert self.state() == before
         key = core.participant_key({"host": "codex", "session_id": peer["session_id"]})
         assert key not in self.state()["participants"]
         # Replay the same observed start after contention clears; no new launch is fabricated.
@@ -952,3 +966,59 @@ class ChildTests(Fixture):
         with pytest.raises(core.WorkspaceError, match="REQUEST_CONFLICT"):
             codex.handle(event)
         assert self.state() == settled
+
+    def test_join_deadline_exhaustion_preserves_unjoined_identity_for_recovery(self) -> None:
+        """Stop on the modeled deadline independently of filesystem speed and retry count.
+
+        Raises:
+            AssertionError: An expired join grants membership or a retry consumes extra capacity.
+        """
+        # Keep actual registry/store operations and advance only the adapter's clock seam.
+        self.create()
+        self.ready()
+        children.admit_spawn(self.launch(1))
+        peer = self.child()
+        execute = core.execute
+        clock = {"now": 0.0}
+        attempts = []
+        before = self.state()
+
+        def expire_after_conflict(request: dict) -> dict:
+            """Exhaust the join deadline after one modeled revision conflict.
+
+            Args:
+                request: Lifecycle transaction submitted by the real join implementation.
+
+            Returns:
+                A conflict for join, otherwise the actual persisted lifecycle response.
+            """
+            # A failed transaction consumes time without adding a lifecycle participant.
+            if request["operation"] == "join":
+                attempts.append(request["request_id"])
+                clock["now"] = common.CHILD_JOIN_BUDGET_SECONDS + 1.0
+                return {"ok": False, "code": "REVISION_CONFLICT"}
+            # All registration, source and binding work still uses the real disposable store.
+            return execute(request)
+
+        join_clock = SimpleNamespace(monotonic=lambda: clock["now"], sleep=common.time.sleep)
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(children, "time", join_clock)
+            patch.setattr(common, "time", join_clock)
+            patch.setattr(core, "execute", expire_after_conflict)
+            with pytest.raises(core.WorkspaceError) as failure:
+                children.start(peer)
+        assert failure.value.code == "REVISION_CONFLICT"
+        assert len(attempts) == 1
+        assert len(attempts) < common.CHILD_JOIN_ATTEMPTS
+        assert self.state() == before
+        key = core.participant_key({"host": "codex", "session_id": peer["session_id"]})
+        with children.registry(children.parent_request(peer)) as (_, _, state):
+            assert set(state["children"]) == {key}
+            assert state["children"][key]["status"] == "joining"
+        # A fresh native start retries the retained UUID after the modeled contention clears.
+        assert "Reader only" in children.start(peer)
+        assert self.state()["participants"][key]["ack"] is None
+        assert set(self.state()["owners"].values()) == {self.base["coordinator"]}
+        with children.registry(children.parent_request(peer)) as (_, _, state):
+            assert set(state["children"]) == {key}
+            assert state["children"][key]["status"] == "joined"
