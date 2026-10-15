@@ -41,6 +41,108 @@ Ticket-read protocol sources checked on 2026-10-09; launcher and shell reference
 
 The implementation's choices below are intentionally narrower than those host protocols.
 
+### Observed Codex completion contract
+
+On 2026-10-14, native callbacks in Codex Desktop 0.160.1 on macOS showed
+`Bash` and `apply_patch` final responses as text, and local `webrun` responses
+as content lists. The adapter settles these exact callback shapes using the
+native `tool_use_id`. Output text is not parsed as transport metadata and cannot
+invent an asynchronous process handle. This records completion, not command
+success. Unrecognized response shapes retain pending work.
+
+For a delayed shell command, the final poll delivered `PostToolUse` under the
+original Bash call ID. Successful, nonzero-exit and delayed shell calls were
+observed settling after the repair. Patch and local web calls were also observed
+settling. See the official [PostToolUse contract](https://learn.chatgpt.com/docs/hooks#posttooluse).
+Legacy `exec_command` and `write_stdin` transport envelopes retain their separate
+typed-status and handle-correlation checks.
+
+Native MCP content results can omit `isError`. Their correlated final content
+object also settles the parent call without interpreting content as a process
+handle or claiming provider success. This shape was observed for the documentation
+connector, including a live completion after the repair.
+
+Completion evidence does not establish fresh ticket-first startup, another host
+version, or another operating system. Child evidence and its limits follow below.
+
+### Codex native child route (restricted)
+
+On 2026-10-14, Codex Desktop 0.160.1 on macOS delivered a host-issued UUID in
+`agent_id` on child start, first and later tool callbacks, and stop. Follow-up turns
+retained that UUID. The adapter normalizes it as
+`<parent session_id>/agent/<agent_id>`; each child gets a separate participant,
+packet, acknowledgment and ownership. The version-pinned
+[hook runtime](https://github.com/openai/codex/blob/rust-v0.160.1/codex-rs/core/src/hook_runtime.rs)
+uses the child thread ID for the shared hook context. Tool or message text never
+supplies this identity.
+
+The supported launch comes from a ready coordinator. The two native contracts
+are separate:
+
+- Desktop 0.162.0-alpha.17.2 exposed `spawn_agent` with an explicit
+  `fork_context: false` and a plain-text `message`. Its response contains a
+  host-issued UUID `agent_id`, used as the control target. Unknown fields,
+  inherited history and structured-input launches are outside this route.
+- The earlier `collaborationspawn_agent` route requires `fork_turns: "none"`
+  and `task_name`. Its response supplies a canonical `/root/...` control target.
+
+Native launch receipts admit a bounded cohort of roadmap-only readers. The host
+does not expose a direct spawn-call key on child start, so launch order, task name
+and arrival time never select write ownership. Only an explicit coordinator
+`scope` grants a particular observed participant its owned `context/` paths.
+Initial readers have no write permission.
+
+Startup returns exact lifecycle and source-read commands. A child reads its packet,
+reads each available source with the exact `cat -- <absolute path>` command,
+acknowledges its digest, and verifies ready. Managed source paths use the registered
+canonical store, including from linked checkouts. Acknowledgment requires the
+child's own correlated final source bytes to match its current packet. Truncated,
+foreign and obsolete deliveries do not count. Children can use only their own
+`read`, `acknowledge`, `ready`, `diagnose` and ready, owned `update` transactions.
+Generic shell/file writes, provider tools and nested delegation remain denied.
+This route supports managed output notes, not arbitrary repository implementation
+commands. Normal host permissions remain in force.
+
+The adapter records admitted source reads in the shared lifecycle pending map
+through `source-read-start`, as well as its delivery receipts. A missing completion
+therefore blocks participant detachment. Historical receipts created before this
+tracking existed are not silently migrated or cleared; retain their uncertainty
+and reconcile only against exact terminal evidence.
+
+Parent controls require targets returned by that parent's observed launches.
+The current native route uses UUID targets for `send_input`, `wait_agent` and
+`close_agent`; unsupported controls such as resume remain denied. The older
+follow-up, message and interruption route uses the exact canonical `/root/...`
+target. A control address does not itself grant lifecycle ownership. A control's
+completion settles only its parent call. Child stop/cancellation is an advisory
+record; it does not fabricate a source completion, detach the child, or settle
+sibling work. Final answers provide the handback; child message tools are not
+admitted.
+
+Join retries reuse the shared bounded revision/lock retry budget. A failed start
+leaves tool admission closed. If the host replays that same start, the reserved
+UUID can retry without consuming another slot; otherwise use a fresh child.
+Follow-up does not emit another start. Revision conflicts on an owned update
+require a fresh read and bounded retry with a new request ID. Source receipts
+retain up to 256 unresolved reads; settled evidence is compacted by packet and
+source. A real late completion frees unresolved capacity. Unknown work is never
+cleared just to free a slot. Admission permits at most 32 launch receipts per
+parent binding generation, including failed attempts without affirmative native
+evidence that no child started. Exhaustion reports `HOST_CHILD_CAPACITY_EXHAUSTED`;
+do not reset the registry or keep retrying in that binding. A fresh parent joins
+under its own identity and needs an explicit coordinator handoff after pending
+work is resolved. Uncertain old activity stays retained. This bounds lifetime
+attempts, not the host's simultaneous-child ceiling.
+
+Development controls observed three sibling readers and disjoint owned updates
+under one parent, with revision-conflict recovery and intentional identity and
+ownership denials. Current Desktop controls also exercised UUID-based follow-up,
+wait and close callbacks. Keep these development observations separate from the
+final-candidate three-burst acceptance. The delivery record must identify the
+exact tested runtime source, fresh-session startup, overlapping child intervals,
+owned outputs, failed attempts and remaining pending work. Installed Codex
+acceptance on other operating systems is not established by these macOS trials.
+
 ## Setup and bootstrap
 
 For issue sequencing, approval and assigned step threads, use the
@@ -68,13 +170,15 @@ local lifecycle integration, not proposal approval.
    tools even when the session was previously ready. While that read is pending,
    a runtime may admit a read-only preparation phase: loading the issue-read tool's
    schema and reading the governing procedure. The rule is runtime-neutral; this
-   checkout implements it only in the Claude Code adapter, as `ToolSearch` (a
+   checkout implements schema loading in the Claude Code adapter as `ToolSearch` (a
    Claude Code mechanism) loading only configured `get_issue` schemas, and `Read`
    or a plain `cat` of exactly `<checkout>/docs/runtime/contributor-workflow.md`
    or `<checkout>/AGENTS.md`. These calls get no lifecycle decision and write
    nothing, so the selected ticket read remains the first issue-provider
-   operation. The Cursor and Codex adapters do not implement the phase yet and
-   deny every other tool until the ticket read completes. A session already bound
+   operation. Codex admits only exact native command-only `Bash` reads of those two
+   absolute paths, spelled `cat <path>` or `cat -- <path>` with canonical quoting.
+   It does not admit an opaque schema-loading wrapper. Cursor has no preparation
+   phase. Other tools stay denied until the ticket read completes. A session already bound
    to another issue may submit a Task line too: the adapter records the new issue as
    a pending assignment and the binding stays on the old issue until the verified
    read moves it (step 5). If that read or the move fails, the old binding remains;
@@ -140,6 +244,72 @@ local lifecycle integration, not proposal approval.
    `adapters/common.py`. Wrappers, chaining, redirection, alternate interpreters,
    conflicting worktrees, and cross-host/session bootstrap requests receive no exemption.
 
+### Repair and acceptance isolation
+
+When repairing the guard itself, use a human-authorized development checkout and
+a separate disposable acceptance checkout. If the human disables development
+hooks, record that fact: development operations and manual lifecycle recovery
+are not installed-hook acceptance. Keep acceptance hooks enabled and trusted.
+
+Freeze the candidate before each acceptance run. Record file digests, copy only
+the intended source changes, and preserve the acceptance project's hook settings
+and independent lifecycle store. Do not copy development `.task` state into it.
+Start with native ticket-first startup and a denied negative control; run child
+concurrency only after parent readiness and completion tracking pass.
+
+A new or forked chat has its own observed session identity. Inherited messages
+do not transfer the coordinator role. Join under the new identity and use an
+explicit supported handoff from the recorded coordinator, retaining unresolved
+pending work. A failed acceptance chat should return its exact denial and native
+call identity to the development chat. Repeat only after a specific source,
+configuration or input change; do not turn inaccessible-file retries into a
+human relay loop.
+
+On 2026-10-15, local Codex `0.162.0-alpha.17.2` emitted `SessionStart` and
+tool callbacks for a chat created through the desktop task tool, but no captured
+`UserPromptSubmit` for either its initial prompt or a tool-sent follow-up. Both
+ticket calls were denied without registration. A human-submitted `Task:` message
+in that same chat emitted `UserPromptSubmit`; the correlated native ticket read
+then registered the independent checkout and reached readiness. Shell and second
+provider-call completions settled. This identifies an observed delivery-route
+limit, not permission to synthesize the missing prompt event or bypass startup.
+For that route, use a directly submitted Task message before acceptance; recheck
+the callback evidence on other versions.
+
+### Private Codex diagnostic capture
+
+The optional `NPLET_CODEX_CAPTURE_DIR` environment variable enables metadata-only
+capture in the Codex supervisor. It does not grant trust, readiness, child identity,
+or permission. Other adapters and the default unset path remain unchanged.
+
+1. Use the reviewed candidate checkout and its own Poetry environment. Create an
+   existing absolute capture directory with mode `0700` on POSIX.
+2. Add `NPLET_CODEX_CAPTURE_DIR=/absolute/private/capture` to the reviewed Codex
+   hook command environment while retaining the original adapter launcher. Review
+   and trust the exact changed definitions through the host's supported controls,
+   then restart affected sessions. Do not infer hot reload or activation from a
+   source edit, project trust, manual invocation, or another checkout.
+3. Verify originating `cwd` and native callback delivery in the records. Capture
+   parent spawn, child start/stop, first and later tool callbacks, and follow-up;
+   use only admitted operations. An actual denial remains a denial.
+
+Capture runs after the lifecycle worker returns and is reaped. A separate writer
+has a 0.25-second communication budget after process creation, an 8 KiB per-record
+cap, and 1024 exclusive slots (at most 8 MiB). Process creation and kill/reap are
+outside that communication timeout; it is not an end-to-end latency guarantee. Files use mode `0600`. A full, unavailable, unsafe, or failed
+diagnostic destination does not replace the adapter's response. Keep this private
+opt-in scoped to the diagnostic hook command; do not add a global trust bypass.
+
+Records retain only fixed top-level native metadata, timestamps, known adapter
+decision values, the adapter exit status, and response shape summaries. Summaries
+use fixed field names and types; only integer exit codes and boolean status flags
+retain values. Task/provider contents, nested tool
+inputs and responses, arbitrary keys, and unknown fields are omitted. Absent
+`agent_id` stays absent; a parent `session_id` is not child identity. The filtered
+record cannot prove omitted native fields are unavailable. Investigate a specific
+correlation gap against the native schema and narrowly extend capture only when
+evidence supports it. Synthetic protocol tests establish no live host acceptance.
+
 ### After pulling the rename
 
 A checkout installed before the 2026-10 rename of the package to `nplet` needs
@@ -163,7 +333,7 @@ provider envelopes are adapter details.
 
 | Runtime | Ticket-read routing | Completion and identity |
 | --- | --- | --- |
-| Codex | Exact `mcp__codex_apps__linear_get_issue` with `{id: ISSUE-ID}`. | `PreToolUse` and `PostToolUse` correlate the native `tool_use_id`; read `tool_response`. |
+| Codex | Exact native `mcp__codex_apps__linear__get_issue` or legacy `mcp__codex_apps__linear_get_issue` with only `{id: ISSUE-ID}`. | `PreToolUse` and `PostToolUse` correlate the native `tool_use_id`; read `tool_response`. |
 | Claude Code | Configured `linear` or `linear-server` MCP `get_issue`, or an explicitly mapped Desktop Linear connector, with `{id: ISSUE-ID}`. | `PreToolUse` and `PostToolUse` correlate the native `tool_use_id`; read `tool_response`. MCP metadata requires Claude Code 2.1.274 or later; named-server definition scopes are `user`, `project`, `plugin` and `sdk`. Desktop mappings require `claudeai`, `dynamic` or `sdk`. |
 | Cursor Agent | Generic `preToolUse` records `MCP:get_issue`, the exact arguments and native call ID; `beforeMCPExecution` checks the configured `linear` or `linear-server` name and official HTTPS MCP URL. | Both pre-hook validations are required. Generic `postToolUse` settles the matching native call using JSON `tool_output`. `afterMCPExecution` does not establish startup readiness. |
 
@@ -259,7 +429,9 @@ through its own verified adapter; it does not inherit support from these three.
 ### Codex bootstrap tool input
 
 The Codex adapter accepts only `Bash` or `exec_command` for bootstrap. Supply the canonical
-command from step 4 as `command` (Bash) or `cmd` (exec_command). Explicitly set `login: false`
+command from step 4 as `command` (Bash) or `cmd` (exec_command). Installed native
+`Bash` callbacks may contain only `{"command": "<canonical command>"}`; that exact
+shape is supported. For the legacy transport form, explicitly set `login: false`
 and `shell: "/bin/sh"` on POSIX. Native Windows accepts `shell: "powershell.exe"`
 or `shell: "pwsh.exe"` with the helper's encoded command. Run without a TTY and omit the `tty` field entirely; even `tty: false`
 is outside the accepted field allowlist.
@@ -338,8 +510,9 @@ These rules are implemented in `adapters/common.py`, `adapters/claude.py`, and `
 
 The rule behind this route is runtime-neutral: a child joins only with a verified,
 host-issued child identity and its own reader binding. `Agent`, `SubagentStart` and
-`agent_id` are the Claude Code mechanism for it. Cursor's `subagentStart` and Codex's
-`spawn_agent` carry no verifiable child identity, so they remain denied. This route is
+`agent_id` are the Claude Code mechanism for it. Cursor's child route remains denied;
+Codex uses its separate [native child contract](#codex-native-child-route-restricted).
+The Claude route is
 implemented and covered by synthetic protocol tests, plus one observed local Desktop
 validation session (2026-10-09, macOS): `SubagentStart` fired before the
 child's first tool call and delivered the fixed `additionalContext`; the child's

@@ -14,6 +14,68 @@ from nplet.lifecycle import task_workspace as core
 pytestmark = pytest.mark.unit
 
 
+def test_native_web_result_settles_without_interpreting_content(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Use the observed terminal web callback without trusting response content.
+
+    Args:
+        monkeypatch: Isolate lifecycle effects while retaining actual event translation.
+    """
+    # A native web result is a content list, not shell transport metadata.
+    monkeypatch.setattr(codex, "request_for", lambda *_args: {"operation": "tool-complete"})
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        codex.core, "execute", lambda request: calls.append(request) or {"ok": True}
+    )
+    event = {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "webrun",
+        "tool_use_id": "web-original",
+        "tool_input": {"open": [{"ref_id": "https://learn.chatgpt.com/docs/hooks"}]},
+        "tool_response": [{"type": "text", "text": '{"session_id":77}'}],
+    }
+    # Settlement uses the envelope's exact call ID and never a value inside output.
+    assert codex.handle(event) == {}
+    assert len(calls) == 1
+    assert calls[0]["tool_id"] == "web-original"
+    assert calls[0]["completed"] is True
+    assert calls[0]["async_handle"] is None
+
+
+@pytest.mark.parametrize("output", ["", "plain output", "{", '{"session_id":77}'])
+@pytest.mark.parametrize("tool_name", ["Bash", "apply_patch"])
+def test_native_text_completion_settles_original_call(
+    monkeypatch: pytest.MonkeyPatch, output: str, tool_name: str
+) -> None:
+    """Use the canonical final callback, never parse command stdout as transport metadata.
+
+    Args:
+        monkeypatch: Isolate lifecycle effects while retaining real adapter dispatch.
+        output: Native stdout, including text that resembles a transport handle.
+        tool_name: Observed canonical shell or patch tool with a final text response.
+    """
+    # Native terminal callbacks carry text whose contents cannot grant lifecycle authority.
+    monkeypatch.setattr(codex, "request_for", lambda *_args: {"operation": "tool-complete"})
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        codex.core, "execute", lambda request: calls.append(request) or {"ok": True}
+    )
+    event = {
+        "hook_event_name": "PostToolUse",
+        "tool_name": tool_name,
+        "tool_use_id": "original",
+        "tool_input": {"command": "true"},
+        "tool_response": output,
+    }
+    assert codex.handle(event) == {}
+    assert len(calls) == 1
+    assert calls[0]["tool_id"] == "original"
+    assert calls[0]["completed"] is True
+    assert calls[0].get("async_handle") is None
+    assert calls[0].get("poll", False) is False
+
+
 def test_codex_wrappers_fix_the_host_and_defer_to_shared_contracts(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -122,10 +184,10 @@ def test_codex_bootstrap_passes_exact_eligible_shell_call(
     assert len(captured) == 1
 
 
-def test_codex_pretool_denies_child_creation_without_binding_lookup(
+def test_codex_pretool_denies_unsupported_child_control_without_binding_lookup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Block child transport before creating pending lifecycle work.
+    """Block unsupported child controls before creating pending lifecycle work.
 
     Args:
         monkeypatch: Pytest fixture that isolates external state for this case.
@@ -134,10 +196,16 @@ def test_codex_pretool_denies_child_creation_without_binding_lookup(
     monkeypatch.setattr(codex, "bootstrap", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(codex, "provider_gate", lambda *_args: False)
     monkeypatch.setattr(codex, "request_for", lambda *_args: pytest.fail("binding read"))
-    response = codex.handle({"hook_event_name": "PreToolUse", "tool_name": "spawn_agent"})
+    response = codex.handle(
+        {"hook_event_name": "PreToolUse", "tool_name": "multi_agent_v1resume_agent"}
+    )
     assert response["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert (
         "HOST_UNSUPPORTED_CHILD_IDENTITY"
+        in response["hookSpecificOutput"]["permissionDecisionReason"]
+    )
+    assert (
+        "no lifecycle operation grants a child binding here"
         in response["hookSpecificOutput"]["permissionDecisionReason"]
     )
 
@@ -916,3 +984,28 @@ def test_codex_unknown_hook_has_no_lifecycle_side_effect(
     """
     monkeypatch.setattr(codex.core, "execute", lambda *_args: pytest.fail("executed lifecycle"))
     assert codex.handle({"hook_event_name": "FutureHostEvent"}) == {}
+
+
+@pytest.mark.parametrize("operation,expected", [("diagnose", True), ("register", False)])
+@pytest.mark.parametrize("tool_name", ["Bash", "exec_command"])
+def test_diagnostic_bootstrap_narrows_validated_command(
+    monkeypatch: pytest.MonkeyPatch, operation: str, expected: bool, tool_name: str
+) -> None:
+    """Only diagnosis survives operation narrowing after canonical admission.
+
+    Args:
+        monkeypatch: Fixture isolating the filesystem-dependent canonical admission.
+        operation: Lifecycle operation carried by the canonical command.
+        expected: Whether that operation is read-only diagnosis.
+        tool_name: Supported shell transport selecting its command argument field.
+    """
+    # Keep parsing real while isolating the already-covered persistent identity gate.
+    monkeypatch.setattr(codex, "bootstrap", lambda *_args, **_kwargs: True)
+    request = {"operation": operation}
+    command = codex.common.bootstrap_command(request, "codex")
+    field = "command" if tool_name == "Bash" else "cmd"
+    observed = {"tool_name": tool_name, "tool_input": {field: command}}
+    assert codex.diagnostic_bootstrap(observed) is expected
+    # A rejected canonical envelope must never reach operation parsing.
+    monkeypatch.setattr(codex, "bootstrap", lambda *_args, **_kwargs: False)
+    assert codex.diagnostic_bootstrap({}) is False

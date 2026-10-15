@@ -29,10 +29,10 @@ def test_codex_async_handle_preserves_absence_and_rejects_boolean() -> None:
         assert captured.value.code == code
 
 
-def test_codex_pretool_denies_child_before_request_or_core_call(
+def test_codex_pretool_denies_unsupported_child_control_before_request_or_core_call(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Codex pretool denies child before request or core call.
+    """Deny unsupported child controls before request or core work.
 
     Args:
         monkeypatch: Pytest fixture that isolates external state for this case.
@@ -41,7 +41,7 @@ def test_codex_pretool_denies_child_before_request_or_core_call(
     monkeypatch.setattr(codex, "bootstrap", lambda _event, ready=False: False)
     monkeypatch.setattr(codex, "provider_gate", lambda _event: False)
     monkeypatch.setattr(codex, "request_for", lambda *_args: pytest.fail("unexpected binding read"))
-    event = {"hook_event_name": "PreToolUse", "tool_name": "spawn_agent"}
+    event = {"hook_event_name": "PreToolUse", "tool_name": "multi_agent_v1resume_agent"}
     result = codex.handle(event)
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert (

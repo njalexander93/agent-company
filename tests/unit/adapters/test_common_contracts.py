@@ -547,6 +547,20 @@ def test_recovery_message_preserves_exact_diagnostic_without_task_content() -> N
             ["cannot reuse the parent binding", "foreground Agent", "SubagentStart"],
         ),
         ("HOST_UNSUPPORTED_CHILD_IDENTITY", "cursor", ["cannot reuse the parent binding"]),
+        (
+            "HOST_CHILD_CAPACITY_EXHAUSTED",
+            "codex",
+            [
+                "32-launch lifetime limit",
+                "Do not reset the registry",
+                "explicit coordinator handoff",
+            ],
+        ),
+        (
+            "TICKET_READ_REQUIRED",
+            "codex",
+            ["canonical read-only diagnose", "without clearing the ticket requirement"],
+        ),
         ("BUSY", "claude-code", ["Retry the same operation once", "diagnose"]),
         ("NOT_ACKNOWLEDGED", "cursor", ["diagnose, register, resume, read and acknowledge"]),
     ],

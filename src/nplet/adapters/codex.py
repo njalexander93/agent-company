@@ -8,7 +8,7 @@ import os
 import sys
 from pathlib import Path
 
-from nplet.adapters import common, runner, startup
+from nplet.adapters import codex_children, common, runner, startup
 from nplet.lifecycle import task_workspace as core
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -17,6 +17,9 @@ BOOTSTRAP_FIELDS = common.BOOTSTRAP_FIELDS
 COMMON_FIELDS = common.COMMON_FIELDS
 LIFECYCLE = common.LIFECYCLE
 PYTHON = common.PYTHON
+
+# Preserve the legacy adapter spelling alongside the captured native connector name.
+TICKET_TOOLS = {"mcp__codex_apps__linear__get_issue", "mcp__codex_apps__linear_get_issue"}
 
 
 def denial(code: str) -> core.JSONObject:
@@ -32,9 +35,7 @@ def denial(code: str) -> core.JSONObject:
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
-            "permissionDecisionReason": "TASK_WORKSPACE_NOT_READY: "
-            + code
-            + ". Use adapters.common.bootstrap_command for the assigned session.",
+            "permissionDecisionReason": common.recovery(code, "codex"),
         }
     }
 
@@ -93,6 +94,9 @@ def bootstrap(event: core.JSONObject, ready: bool = False) -> bool:
         return False
     # Select the one command field defined for this shell transport.
     args = event.get("tool_input", {})
+    # Installed native Bash canonicalizes transport options into one command field.
+    if event["tool_name"] == "Bash" and isinstance(args, dict) and set(args) == {"command"}:
+        return common.canonical_bootstrap(event, args["command"], "codex", ready, PYTHON, LIFECYCLE)
     command_field = "command" if event["tool_name"] == "Bash" else "cmd"
     other_field = "cmd" if command_field == "command" else "command"
     # Reject ambiguous fields, interactive shells, and unsupported tool options.
@@ -123,6 +127,25 @@ def bootstrap(event: core.JSONObject, ready: bool = False) -> bool:
     # Verify the exact command spelling against the scoped lifecycle route.
     command = args[command_field]
     return common.canonical_bootstrap(event, command, "codex", ready, PYTHON, LIFECYCLE)
+
+
+def diagnostic_bootstrap(event: core.JSONObject) -> bool:
+    """Admit only a canonical read-only diagnosis while the ticket gate is pending.
+
+    Args:
+        event: Observed shell tool call with actual session and worktree identities.
+
+    Returns:
+        Whether the scoped bootstrap command selects diagnosis alone.
+    """
+    # Reuse the existing exact shell, identity, argument, and assignment validation.
+    if not bootstrap(event):
+        return False
+    # Narrow the validated bootstrap route to its single read-only operation.
+    args = event["tool_input"]
+    command = args["command" if event["tool_name"] == "Bash" else "cmd"]
+    request = common.bootstrap_request(command, "codex", PYTHON, LIFECYCLE)
+    return request.get("operation") == "diagnose"
 
 
 def provider_gate(event: core.JSONObject) -> bool:
@@ -270,7 +293,7 @@ def ticket_lookup(event: core.JSONObject, complete: bool = False) -> core.JSONOb
         core.WorkspaceError: If the task, tool, provider, or startup contract fails.
     """
     # Only the exact direct Linear issue tool may cross the ticket-first gate.
-    if event.get("tool_name") != "mcp__codex_apps__linear_get_issue":
+    if event.get("tool_name") not in TICKET_TOOLS:
         # Other tools do not participate in the assigned-ticket handshake.
         return None
     root, _, _ = core.repository(event["cwd"])
@@ -337,6 +360,16 @@ def ticket_lookup(event: core.JSONObject, complete: bool = False) -> core.JSONOb
             except ValueError as error:
                 # Bad JSON is a provider response failure, not an issue mismatch.
                 raise core.WorkspaceError("PROVIDER_RESPONSE_INVALID") from error
+        # Native MCP may omit its optional error flag. Normalize only this correlated
+        # successful-return envelope; the strict parser still verifies one exact issue.
+        if (
+            event.get("hook_event_name") == "PostToolUse"
+            and event.get("tool_name") == "mcp__codex_apps__linear__get_issue"
+            and isinstance(response, dict)
+            and "isError" not in response
+            and isinstance(response.get("content"), list)
+        ):
+            response = {**response, "isError": False}
         verified = startup.ticket(response, identifier)
     except core.WorkspaceError:
         # Drop failed correlation so the participant can retry the exact issue read.
@@ -409,6 +442,23 @@ def handle(event: core.JSONObject) -> core.JSONObject:
     """
     # Select the event-specific host response and lifecycle action.
     name = event.get("hook_event_name")
+    # Route native child UUIDs exclusively through their own participant and bounded tools.
+    if event.get("agent_id") is not None or event.get("agent_type") is not None:
+        observed = codex_children.identity(event)
+        if name == "SubagentStart":
+            return {
+                "hookSpecificOutput": {
+                    "hookEventName": name,
+                    "additionalContext": codex_children.start(observed),
+                }
+            }
+        if name == "PreToolUse":
+            codex_children.child_pre(observed)
+        elif name == "PostToolUse":
+            codex_children.child_post(observed)
+        elif name in {"Stop", "Interrupt", "SessionEnd", "SubagentStop"}:
+            codex_children.child_end(observed)
+        return {}
     # Record explicit task identity before attempting assigned setup.
     if name == "UserPromptSubmit":
         # Store the user's task binding before admitting later tools.
@@ -420,11 +470,17 @@ def handle(event: core.JSONObject) -> core.JSONObject:
     # Require readiness or an exact recovery route before admitting tool work.
     if name == "PreToolUse":
         # A pending ticket read takes precedence over ordinary tool admission.
-        # Restrict this recovery window to the assigned direct issue call.
+        # Keep recovery read-only until the assigned direct issue call succeeds.
         if startup_lookup_state(event, ".lookup-required.json"):
+            # Governing reads do not consume the first-provider-operation marker.
+            if common.preparation_tool(event, "codex"):
+                return {}
+            # A bounded read-only diagnosis must remain reachable to explain startup failures.
+            if diagnostic_bootstrap(event):
+                return {}
             # Any other tool must wait for the assigned issue response.
             # Reject unrelated calls without consuming the ticket marker.
-            if event.get("tool_name") != "mcp__codex_apps__linear_get_issue":
+            if event.get("tool_name") not in TICKET_TOOLS:
                 # Return a bounded admission denial to the host.
                 return denial("TICKET_READ_REQUIRED")
             # Reserve the exact issue call and report validation failures.
@@ -450,15 +506,26 @@ def handle(event: core.JSONObject) -> core.JSONObject:
             # Ordinary readiness evaluation supplies the final denial.
             pass
         tool = event.get("tool_name", "")
+        # Native launch receipts admit readers only; coordinator scope remains explicit.
+        if tool in codex_children.SPAWN_TOOLS:
+            codex_children.admit_spawn(codex_children.identity(event))
+            return {}
+        if tool in codex_children.CONTROLS:
+            codex_children.admit_control(codex_children.identity(event))
+            return {}
         # Deny covered child creation until host child identity can be verified.
         if any(
             s in tool
             for s in (
+                "multi_agent_v1",
                 "spawn_agent",
                 "create_thread",
                 "fork_thread",
                 "send_message_to_thread",
                 "followup_task",
+                "send_input",
+                "close_agent",
+                "resume_agent",
             )
         ):
             # Native child identity cannot be tied to a lifecycle participant.
@@ -504,11 +571,21 @@ def handle(event: core.JSONObject) -> core.JSONObject:
         return {} if result["ok"] else denial(result["code"])
     # Settle work only from typed completion facts and validated handle correlation.
     if name == "PostToolUse":
+        # Preparation reads never registered ordinary pending work or granted readiness.
+        if common.preparation_tool(event, "codex") and startup_lookup_state(
+            event, ".lookup-required.json"
+        ):
+            return {}
+        # Canonical lifecycle commands own their transactions and were not external tool work.
+        if bootstrap(event, ready=True):
+            return {}
+        # A completed control call does not mean the child or its own pending tools finished.
+        if event.get("tool_name") in codex_children.CONTROLS | codex_children.SPAWN_TOOLS:
+            codex_children.parent_post(codex_children.identity(event))
+            return {}
         # Settle a reserved Linear ticket read before generic tool completion.
         # The lookup marker identifies the pre-hook admitted issue call.
-        if event.get("tool_name") == "mcp__codex_apps__linear_get_issue" and startup_lookup_state(
-            event, ".lookup.json"
-        ):
+        if event.get("tool_name") in TICKET_TOOLS and startup_lookup_state(event, ".lookup.json"):
             # Verify the provider result and start the assigned workspace.
             try:
                 # Successful startup returns a host-visible readiness message.
@@ -539,6 +616,52 @@ def handle(event: core.JSONObject) -> core.JSONObject:
         # Build the request from explicit caller or observed session identities.
         request = request_for(event, "tool-complete")
         response = event.get("tool_response", {})
+        # Native Bash and apply_patch emit final text, not serialized transport metadata.
+        # A final write_stdin poll uses this original call ID; stdout cannot supply handles.
+        inputs = event.get("tool_input")
+        terminal_text = (
+            event.get("tool_name") in {"Bash", "apply_patch"}
+            and isinstance(inputs, dict)
+            and isinstance(inputs.get("command"), str)
+            and isinstance(response, str)
+        )
+        # Observed local web callbacks finish with content lists, not process handles.
+        terminal_web = (
+            event.get("tool_name") == "webrun"
+            and isinstance(inputs, dict)
+            and isinstance(response, list)
+        )
+        # Native MCP content results may omit the optional isError flag; PostToolUse
+        # proves the synchronous call returned, without asserting provider success.
+        terminal_mcp = (
+            str(event.get("tool_name", "")).startswith("mcp__")
+            and isinstance(inputs, dict)
+            and isinstance(response, dict)
+            and isinstance(response.get("content"), list)
+            and all(
+                isinstance(block, dict) and isinstance(block.get("type"), str)
+                for block in response["content"]
+            )
+        )
+        # Only the evidenced native shapes bypass legacy transport-result parsing.
+        if terminal_text or terminal_web or terminal_mcp:
+            observation = [event["tool_use_id"], True, None, False]
+            result = core.execute(
+                {
+                    **request,
+                    "request_id": "post:" + core.sha(core.canonical(observation)),
+                    "tool_id": event["tool_use_id"],
+                    "poll": False,
+                    "completed": True,
+                    "async_handle": None,
+                }
+            )
+            # Settle pending work without claiming that the command exited successfully.
+            return (
+                {}
+                if result["ok"]
+                else {"systemMessage": "TASK_WORKSPACE_NOT_READY: " + result["code"]}
+            )
         # Decode serialized tool responses; malformed shapes supply no completion evidence.
         if isinstance(response, str):
             # A host-serialized result must be decoded before reading status fields.
