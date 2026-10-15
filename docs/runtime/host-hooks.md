@@ -488,7 +488,9 @@ inside the hook to fabricate proof of the parent runtime's configuration.
 
 ## Implemented coverage
 
-These rules are implemented in `adapters/common.py`, `adapters/claude.py`, and `adapters/cursor.py`:
+These rules are implemented in `adapters/common.py`, `adapters/claude.py`,
+`adapters/cursor.py`, `adapters/codex.py` and `adapters/codex_children.py`.
+The first table compares Claude Code and Cursor; the second records Codex boundaries:
 
 | Boundary | Claude Code | Cursor Agent |
 | --- | --- | --- |
@@ -505,6 +507,19 @@ These rules are implemented in `adapters/common.py`, `adapters/claude.py`, and `
 | Session start | Advisory recovery/readiness context; no readiness grant | Advisory context only |
 | Compaction | PreCompact/PostCompact observations only; no context or decision output | Advisory context only |
 | Stop/session end | Optional observation only | Optional observation only; no automatic follow-up |
+
+| Codex boundary | Implemented admission and limit |
+| --- | --- |
+| Parent providers after readiness | Generic `mcp__` tools, including non-Linear operations, pass the readiness gate as ordinary pending work when earlier special-case handling reaches this route. There is no connector or operation allowlist. Existing child/delegation tool-name denials still apply before this route. A matching native MCP completion with the validated content-block shape settles its pending call; other responses require typed completion evidence. |
+| Archive provider gate | Exact coordinator-bound document save/read requests have a separate archive gate. This gate is not exclusive: a false return permits fallthrough to generic readiness admission. Earlier archive-specific errors can prevent fallthrough; a legacy document save without an existing export fails before generic readiness. Passing generic admission does not verify an archive or grant cleanup authority. |
+| Ticket-first startup | Only the exact selected-ticket read is admitted before readiness, alongside bounded preparation/recovery exceptions. Matching native completion validates the issue before shared startup. |
+| Child tools and providers | A verified child has its own binding and scope. Only command-only Bash for its own canonical lifecycle commands and exact packet-source reads is admitted; generic provider tools are denied. |
+| Native child control | Exact supported spawn/control tools use parent-bound receipts and correlated completion. Unsupported delegation names remain denied. See the [restricted Codex child route](#codex-native-child-route-restricted) for supported shapes and evidence limits. |
+
+Codex's generic provider admission is broader than Claude Code's fixed allowlist.
+It does not enforce the contributor procedure's permitted provider operations.
+Provider success is not lifecycle authority, and this table does not establish
+installed-host delivery for every provider or operating system.
 
 ### Claude subagent child route (restricted)
 

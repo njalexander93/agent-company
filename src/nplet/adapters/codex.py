@@ -616,12 +616,13 @@ def handle(event: core.JSONObject) -> core.JSONObject:
         # Build the request from explicit caller or observed session identities.
         request = request_for(event, "tool-complete")
         response = event.get("tool_response", {})
-        # Native Bash and apply_patch emit final text, not serialized transport metadata.
+        # Command-only native Bash and apply_patch emit text, not legacy transport metadata.
         # A final write_stdin poll uses this original call ID; stdout cannot supply handles.
         inputs = event.get("tool_input")
         terminal_text = (
             event.get("tool_name") in {"Bash", "apply_patch"}
             and isinstance(inputs, dict)
+            and set(inputs) == {"command"}
             and isinstance(inputs.get("command"), str)
             and isinstance(response, str)
         )

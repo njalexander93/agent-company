@@ -22,6 +22,56 @@ pytestmark = pytest.mark.integration
 class LifecycleTests(Fixture):
     """Exercise local lifecycle, containment and adapter contracts in disposable stores."""
 
+    def test_legacy_bash_async_completion_retains_work_until_correlated_poll(self) -> None:
+        """Retain a legacy wrapper's live handle until its matching terminal poll.
+
+        Raises:
+            AssertionError: A wrapper return prematurely settles pending process work.
+        """
+        # Admit the legacy shell wrapper in a real ready store.
+        self.create()
+        self.ready()
+        event = {
+            "hook_event_name": "PreToolUse",
+            "cwd": str(self.root),
+            "session_id": "coordinator",
+            "tool_name": "Bash",
+            "tool_input": {"command": "sleep 100 &", "login": False, "shell": "/bin/sh"},
+            "tool_use_id": "legacy-shell",
+        }
+        self.assertEqual(hook.handle(event), {})
+        # A wrapper return containing a live handle is not process completion.
+        callback = {
+            **event,
+            "hook_event_name": "PostToolUse",
+            "tool_response": '{"session_id":"shell-7","exit_code":null}',
+        }
+        self.assertEqual(hook.handle(callback), {})
+        self.assertEqual(hook.handle(callback), {})
+        pending = self.state()["participants"][self.base["coordinator"]]["pending"]
+        self.assertIn("legacy-shell", pending)
+        self.assertEqual(pending["legacy-shell"]["handle"], "shell-7")
+        # A terminal poll may settle only the original operation with its known handle.
+        poll = {
+            **event,
+            "tool_name": "write_stdin",
+            "tool_use_id": "legacy-poll",
+            "tool_input": {"session_id": "shell-7"},
+        }
+        self.assertEqual(hook.handle(poll), {})
+        self.assertEqual(
+            hook.handle(
+                {
+                    **poll,
+                    "hook_event_name": "PostToolUse",
+                    "tool_response": '{"exit_code":0}',
+                }
+            ),
+            {},
+        )
+        pending = self.state()["participants"][self.base["coordinator"]]["pending"]
+        self.assertNotIn("legacy-shell", pending)
+
     def test_native_bash_completion_preserves_other_pending_calls(self) -> None:
         """Settle only correlated final callbacks, regardless of stdout contents.
 

@@ -1022,3 +1022,166 @@ class ChildTests(Fixture):
         with children.registry(children.parent_request(peer)) as (_, _, state):
             assert set(state["children"]) == {key}
             assert state["children"][key]["status"] == "joined"
+
+    def test_changed_source_completion_cannot_manufacture_delivery(self) -> None:
+        """Retain original bytes on replay and require a fresh read for recovery.
+
+        Raises:
+            AssertionError: Changed replay grants acknowledgment or mutates settled work.
+        """
+        # Establish a real reader and complete one admitted read with truncated bytes.
+        self.create()
+        self.ready()
+        children.admit_spawn(self.launch(1))
+        peer = self.child()
+        children.start(peer)
+        request = common.request_for(peer, "read", "codex")
+        packet = core.execute(request)
+        ack = {**request, "operation": "acknowledge", "packet_digest": packet["packet_digest"]}
+        path = self.root / ".task/TEST-1/roadmap.md"
+        pre = {
+            **peer,
+            "tool_name": "Bash",
+            "tool_use_id": "source-original",
+            "tool_input": {"command": "cat -- " + shlex.quote(str(path))},
+        }
+        children.child_pre(pre)
+        post = {**pre, "tool_response": "truncated"}
+        children.child_post(post)
+        before = self.state()
+        # Exact completion replay is idempotent; changed bytes cannot replace its evidence.
+        children.child_post(post)
+        assert self.state() == before
+        with pytest.raises(core.WorkspaceError, match="REQUEST_CONFLICT"):
+            children.child_post({**post, "tool_response": path.read_text()})
+        assert self.state() == before
+        key = core.participant_key(request)
+        with children.registry(children.parent_request(peer)) as (_, _, state):
+            receipt = state["children"][key]["source_reads"]["source-original"]
+            assert receipt["content_sha256"] == core.sha(b"truncated")
+        with pytest.raises(core.WorkspaceError, match="SOURCE_DELIVERY_REQUIRED"):
+            children.child_pre(self.command(peer, ack))
+        assert self.state()["participants"][key]["ack"] is None
+        # A separately admitted read with actual bytes can recover the same packet.
+        fresh = {**pre, "tool_use_id": "source-fresh"}
+        children.child_pre(fresh)
+        children.child_post({**fresh, "tool_response": path.read_text()})
+        children.child_pre(self.command(peer, ack))
+        assert core.execute(ack)["ok"]
+        assert not self.state()["participants"][key]["pending"]
+
+    def test_changed_spawn_completion_cannot_settle_or_authorize_target(self) -> None:
+        """Bind native and legacy completions to their originally admitted arguments.
+
+        Raises:
+            AssertionError: Changed arguments settle work or create a control address.
+        """
+        # Admit both protocols in one real store without creating any lifecycle children.
+        self.create()
+        self.ready()
+        for native in (False, True):
+            launch = self.launch(int(native))
+            target = str(uuid.uuid4()) if native else "/root/worker-0"
+            response = {"agent_id" if native else "task_name": target}
+            if native:
+                launch.update(
+                    tool_name="spawn_agent", tool_input={"message": "reader", "fork_context": False}
+                )
+            children.admit_spawn(launch)
+            before = self.state()
+            changed = {**launch["tool_input"], "message": "changed"}
+            if native:
+                changed["fork_context"] = True
+            # Reject before either authoritative pending work or target receipts change.
+            with pytest.raises(core.WorkspaceError, match="REQUEST_CONFLICT"):
+                children.parent_post({**launch, "tool_input": changed, "tool_response": response})
+            assert self.state() == before
+            assert (
+                launch["tool_use_id"] in before["participants"][self.base["coordinator"]]["pending"]
+            )
+            with children.registry(children.parent_request(launch)) as (_, _, state):
+                receipt = state["launches"][launch["tool_use_id"]]
+                assert "target" not in receipt
+                assert "completed" not in receipt
+            # The exact admitted completion still succeeds and then replays idempotently.
+            post = {**launch, "tool_response": response}
+            children.parent_post(post)
+            settled = self.state()
+            assert (
+                launch["tool_use_id"]
+                not in settled["participants"][self.base["coordinator"]]["pending"]
+            )
+            children.parent_post(post)
+            assert self.state() == settled
+            with children.registry(children.parent_request(launch)) as (_, _, state):
+                assert state["launches"][launch["tool_use_id"]]["target"] == target
+
+    def test_source_completion_survives_registry_write_failure_without_changing_bytes(self) -> None:
+        """Bind cached core settlement to original bytes across a failed receipt write.
+
+        Raises:
+            AssertionError: A partially persisted completion accepts replacement output.
+        """
+        # Admit one source read in a real store, retaining its exact original packet.
+        self.create()
+        self.ready()
+        children.admit_spawn(self.launch(1))
+        peer = self.child()
+        children.start(peer)
+        request = common.request_for(peer, "read", "codex")
+        packet = core.execute(request)
+        ack = {**request, "operation": "acknowledge", "packet_digest": packet["packet_digest"]}
+        path = self.root / ".task/TEST-1/roadmap.md"
+        pre = {
+            **peer,
+            "tool_name": "Bash",
+            "tool_use_id": "source-write-failure",
+            "tool_input": {"command": "cat -- " + shlex.quote(str(path))},
+        }
+        children.child_pre(pre)
+        put = core.Directory.put
+
+        def fail_registry_write(directory, name, value):
+            """Fail only adapter persistence after the authoritative core has settled.
+
+            Args:
+                directory: Actual safe directory receiving the write.
+                name: Filename selected by the real adapter or core.
+                value: JSON value intended for persistence.
+
+            Raises:
+                OSError: The adapter attempts its final cohort receipt write.
+            """
+            # Preserve every core transaction; interrupt only the final adapter receipt.
+            if ".codex-children-" in name:
+                raise OSError("injected registry write failure")
+            put(directory, name, value)
+
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(core.Directory, "put", fail_registry_write)
+            with pytest.raises(OSError, match="^injected registry write failure$"):
+                children.child_post({**pre, "tool_response": "truncated"})
+        key = core.participant_key(request)
+        settled = self.state()
+        assert not settled["participants"][key]["pending"]
+        # Changed bytes cannot reuse cached settlement while the receipt is incomplete.
+        with pytest.raises(core.WorkspaceError, match="UNKNOWN_OPERATION"):
+            children.child_post({**pre, "tool_response": path.read_text()})
+        assert self.state() == settled
+        with children.registry(children.parent_request(peer)) as (_, _, state):
+            receipt = state["children"][key]["source_reads"][pre["tool_use_id"]]
+            assert "completed" not in receipt
+            assert "content_sha256" not in receipt
+        with pytest.raises(core.WorkspaceError, match="SOURCE_DELIVERY_REQUIRED"):
+            children.child_pre(self.command(peer, ack))
+        # Exact retry restores the original receipt without another core transition.
+        children.child_post({**pre, "tool_response": "truncated"})
+        assert self.state() == settled
+        with pytest.raises(core.WorkspaceError, match="SOURCE_DELIVERY_REQUIRED"):
+            children.child_pre(self.command(peer, ack))
+        # Recovery still requires a distinct admitted read containing the actual source.
+        fresh = {**pre, "tool_use_id": "source-after-write-failure"}
+        children.child_pre(fresh)
+        children.child_post({**fresh, "tool_response": path.read_text()})
+        children.child_pre(self.command(peer, ack))
+        assert core.execute(ack)["ok"]

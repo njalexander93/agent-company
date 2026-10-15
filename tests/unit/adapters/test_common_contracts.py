@@ -545,6 +545,22 @@ def test_recovery_message_preserves_exact_diagnostic_without_task_content() -> N
         ),
         ("HOST_UNSUPPORTED_TOOL", "cursor", ["Delete or foreground Shell"]),
         (
+            "HOST_UNSUPPORTED_TOOL",
+            "codex",
+            ["Codex child", "command-only Bash", "canonical lifecycle", "exact packet-source"],
+        ),
+        (
+            "SOURCE_DELIVERY_REQUIRED",
+            "codex",
+            [
+                "cat -- <absolute source path>",
+                "each undelivered or mismatched source",
+                "current packet",
+                "then acknowledge",
+                "then ready",
+            ],
+        ),
+        (
             "HOST_UNSUPPORTED_CHILD_IDENTITY",
             "claude-code",
             ["cannot reuse the parent binding", "foreground Agent", "SubagentStart"],
@@ -586,6 +602,10 @@ def test_recovery_names_the_admitted_next_operation_per_code(
     # The route names the specific operation that can change this outcome.
     for fragment in fragments:
         assert fragment in message
+    # Codex children must not receive unsupported Cursor file or Shell advice.
+    if host == "codex" and code == "HOST_UNSUPPORTED_TOOL":
+        for unsupported in ("Read, Write", "Delete", "foreground Shell"):
+            assert unsupported not in message
     # Host-specific Claude routes are not advertised to Cursor.
     if host == "cursor":
         assert "ToolSearch" not in message

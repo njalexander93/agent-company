@@ -657,14 +657,26 @@ def test_codex_session_and_endings_report_readiness_without_settlement(
     assert requests[-1]["event"] == {"code": "UNKNOWN"}
 
 
+@pytest.mark.parametrize(
+    ("tool_name", "inputs"),
+    [
+        ("exec_command", {}),
+        ("Bash", {"command": "sleep 100 &", "login": False, "shell": "/bin/sh"}),
+    ],
+)
 def test_codex_posttool_records_observed_async_handle_without_inferred_completion(
     monkeypatch: pytest.MonkeyPatch,
+    tool_name: str,
+    inputs: dict[str, object],
 ) -> None:
     """Keep asynchronous shell work pending under its observed process handle.
 
     Args:
         monkeypatch: Pytest fixture that isolates external state for this case.
+        tool_name: Legacy direct or Bash-wrapped transport spelling.
+        inputs: Transport arguments distinguishing the legacy wrapper from native text.
     """
+    # Isolate persistence while preserving the real transport classification and decoder.
     monkeypatch.setattr(codex, "request_for", lambda *_args: {"operation": "tool-complete"})
     requests: list[dict[str, Any]] = []
     monkeypatch.setattr(
@@ -675,11 +687,13 @@ def test_codex_posttool_records_observed_async_handle_without_inferred_completio
     response = codex.handle(
         {
             "hook_event_name": "PostToolUse",
-            "tool_name": "exec_command",
+            "tool_name": tool_name,
+            "tool_input": inputs,
             "tool_use_id": "shell-1",
-            "tool_response": '{"session_id":77}',
+            "tool_response": '{"session_id":77,"exit_code":null}',
         }
     )
+    # Both legacy spellings retain the observed handle without claiming process exit.
     assert response == {}
     assert requests[0]["async_handle"] == "77"
     assert requests[0]["completed"] is False

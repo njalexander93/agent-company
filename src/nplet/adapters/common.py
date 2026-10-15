@@ -1781,6 +1781,14 @@ def _recovery_route(code: str, host: str) -> str:
             "your own committed roadmap update): run read, then acknowledge the returned "
             f"packet_digest, then ready, using {command}."
         )
+    # A child's acknowledgment requires correlated delivery of every current source.
+    if code == "SOURCE_DELIVERY_REQUIRED":
+        return (
+            "Run the exact `cat -- <absolute source path>` command through command-only "
+            "Bash for each undelivered or mismatched source in the current packet, with "
+            "the absolute path shell-quoted as required. Wait for matching source-byte "
+            "completion, then acknowledge the current packet_digest, then ready."
+        )
     # Coordinators and readers refresh a stale packet through different owners.
     if code == "SOURCE_STALE":
         return (
@@ -1884,6 +1892,13 @@ def _recovery_route(code: str, host: str) -> str:
         )
     # Unsupported tools need a different tool, not lifecycle recovery.
     if code == "HOST_UNSUPPORTED_TOOL":
+        # Codex children have a narrower command-only route than Cursor file tools.
+        if host == "codex":
+            return (
+                "No lifecycle operation admits this tool. A Codex child may use only "
+                "command-only Bash for its own canonical lifecycle commands or exact "
+                "packet-source cat reads."
+            )
         tools = (
             "Read, Write, Edit, Glob, Grep, NotebookEdit, foreground Bash, ToolSearch, Skill, "
             "SendMessage or AskUserQuestion (a subagent also has SubagentHandback)"

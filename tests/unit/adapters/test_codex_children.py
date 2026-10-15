@@ -548,7 +548,10 @@ def test_parent_post_retains_ambiguous_launch_capacity(boundary, response, outco
         response: Native completion payload under examination.
         outcome: Expected persisted certainty of the launch outcome.
     """
-    launch = {"task_name": "reader"}
+    launch = {
+        "task_name": "reader",
+        "arguments_digest": core.sha(core.canonical(spawn_event(boundary)["tool_input"])),
+    }
     boundary.state["launches"]["call"] = launch
     subject.parent_post(
         {**spawn_event(boundary), "tool_name": tool_name, "tool_response": response}
@@ -581,7 +584,10 @@ def test_parent_post_rejects_ambiguous_identity_without_settlement(
         existing: Whether an existing record or target is present.
         code: Expected public authorization failure code.
     """
-    launch = {"task_name": "reader"}
+    launch = {
+        "task_name": "reader",
+        "arguments_digest": core.sha(core.canonical(spawn_event(boundary)["tool_input"])),
+    }
     if existing:
         launch["target"] = existing
     boundary.state["launches"]["call"] = launch
@@ -1595,4 +1601,64 @@ def test_compacted_control_post_replays_only_exact_core_completion(boundary):
         subject.parent_post({**post, "tool_input": {**post["tool_input"], "message": "changed"}})
     assert failure.value.code == "UNKNOWN_OPERATION"
     assert boundary.execute.call_args.args[0]["request_id"] != original["request_id"]
+    boundary.bindings.put.assert_not_called()
+
+
+@pytest.mark.parametrize("response", ["body", "changed"])
+def test_source_completion_replay_preserves_original_bytes(boundary, response):
+    """A completed receipt accepts exact replay without further lifecycle writes.
+
+    Args:
+        boundary: Isolated lifecycle responses, cohort state and boundary spies.
+        response: Exact or changed completion bytes.
+    """
+    # Seed an original completed receipt and isolate the completion boundary.
+    receipt = {
+        "path": "/assigned",
+        "packet_digest": "packet",
+        "completed": True,
+        "content_sha256": core.sha(b"body"),
+    }
+    boundary.state["children"][KEY]["source_reads"] = {"call": receipt}
+    post = {**boundary.event, "tool_response": response}
+    # Reject changed bytes without mutating either the core or delivery evidence.
+    if response == "body":
+        subject.child_post(post)
+    else:
+        with pytest.raises(core.WorkspaceError, match="REQUEST_CONFLICT"):
+            subject.child_post(post)
+    assert receipt["content_sha256"] == core.sha(b"body")
+    boundary.execute.assert_not_called()
+    boundary.bindings.put.assert_not_called()
+
+
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize("change", ["message", "fork", "missing"])
+def test_spawn_completion_rejects_changed_admitted_arguments(boundary, native, change):
+    """Changed completion arguments cannot settle work or create a control target.
+
+    Args:
+        boundary: Isolated lifecycle responses, cohort state and boundary spies.
+        native: Whether to use the native UUID protocol or legacy task-name protocol.
+        change: Admission field changed or omitted in the completion callback.
+    """
+    # Admit a valid launch and reset spies before attempting its mismatched completion.
+    event = native_spawn_event(boundary) if native else spawn_event(boundary)
+    subject.admit_spawn(event)
+    receipt = dict(boundary.state["launches"]["call"])
+    boundary.execute.reset_mock()
+    boundary.bindings.put.reset_mock()
+    arguments = dict(event["tool_input"])
+    # Exercise payload, authority and missing-input mismatches for both protocols.
+    if change == "message":
+        arguments["message"] = "changed"
+    elif change == "fork":
+        arguments["fork_context" if native else "fork_turns"] = True if native else "all"
+    else:
+        arguments = None
+    response = {"agent_id": AGENT} if native else {"task_name": "/root/reader"}
+    with pytest.raises(core.WorkspaceError, match="REQUEST_CONFLICT"):
+        subject.parent_post({**event, "tool_input": arguments, "tool_response": response})
+    assert boundary.state["launches"]["call"] == receipt
+    boundary.execute.assert_not_called()
     boundary.bindings.put.assert_not_called()

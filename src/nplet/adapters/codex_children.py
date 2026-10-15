@@ -478,7 +478,7 @@ def child_post(event: core.JSONObject) -> None:
         event: Identity-validated child completion event.
 
     Raises:
-        WorkspaceError: The child is not in the current generation's registry.
+        WorkspaceError: Missing cohort membership or changed completion bytes.
     """
     # Never consult or settle the parent participant's pending work for a child result.
     parent = parent_request(event)
@@ -497,18 +497,27 @@ def child_post(event: core.JSONObject) -> None:
         ):
             call_id = common.native_token(call_id)
             receipt = reads[call_id]
+            content_digest = core.sha(event["tool_response"].encode())
+            # A settled callback cannot replace its original bytes through cached core success.
+            if receipt.get("completed"):
+                core.require(receipt.get("content_sha256") == content_digest, "REQUEST_CONFLICT")
+                return
+            # Bind core retry identity to the bytes too, covering a later registry-write failure.
+            completion_id = "source-post:" + core.sha(
+                core.canonical({"call_id": call_id, "content_sha256": content_digest})
+            )
             # A correlated final response settles only this child's authoritative tool ID.
             completed = core.execute(
                 {
                     **common.request_for(event, "tool-complete", "codex"),
-                    "request_id": "source-post:" + call_id,
+                    "request_id": completion_id,
                     "tool_id": call_id,
                     "completed": True,
                 }
             )
             core.require(completed["ok"], completed["code"])
             receipt["completed"] = True
-            receipt["content_sha256"] = core.sha(event["tool_response"].encode())
+            receipt["content_sha256"] = content_digest
             # Keep the latest delivery per source in this packet, retaining every unresolved
             # read. A delayed old-packet completion cannot erase current delivery evidence.
             for previous in list(reads):
@@ -733,6 +742,11 @@ def parent_post(event: core.JSONObject) -> None:
         core.require(
             (launch.get("native") is True) == (event.get("tool_name") == "spawn_agent"),
             "BINDING_CONFLICT",
+        )
+        # Bind completion to the admitted invocation before recording any target or settlement.
+        core.require(
+            launch.get("arguments_digest") == core.sha(core.canonical(event.get("tool_input"))),
+            "REQUEST_CONFLICT",
         )
         # Only new native-contract receipts accept UUID targets; old unknown work stays unknown.
         if event.get("tool_name") == "spawn_agent":
