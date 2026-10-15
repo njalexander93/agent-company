@@ -149,6 +149,18 @@ WINDOWS_UNIT_REASON = "Windows native CreateFileW and NTFS handle APIs are unava
 APPROVED_NATIVE_SKIPS: dict[str, tuple[set[str], str]] = {
     **{node: ({"Windows"}, POSIX_UNIT_REASON) for node in POSIX_UNIT_NODES},
     **{node: ({"Linux", "Darwin"}, WINDOWS_UNIT_REASON) for node in WINDOWS_UNIT_NODES},
+    # These real observer processes require POSIX directory descriptors and private modes.
+    **{
+        "tests/integration/adapters/test_hook_capture_process.py::" + name: (
+            {"Windows"},
+            "POSIX observer",
+        )
+        for name in (
+            "test_diagnostic_preserves_real_guard_denial_and_result",
+            "test_writer_bounds_slots_and_private_permissions",
+            "test_overlapping_synthetic_events_remain_distinct",
+        )
+    },
     **{
         "tests/integration/adapters/test_platform_processes.py::"
         f"test_windows_bootstrap_survives_literal_paths_and_json[{shell}]": (
