@@ -1662,3 +1662,41 @@ def test_spawn_completion_rejects_changed_admitted_arguments(boundary, native, c
     assert boundary.state["launches"]["call"] == receipt
     boundary.execute.assert_not_called()
     boundary.bindings.put.assert_not_called()
+
+
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize("observed", [False, True])
+def test_terminal_spawn_replay_freezes_target_absence_and_value(boundary, native, observed):
+    """Reject changed terminal authority while allowing exact settlement retries.
+
+    Args:
+        boundary: Isolated lifecycle responses, cohort state and boundary spies.
+        native: Whether the host supplies a UUID instead of a legacy task address.
+        observed: Whether the first terminal callback supplies a control target.
+    """
+    # Persist the first terminal observation under the originally admitted invocation.
+    event = native_spawn_event(boundary) if native else spawn_event(boundary)
+    target = AGENT if native else "/root/reader"
+    replacement = "87654321-4321-4321-8321-abcdefabcdef" if native else "/other/reader"
+    field = "agent_id" if native else "task_name"
+    subject.admit_spawn(event)
+    response = {field: target} if observed else {"error": "failed"}
+    post = {**event, "tool_response": response}
+    subject.parent_post(post)
+    original = dict(boundary.state["launches"]["call"])
+    boundary.execute.reset_mock()
+    boundary.bindings.put.reset_mock()
+    # Exact replay reaches core idempotency without rewriting the persisted receipt.
+    subject.parent_post(post)
+    assert boundary.execute.call_args.args[0]["operation"] == "tool-complete"
+    boundary.bindings.put.assert_not_called()
+    boundary.execute.reset_mock()
+    # Changed presence or value cannot mutate the receipt or reach core settlement.
+    responses = [{field: replacement}, {"error": "failed"}] if observed else [{field: target}]
+    for changed in responses:
+        with pytest.raises(core.WorkspaceError) as failure:
+            subject.parent_post({**event, "tool_response": changed})
+        assert failure.value.code == "REQUEST_CONFLICT"
+        assert boundary.state["launches"]["call"] == original
+        boundary.execute.assert_not_called()
+        boundary.bindings.put.assert_not_called()

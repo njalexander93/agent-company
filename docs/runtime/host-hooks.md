@@ -110,6 +110,10 @@ tracking existed are not silently migrated or cleared; retain their uncertainty
 and reconcile only against exact terminal evidence.
 
 Parent controls require targets returned by that parent's observed launches.
+The first terminal spawn completion freezes the observed target or its absence.
+A replay cannot add, replace or remove that target. An exact retry can still
+settle the parent call if an earlier attempt saved the receipt but failed before
+core settlement; it does not rewrite the receipt.
 The current native route uses UUID targets for `send_input`, `wait_agent` and
 `close_agent`; unsupported controls such as resume remain denied. The older
 follow-up, message and interruption route uses the exact canonical `/root/...`

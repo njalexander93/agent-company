@@ -1185,3 +1185,130 @@ class ChildTests(Fixture):
         children.child_post({**fresh, "tool_response": path.read_text()})
         children.child_pre(self.command(peer, ack))
         assert core.execute(ack)["ok"]
+
+    def test_terminal_spawn_target_presence_and_value_are_immutable(self) -> None:
+        """Keep failed launches uncontrollable and successful addresses stable on replay.
+
+        Raises:
+            AssertionError: A replay changes authority or the original completion receipt.
+        """
+        # Exercise both host schemas and both possible first terminal target outcomes.
+        self.create()
+        self.ready()
+        for number, (native, observed) in enumerate(
+            ((False, False), (True, False), (False, True), (True, True))
+        ):
+            with self.subTest(native=native, observed=observed):
+                launch = self.launch(number)
+                target = str(uuid.uuid4()) if native else f"/root/worker-{number}"
+                replacement = str(uuid.uuid4()) if native else f"/other/worker-{number}"
+                field = "agent_id" if native else "task_name"
+                if native:
+                    launch.update(
+                        tool_name="spawn_agent",
+                        tool_input={"message": "reader", "fork_context": False},
+                    )
+                children.admit_spawn(launch)
+                response = {field: target} if observed else {"error": "failed"}
+                post = {**launch, "tool_response": response}
+                children.parent_post(post)
+                settled = self.state()
+                with children.registry(children.parent_request(launch)) as (_, _, state):
+                    original = dict(state["launches"][launch["tool_use_id"]])
+                # Identical terminal callbacks preserve both core state and persisted authority.
+                children.parent_post(post)
+                assert self.state() == settled
+                for changed in (
+                    ({field: replacement}, {"error": "failed"}) if observed else ({field: target},)
+                ):
+                    with pytest.raises(core.WorkspaceError, match="REQUEST_CONFLICT"):
+                        children.parent_post({**launch, "tool_response": changed})
+                    assert self.state() == settled
+                    with children.registry(children.parent_request(launch)) as (_, _, state):
+                        assert state["launches"][launch["tool_use_id"]] == original
+                # A failed launch still cannot authorize a control call after the rejected replay.
+                control = {
+                    **launch,
+                    "tool_name": "multi_agent_v1send_input"
+                    if native
+                    else "collaborationsend_message",
+                    "tool_use_id": f"control-{number}",
+                    "tool_input": {"target": target, "message": "continue"},
+                }
+                if not observed:
+                    with pytest.raises(
+                        core.WorkspaceError, match="HOST_UNSUPPORTED_CHILD_IDENTITY"
+                    ):
+                        children.admit_control(control)
+                    assert self.state() == settled
+                else:
+                    children.admit_control(control)
+                    children.parent_post({**control, "tool_response": {}})
+
+    def test_spawn_receipt_survives_failed_core_settlement(self) -> None:
+        """Recover pending settlement without changing a persisted terminal observation.
+
+        Raises:
+            AssertionError: Retry loses pending work or replaces the original target outcome.
+        """
+        # Fail only the core completion after the adapter has persisted its first receipt.
+        self.create()
+        self.ready()
+        for number, (native, observed) in enumerate(
+            ((False, False), (True, False), (False, True), (True, True))
+        ):
+            launch = self.launch(number)
+            if native:
+                launch.update(
+                    tool_name="spawn_agent", tool_input={"message": "reader", "fork_context": False}
+                )
+            children.admit_spawn(launch)
+            target = str(uuid.uuid4()) if native else f"/root/worker-{number}"
+            field = "agent_id" if native else "task_name"
+            response = {field: target} if observed else {"error": "failed"}
+            post = {**launch, "tool_response": response}
+            execute = core.execute
+
+            def fail_completion(request):
+                """Interrupt only core settlement, preserving all other real operations.
+
+                Args:
+                    request: Lifecycle request selected by the adapter.
+
+                Returns:
+                    The real lifecycle response for non-completion operations.
+
+                Raises:
+                    OSError: The adapter attempts the core completion transition.
+                """
+                # Leave the registry committed while the authoritative pending call remains.
+                if request["operation"] == "tool-complete":
+                    raise OSError("injected core completion failure")
+                return execute(request)
+
+            with pytest.MonkeyPatch.context() as patch:
+                patch.setattr(core, "execute", fail_completion)
+                with pytest.raises(OSError, match="^injected core completion failure$"):
+                    children.parent_post(post)
+            pending = self.state()
+            assert (
+                launch["tool_use_id"]
+                in pending["participants"][self.base["coordinator"]]["pending"]
+            )
+            with children.registry(children.parent_request(launch)) as (_, _, state):
+                original = dict(state["launches"][launch["tool_use_id"]])
+                assert original["completed"] is True
+                assert original["outcome"] == ("target_observed" if observed else "unknown")
+            # A changed replay cannot use the unsettled core call to replace the receipt.
+            response = {"error": "failed"} if observed else {field: target}
+            with pytest.raises(core.WorkspaceError, match="REQUEST_CONFLICT"):
+                children.parent_post({**launch, "tool_response": response})
+            assert self.state() == pending
+            # The original callback can finish settlement and replay idempotently thereafter.
+            children.parent_post(post)
+            settled = self.state()
+            assert not settled["participants"][self.base["coordinator"]]["pending"]
+            children.parent_post(post)
+            assert self.state() == settled
+            with children.registry(children.parent_request(launch)) as (_, _, state):
+                assert state["launches"][launch["tool_use_id"]] == original

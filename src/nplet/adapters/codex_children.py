@@ -748,6 +748,8 @@ def parent_post(event: core.JSONObject) -> None:
             launch.get("arguments_digest") == core.sha(core.canonical(event.get("tool_input"))),
             "REQUEST_CONFLICT",
         )
+        # Decode target absence explicitly so a completed unknown outcome cannot gain authority.
+        target = None
         # Only new native-contract receipts accept UUID targets; old unknown work stays unknown.
         if event.get("tool_name") == "spawn_agent":
             # Native success supplies a canonical UUID control address, never write ownership.
@@ -759,19 +761,22 @@ def parent_post(event: core.JSONObject) -> None:
                 except (ValueError, AttributeError):
                     valid = False
                 core.require(valid, "HOST_UNSUPPORTED_CHILD_IDENTITY")
-                core.require(launch.get("target", target) == target, "REQUEST_CONFLICT")
-                launch["target"] = target
         # Legacy completion must preserve the admitted task name and any prior target.
         elif isinstance(response, dict) and isinstance(response.get("task_name"), str):
             target = response["task_name"]
             core.require(target.rsplit("/", 1)[-1] == launch["task_name"], "BINDING_CONFLICT")
-            core.require(launch.get("target", target) == target, "REQUEST_CONFLICT")
-            launch["target"] = target
-        # A returned control target proves an address, not whether a child started.
-        # Empty/error responses have no proven no-child semantics and retain capacity.
-        launch["outcome"] = "target_observed" if "target" in launch else "unknown"
-        launch["completed"] = True
-        bindings.put(name, state)
+        # Freeze target absence as well as its value before any receipt or core mutation.
+        if launch.get("completed") or "target" in launch:
+            core.require(launch.get("target") == target, "REQUEST_CONFLICT")
+        # Persist the first terminal observation before settlement; exact retries still settle
+        # core work if an earlier completion stopped after this registry write.
+        if not launch.get("completed"):
+            if target is not None:
+                launch["target"] = target
+            # A control address does not prove a child started; unknown outcomes retain capacity.
+            launch["outcome"] = "target_observed" if target is not None else "unknown"
+            launch["completed"] = True
+            bindings.put(name, state)
     # Pending work belongs to this exact parent call; native child work has a different key.
     result = core.execute(
         {
