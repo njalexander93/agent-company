@@ -63,7 +63,7 @@ substitutions and unrelated commands are not bootstrap exceptions.
 
 An adapter denial starts with `TASK_WORKSPACE_NOT_READY: <code>` and names the
 admitted next operation for that code. `TICKET_READ_REQUIRED` names the exact
-ticket read and, on Claude Code, the preparation reads. `BINDING_MISSING` names
+ticket read and the host-specific preparation reads. `BINDING_MISSING` names
 the `Task:` line and ticket read. `NOT_READY`, which a coordinator sees after
 its own committed roadmap update, names `read`, `acknowledge` with the returned
 `packet_digest`, then `ready`. `SOURCE_STALE` gives the coordinator route (an
@@ -297,7 +297,7 @@ intent. It never recursively removes the task root.
 
 ### Host limitations
 
-Follow the [host guide](host-hooks.md) for native configuration, event coverage and trust. Direct adapter subprocess tests do not prove that an installed host loaded the candidate or invoked its callbacks. Child identity, async association and provider observations must be demonstrated on the actual supported path; otherwise retain explicit denial or uncertainty. The Claude subagent child route is covered by synthetic protocol tests and one observed local macOS Desktop session (native `SubagentStart`/`SubagentStop` delivery and the subagent's `agent_id` on tool events, recorded in the host guide); other hosts and platforms remain unverified.
+Follow the [host guide](host-hooks.md) for native configuration, event coverage and trust. Direct adapter subprocess tests do not prove that an installed host loaded the candidate or invoked its callbacks. Child identity, async association and provider observations must be demonstrated on the actual supported path; otherwise retain explicit denial or uncertainty. The Claude subagent child route is covered by synthetic protocol tests and one observed local macOS Desktop session (native `SubagentStart`/`SubagentStop` delivery and the subagent's `agent_id` on tool events, recorded in the host guide); Codex has a separate [native child route](host-hooks.md#codex-native-child-route-restricted) with local development evidence and explicit remaining acceptance limits. Other platforms remain unverified.
 
 Filesystem support and host support are separate checks. Windows uses a native
 NTFS implementation; Linux and macOS use the POSIX implementation. A filesystem
@@ -312,10 +312,14 @@ needs registration, resume, scope repair or acknowledgment. No readiness is gran
 ordinary PreToolUse calls remain denied, and the existing exact bootstrap and
 provider exceptions still apply.
 
-Codex PostToolUse settles pending work only from typed completion evidence: an integer
-exit code, a boolean MCP/local-tool `isError` result, or a shell error without an
-async handle. Null/string metadata does not establish completion; a successful
-shell wrapper with an async handle remains pending. A final response may retain
+Codex's observed native `Bash` and `apply_patch` final text, `webrun` content lists,
+MCP content objects and supported collaboration controls settle their exact native
+call IDs; output is not transport metadata and does not prove command success.
+See the [observed completion contract](host-hooks.md#observed-codex-completion-contract).
+Legacy transport results still require typed completion evidence: an integer exit
+code, a boolean error flag, or a shell error without an async handle. Unknown
+transport metadata does not establish completion; a successful shell wrapper with
+an async handle remains pending. A final response may retain
 its session handle: completion then takes precedence only after handle validation.
 `write_stdin` observations associate through a unique handle within the same
 participant. Missing, malformed, conflicting or ambiguous associations retain work. If the host

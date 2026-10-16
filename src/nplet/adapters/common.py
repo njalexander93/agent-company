@@ -515,12 +515,40 @@ def preparation_tool(event: core.JSONObject, host: str) -> bool:
 
     Args:
         event: Identity-validated native tool event.
-        host: Native adapter identity; only Claude Code has a preparation phase.
+        host: Native adapter identity; Codex supports exact governing shell reads.
 
     Returns:
         True for a schema load of configured ``get_issue`` tools, or a read of
         ``docs/runtime/contributor-workflow.md`` or ``AGENTS.md`` in this checkout.
     """
+    # Codex exposes command-only native Bash input; admit exact governing reads only.
+    if host == "codex":
+        args = event.get("tool_input")
+        if (
+            event.get("tool_name") != "Bash"
+            or not isinstance(args, dict)
+            or set(args) != {"command"}
+        ):
+            return False
+        command = args["command"]
+        if not isinstance(command, str) or any(c in command for c in "\r\n\0"):
+            return False
+        # Require canonical literal quoting, excluding redirects, expansion and chaining.
+        try:
+            argv = shlex.split(command)
+            if len(argv) == 3 and argv[:2] == ["cat", "--"]:
+                path = argv[2]
+                return command == "cat -- " + shlex.quote(path) and _preparation_path(
+                    event, path, exact=True
+                )
+            if len(argv) == 2 and argv[0] == "cat":
+                path = argv[1]
+                return command == "cat " + shlex.quote(path) and _preparation_path(
+                    event, path, exact=True
+                )
+        except (ValueError, OSError, core.WorkspaceError):
+            return False
+        return False
     # Cursor's ticket-first route is unchanged.
     if host != "claude-code":
         return False
@@ -1720,14 +1748,20 @@ def _recovery_route(code: str, host: str) -> str:
     """
     # Name the canonical command formatter once for every lifecycle route.
     command = "the exact lifecycle command from adapters.common.bootstrap_command"
-    # The ticket-first gate admits the exact read plus Claude's preparation reads.
+    # Ticket preparation is host-specific and never consumes the required provider read.
     if code == "TICKET_READ_REQUIRED":
         preparation = (
             " Before it, only ToolSearch selecting that get_issue tool and Read or a plain "
             "`cat` of <checkout>/docs/runtime/contributor-workflow.md or <checkout>/AGENTS.md "
             "are admitted."
             if host == "claude-code"
-            else ""
+            else (
+                " Exact command-only Bash reads of AGENTS.md and "
+                "docs/runtime/contributor-workflow.md, and canonical read-only diagnose, "
+                "are admitted without clearing the ticket requirement."
+                if host == "codex"
+                else ""
+            )
         )
         return (
             "Next admitted operation: the configured Linear get_issue call with exactly "
@@ -1746,6 +1780,14 @@ def _recovery_route(code: str, host: str) -> str:
             "Acknowledgment is missing or outdated for the current packet (for example after "
             "your own committed roadmap update): run read, then acknowledge the returned "
             f"packet_digest, then ready, using {command}."
+        )
+    # A child's acknowledgment requires correlated delivery of every current source.
+    if code == "SOURCE_DELIVERY_REQUIRED":
+        return (
+            "Run the exact `cat -- <absolute source path>` command through command-only "
+            "Bash for each undelivered or mismatched source in the current packet, with "
+            "the absolute path shell-quoted as required. Wait for matching source-byte "
+            "completion, then acknowledge the current packet_digest, then ready."
         )
     # Coordinators and readers refresh a stale packet through different owners.
     if code == "SOURCE_STALE":
@@ -1850,6 +1892,13 @@ def _recovery_route(code: str, host: str) -> str:
         )
     # Unsupported tools need a different tool, not lifecycle recovery.
     if code == "HOST_UNSUPPORTED_TOOL":
+        # Codex children have a narrower command-only route than Cursor file tools.
+        if host == "codex":
+            return (
+                "No lifecycle operation admits this tool. A Codex child may use only "
+                "command-only Bash for its own canonical lifecycle commands or exact "
+                "packet-source cat reads."
+            )
         tools = (
             "Read, Write, Edit, Glob, Grep, NotebookEdit, foreground Bash, ToolSearch, Skill, "
             "SendMessage or AskUserQuestion (a subagent also has SubagentHandback)"
@@ -1857,6 +1906,15 @@ def _recovery_route(code: str, host: str) -> str:
             else "Read, Write, Edit, Grep, Delete or foreground Shell"
         )
         return f"No lifecycle operation admits this tool. Use one of the correlated tools: {tools}."
+    # Exhausted native cohorts retain unknown launches instead of recycling authority.
+    if code == "HOST_CHILD_CAPACITY_EXHAUSTED":
+        return (
+            "This parent binding has reached its 32-launch lifetime limit. Unknown or failed "
+            "attempts retain their slots because no native no-child outcome was verified. "
+            "Do not reset the registry or retry another launch in this binding. A fresh "
+            "parent must join under its own identity and receive an explicit coordinator "
+            "handoff after pending work is resolved; retain unresolved old activity."
+        )
     # Child work requires its own verified identity, never the parent binding.
     if code == "HOST_UNSUPPORTED_CHILD_IDENTITY":
         # Claude's only child route is a ready parent's foreground, non-isolated Agent call.

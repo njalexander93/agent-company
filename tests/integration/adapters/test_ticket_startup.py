@@ -149,6 +149,159 @@ def test_ticket_read_precedes_workspace_and_automatically_establishes_readiness(
     assert (root / ".task" / "TEST-1" / "roadmap.md").exists()
 
 
+@pytest.mark.parametrize(
+    "tool_name", ["mcp__codex_apps__linear__get_issue", "mcp__codex_apps__linear_get_issue"]
+)
+def test_native_ticket_name_preserves_exact_startup_correlation(
+    tmp_path: Path, tool_name: str
+) -> None:
+    """Admit supported names without weakening issue, argument, or callback identity.
+
+    Args:
+        tmp_path: Disposable repository and persistent binding store.
+        tool_name: Captured native spelling or deliberately retained legacy spelling.
+    """
+    # Record a real task assignment before any registration or provider operation.
+    root = repository(tmp_path)
+    codex.handle(event(root, "UserPromptSubmit", prompt="Task: TEST-1"))
+    fields = {"tool_name": tool_name, "tool_input": {"id": "TEST-1"}, "tool_use_id": "native-1"}
+    # Wrong issues and broadened queries must not reserve a lookup.
+    for arguments in ({"id": "OTHER-2"}, {"id": "TEST-1", "includeRelations": True}):
+        rejected = codex.handle(event(root, "PreToolUse", **{**fields, "tool_input": arguments}))
+        assert "BINDING_CONFLICT" in str(rejected)
+    assert codex.handle(event(root, "PreToolUse", **fields)) == {}
+    # A foreign completion must leave the actual reserved lookup and task gate intact.
+    rejected = codex.handle(
+        event(
+            root,
+            "PostToolUse",
+            tool_response=ticket_response(),
+            **{**fields, "tool_use_id": "foreign"},
+        )
+    )
+    assert "BINDING_CONFLICT" in str(rejected)
+    assert not (root / ".task" / "TEST-1").exists()
+    # Only the correlated provider result establishes readiness and creates task sources.
+    completed = codex.handle(event(root, "PostToolUse", tool_response=ticket_response(), **fields))
+    assert "TASK_WORKSPACE_READY" in completed["systemMessage"]
+    assert (root / ".task" / "TEST-1" / "roadmap.md").exists()
+
+
+@pytest.mark.parametrize("flag", ["absent", True, None, "false", 0])
+def test_native_ticket_completion_handles_optional_error_flag(tmp_path: Path, flag: object) -> None:
+    """Only an omitted native error flag can use successful issue-payload validation.
+
+    Args:
+        tmp_path: Disposable repository and persistent binding store.
+        flag: Omitted, explicit error, or malformed native MCP error indicator.
+    """
+    # Reserve the exact captured native connector call against the assignment.
+    root = repository(tmp_path)
+    codex.handle(event(root, "UserPromptSubmit", prompt="Task: TEST-1"))
+    fields = {
+        "tool_name": "mcp__codex_apps__linear__get_issue",
+        "tool_input": {"id": "TEST-1"},
+        "tool_use_id": "native-1",
+    }
+    assert codex.handle(event(root, "PreToolUse", **fields)) == {}
+    # Vary only the optional transport flag, keeping the real issue payload fixed.
+    response = ticket_response()
+    response.pop("isError")
+    if flag != "absent":
+        response["isError"] = flag
+    result = codex.handle(event(root, "PostToolUse", tool_response=response, **fields))
+    # Explicit errors and invalid flags cannot create an issue workspace.
+    if flag == "absent":
+        assert "TASK_WORKSPACE_READY" in result["systemMessage"]
+    else:
+        assert "TASK_WORKSPACE_NOT_READY" in result["systemMessage"]
+        assert not (root / ".task" / "TEST-1").exists()
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        [],
+        [{"type": "text", "text": "invalid JSON"}],
+        [{"type": "text", "text": '{"id":"OTHER-2"}'}],
+        [{"type": "image", "text": "{}"}],
+        [{"type": "text", "text": "{}"}, {"type": "text", "text": "{}"}],
+    ],
+)
+def test_native_missing_error_flag_does_not_validate_bad_issue_payload(
+    tmp_path: Path, content: object
+) -> None:
+    """Transport normalization cannot make malformed or foreign issue content ready.
+
+    Args:
+        tmp_path: Disposable repository and persistent binding store.
+        content: Malformed or mismatched provider content blocks.
+    """
+    # Reserve the observed native issue tool against a real assignment marker.
+    root = repository(tmp_path)
+    codex.handle(event(root, "UserPromptSubmit", prompt="Task: TEST-1"))
+    fields = {
+        "tool_name": "mcp__codex_apps__linear__get_issue",
+        "tool_input": {"id": "TEST-1"},
+        "tool_use_id": "native-1",
+    }
+    assert codex.handle(event(root, "PreToolUse", **fields)) == {}
+    # Reject the content without creating issue state or consuming the ticket requirement.
+    result = codex.handle(event(root, "PostToolUse", tool_response={"content": content}, **fields))
+    assert "TASK_WORKSPACE_NOT_READY" in result["systemMessage"]
+    assert not (root / ".task" / "TEST-1").exists()
+    assert "TICKET_READ_REQUIRED" in str(codex.handle(event(root, "PreToolUse", tool_name="Read")))
+
+
+def test_pending_ticket_allows_only_scoped_read_only_diagnosis(tmp_path: Path) -> None:
+    """Diagnostic admission leaves the ticket gate intact and rejects mutations.
+
+    Args:
+        tmp_path: Disposable repository and persistent binding store.
+    """
+    # Establish the pending ticket marker and snapshot its durable assignment bytes.
+    root = repository(tmp_path)
+    codex.handle(event(root, "UserPromptSubmit", prompt="Task: TEST-1"))
+    bindings = root / ".task" / ".bindings"
+    before = {path.name: path.read_bytes() for path in bindings.glob("*.json")}
+    request = {
+        "schema_version": 1,
+        "operation": "diagnose",
+        "request_id": "diagnose-startup",
+        "worktree": str(root),
+        "host": "codex",
+        "session_id": "master",
+    }
+    # Admit the exact read-only pre-registration diagnostic shell command.
+    command = common.bootstrap_command(request, "codex")
+    diagnostic = event(
+        root,
+        "PreToolUse",
+        tool_name="Bash",
+        tool_input={"command": command},
+        tool_use_id="diagnostic-1",
+    )
+    assert codex.handle(diagnostic) == {}
+    assert core.execute(request) == {"ok": True, "code": "REGISTRATION_REQUIRED"}
+    assert codex.handle({**diagnostic, "hook_event_name": "PostToolUse"}) == {}
+    # Reject mutations, foreign identities, extra fields, and appended shell commands.
+    for changed in (
+        {"operation": "register"},
+        {"session_id": "other"},
+        {"issue_id": "OTHER-2", "repo_id": "fake"},
+        {"tool_id": "extra"},
+    ):
+        bad_command = common.bootstrap_command({**request, **changed}, "codex")
+        rejected = codex.handle({**diagnostic, "tool_input": {"command": bad_command}})
+        assert "TICKET_READ_REQUIRED" in str(rejected)
+    rejected = codex.handle({**diagnostic, "tool_input": {"command": command + " && pwd"}})
+    assert "TICKET_READ_REQUIRED" in str(rejected)
+    # Admission performs no bootstrap mutations or marker consumption.
+    assert {path.name: path.read_bytes() for path in bindings.glob("*.json")} == before
+    assert not (root / ".task" / "TEST-1").exists()
+    assert "TICKET_READ_REQUIRED" in str(codex.handle(event(root, "PreToolUse", tool_name="Read")))
+
+
 def lookup(root: Path, session: str, response: object) -> dict[str, object]:
     """Run one exact direct lookup and matching completion callback.
 

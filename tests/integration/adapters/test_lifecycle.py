@@ -6,6 +6,7 @@ provider acceptance, human approval or adversarial runtime isolation.
 
 import json
 import os
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -20,6 +21,91 @@ pytestmark = pytest.mark.integration
 
 class LifecycleTests(Fixture):
     """Exercise local lifecycle, containment and adapter contracts in disposable stores."""
+
+    def test_legacy_bash_async_completion_retains_work_until_correlated_poll(self) -> None:
+        """Retain a legacy wrapper's live handle until its matching terminal poll.
+
+        Raises:
+            AssertionError: A wrapper return prematurely settles pending process work.
+        """
+        # Admit the legacy shell wrapper in a real ready store.
+        self.create()
+        self.ready()
+        event = {
+            "hook_event_name": "PreToolUse",
+            "cwd": str(self.root),
+            "session_id": "coordinator",
+            "tool_name": "Bash",
+            "tool_input": {"command": "sleep 100 &", "login": False, "shell": "/bin/sh"},
+            "tool_use_id": "legacy-shell",
+        }
+        self.assertEqual(hook.handle(event), {})
+        # A wrapper return containing a live handle is not process completion.
+        callback = {
+            **event,
+            "hook_event_name": "PostToolUse",
+            "tool_response": '{"session_id":"shell-7","exit_code":null}',
+        }
+        self.assertEqual(hook.handle(callback), {})
+        self.assertEqual(hook.handle(callback), {})
+        pending = self.state()["participants"][self.base["coordinator"]]["pending"]
+        self.assertIn("legacy-shell", pending)
+        self.assertEqual(pending["legacy-shell"]["handle"], "shell-7")
+        # A terminal poll may settle only the original operation with its known handle.
+        poll = {
+            **event,
+            "tool_name": "write_stdin",
+            "tool_use_id": "legacy-poll",
+            "tool_input": {"session_id": "shell-7"},
+        }
+        self.assertEqual(hook.handle(poll), {})
+        self.assertEqual(
+            hook.handle(
+                {
+                    **poll,
+                    "hook_event_name": "PostToolUse",
+                    "tool_response": '{"exit_code":0}',
+                }
+            ),
+            {},
+        )
+        pending = self.state()["participants"][self.base["coordinator"]]["pending"]
+        self.assertNotIn("legacy-shell", pending)
+
+    def test_native_bash_completion_preserves_other_pending_calls(self) -> None:
+        """Settle only correlated final callbacks, regardless of stdout contents.
+
+        Raises:
+            AssertionError: Completion clears unrelated work or treats stdout as a handle.
+        """
+        # Admit two real operations in the disposable coordinator's ready scope.
+        self.create()
+        self.ready()
+        event = {
+            "hook_event_name": "PreToolUse",
+            "cwd": str(self.root),
+            "session_id": "coordinator",
+            "tool_name": "Bash",
+            "tool_input": {"command": "true"},
+        }
+        for tool_id in ("finished", "running"):
+            self.assertEqual(hook.handle({**event, "tool_use_id": tool_id}), {})
+        # A final callback contains arbitrary stdout, never authoritative transport fields.
+        completed = {
+            **event,
+            "hook_event_name": "PostToolUse",
+            "tool_use_id": "finished",
+            "tool_response": '{"session_id":77}',
+        }
+        self.assertEqual(hook.handle(completed), {})
+        self.assertEqual(hook.handle(completed), {})
+        pending = self.state()["participants"][self.base["coordinator"]]["pending"]
+        self.assertNotIn("finished", pending)
+        self.assertIn("running", pending)
+        # A callback for an unadmitted call cannot settle the remaining operation.
+        hook.handle({**completed, "tool_use_id": "unrelated"})
+        pending = self.state()["participants"][self.base["coordinator"]]["pending"]
+        self.assertIn("running", pending)
 
     def test_T14_real_adapter_bootstrap_argument_gate(self) -> None:
         """Check exact bootstrap admission and subprocess denial of shell variants.
@@ -59,6 +145,10 @@ class LifecycleTests(Fixture):
             },
         )
         self.assertEqual(hook.handle(event), {})
+        # Native Codex strips transport options; exact command verification still applies.
+        native = {**event, "tool_input": {"command": command}}
+        self.assertEqual(hook.handle(native), {})
+        self.assertFalse(hook.bootstrap({**native, "tool_input": {"command": command + "; true"}}))
         shell = (
             ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command]
             if os.name == "nt"
@@ -89,3 +179,68 @@ class LifecycleTests(Fixture):
         self.assertEqual(
             json.loads(denied.stdout)["hookSpecificOutput"]["permissionDecision"], "deny"
         )
+
+    def test_native_preparation_preserves_ticket_gate_and_denies_shell_variants(self) -> None:
+        """Allow exact governing reads without admitting ordinary work or losing lookup state.
+
+        Raises:
+            AssertionError: Preparation changes readiness or a broader shell command passes.
+        """
+        # Start a fresh ticket lookup with no ready participant.
+        event = {"cwd": str(self.root), "session_id": "coordinator", "prompt": "Task: TEST-1"}
+        common.prompt(event, "codex")
+        event.update(hook_event_name="PreToolUse", tool_name="Bash", tool_use_id="prepare")
+        # Both governing paths remain read-only preparation across pre/post callbacks.
+        for relative in ("AGENTS.md", "docs/runtime/contributor-workflow.md"):
+            command = "cat -- " + shlex.quote(str(self.root / relative))
+            event["tool_input"] = {"command": command}
+            assert hook.handle(event) == {}
+            assert (
+                hook.handle({**event, "hook_event_name": "PostToolUse", "tool_response": "text"})
+                == {}
+            )
+            assert hook.startup_lookup_state(event, ".lookup-required.json")
+        # Shell composition, redirected paths and ordinary tools cannot use the exception.
+        for command in (
+            "cat " + str(self.root / "pyproject.toml"),
+            "cat -- " + str(self.root / "AGENTS.md") + "; true",
+            "cat -- " + str(self.root / "AGENTS.md") + " > copied",
+            "pwd",
+        ):
+            event["tool_input"] = {"command": command}
+            assert hook.handle(event) == hook.denial("TICKET_READ_REQUIRED")
+        assert hook.startup_lookup_state(event, ".lookup-required.json")
+
+    def test_native_mcp_content_completion_does_not_require_optional_error_flag(self) -> None:
+        """Settle an observed MCP content result without treating its text as transport state.
+
+        Raises:
+            AssertionError: Valid native completion remains pending or settles another call.
+        """
+        # Admit the same native documentation-tool shape seen in installed callbacks.
+        self.create()
+        self.ready()
+        event = {
+            "cwd": str(self.root),
+            "session_id": "coordinator",
+            "hook_event_name": "PreToolUse",
+            "tool_name": "mcp__openaiDeveloperDocs__fetch_openai_doc",
+            "tool_input": {"url": "https://developers.openai.com/codex/"},
+            "tool_use_id": "docs-result",
+        }
+        assert hook.handle(event) == {}
+        self.call("tool-start", tool_id="unrelated")
+        # MCP success may omit isError; its content is output, not an asynchronous handle.
+        assert (
+            hook.handle(
+                {
+                    **event,
+                    "hook_event_name": "PostToolUse",
+                    "tool_response": {"content": [{"type": "text", "text": '{"session_id":123}'}]},
+                }
+            )
+            == {}
+        )
+        pending = self.state()["participants"][self.base["coordinator"]]["pending"]
+        assert "docs-result" not in pending
+        assert "unrelated" in pending

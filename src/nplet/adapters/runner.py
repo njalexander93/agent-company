@@ -66,6 +66,8 @@ def run(
     # This daemon only reads bytes. All lifecycle mutation happens in the child process.
     threading.Thread(target=read_input, daemon=True).start()
     name = ""
+    event: core.JSONObject = {}
+    module = ""
     # Validate the host event before starting a mutation worker.
     try:
         # Wait only until the shared deadline for the daemon's input result.
@@ -128,6 +130,14 @@ def run(
         result = failure(name, code)
         status = error_status
         print("TASK_WORKSPACE_NOT_READY: " + code, file=sys.stderr)
+    # Observe completed Codex decisions only; diagnostic failures cannot alter the result.
+    if module == "codex":
+        try:
+            from nplet.adapters import hook_capture
+
+            hook_capture.capture(event, result, status)
+        except Exception:
+            pass  # Optional diagnostics never grant or replace lifecycle authority.
     print(json.dumps(result, separators=(",", ":")))
     return status
 
