@@ -276,24 +276,32 @@ def test_provider_exact_contracts() -> None:
 
 
 @pytest.mark.parametrize(
-    "family,args,cwd",
+    "family,args,cwd,code",
     [
-        ("provider", {"provider": [], "operation": "get"}, "/checkout"),
-        ("provider", {"provider": "other", "operation": "read", "read_only": True}, "/checkout"),
-        ("unknown", {"read_only": True}, "/checkout"),
-        ("read", {}, "relative"),
-        ("shell", {}, "/checkout"),
+        ("provider", {"provider": [], "operation": "get"}, str(ROOT), "UNKNOWN_PROVIDER_CONTRACT"),
+        (
+            "provider",
+            {"provider": "other", "operation": "read", "read_only": True},
+            str(ROOT),
+            "UNKNOWN_PROVIDER_CONTRACT",
+        ),
+        ("unknown", {"read_only": True}, str(ROOT), "UNKNOWN_OPERATION_EFFECT"),
+        ("read", {}, "relative", "MALFORMED_OPERATION"),
+        ("shell", {}, str(ROOT), "UNKNOWN_SHELL_EFFECT"),
     ],
 )
-def test_unknown_envelopes(family: str, args: dict[str, object], cwd: str) -> None:
+def test_unknown_envelopes(family: str, args: dict[str, object], cwd: str, code: str) -> None:
     """Unknown identities, user safety labels and malformed envelopes confer no exemption.
 
     Args:
         family: Adapter-derived operation family under test.
         args: Untrusted normalized argument payload under test.
         cwd: Native working directory supplied by this case.
+        code: Exact diagnostic for the intended validation or effect-policy branch.
     """
+    # Native absolute cases must reach their policy branch on every supported platform.
     result = classify(Operation(family, args, cwd), POLICY)
+    assert result.code == code
     assert result.requires_task
     assert result.guidance
 
