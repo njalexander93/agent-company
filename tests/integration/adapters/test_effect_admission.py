@@ -470,7 +470,10 @@ def test_codex_stale_packet_allows_inspection_but_denies_implementation() -> Non
     try:
         case.create()
         source = case.root / "AGENTS.md"
-        source.write_text("original instructions", encoding="utf-8")
+        # Use the native source writer so Windows reads retain the required private ACL.
+        with core.Directory.absolute(case.root) as checkout:
+            checkout.write("AGENTS.md", b"original instructions")
+        assert core.external_source(str(source)) == b"original instructions"
         key = core.participant_key(case.base)
         packet = [
             {
@@ -493,7 +496,9 @@ def test_codex_stale_packet_allows_inspection_but_denies_implementation() -> Non
         read = case.call("read")
         case.call("acknowledge", packet_digest=read["packet_digest"])
         # Changing actual governing bytes invalidates protected admission without blocking research.
-        source.write_text("changed instructions", encoding="utf-8")
+        with core.Directory.absolute(case.root) as checkout:
+            checkout.write("AGENTS.md", b"changed instructions")
+        assert core.external_source(str(source)) == b"changed instructions"
         before = case.state()
         assert (
             dispatch("codex", event("codex", case.root, "Read", {"file_path": str(source)})) == {}

@@ -181,8 +181,21 @@ def test_preparation_reads_precede_ticket_without_lifecycle_effect(
         for tool, args in admitted:
             fields: dict[str, object] = {"tool_name": tool, "tool_input": args}
             assert claude.handle(native_event("claude", case, "PreToolUse", **fields)) == {}
-            completed = native_event("claude", case, "PostToolUse", tool_response="ok", **fields)
+            # Keep native Windows literal paths in the regression and supply valid
+            # foreground Bash completion facts instead of the old untyped fixture string.
+            output: object = (
+                {"stdout": "governing source", "stderr": "", "interrupted": False}
+                if tool == "Bash"
+                else "ok"
+            )
+            completed = native_event("claude", case, "PostToolUse", tool_response=output, **fields)
+            before_completion = {
+                path.name: path.read_bytes() for path in marker.parent.glob("*.json")
+            }
             assert claude.handle(completed) == {}
+            assert {
+                path.name: path.read_bytes() for path in marker.parent.glob("*.json")
+            } == before_completion
         # Task-free reads and schema loading stay available during the ticket transition.
         free = [
             ("Read", {"file_path": str(case.root / "README.md")}),

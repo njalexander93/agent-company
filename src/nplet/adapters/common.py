@@ -1668,6 +1668,10 @@ def effect_decision(event: core.JSONObject, host: str) -> effects.Decision:
                     family = "unknown"
                 else:
                     event = {**event, "cwd": override}
+            # The existing exact governing-read contract also owns completion classification.
+            # It recognizes literal native Windows paths without widening general shell grammar.
+            if tool == "Bash" and preparation_tool(event, host):
+                family = "read"
         # Provider identity comes from a qualified native name or verified server metadata.
         if isinstance(tool, str) and (tool.startswith(("mcp__", "MCP:"))):
             family = "provider"

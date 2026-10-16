@@ -937,3 +937,122 @@ def test_codex_post_pending_lookup_error_remains_advisory(
         }
     )
     assert result == {"systemMessage": "TASK_WORKSPACE_NOT_READY: " + code}
+
+
+@pytest.mark.parametrize("host", ["codex", "claude-code"])
+@pytest.mark.parametrize("pending_ticket", [False, True])
+def test_exact_native_windows_preparation_read_has_consistent_pre_post_effect(
+    native: JsonObject, monkeypatch: pytest.MonkeyPatch, host: str, pending_ticket: bool
+) -> None:
+    """Honor the existing literal governing-read contract across admission and completion.
+
+    Args:
+        native: Complete native identity with isolated repository discovery.
+        monkeypatch: Model only the native path boundary and absent tracked admission.
+        host: Adapter whose existing preparation contract accepts literal Bash reads.
+        pending_ticket: Whether the selected-ticket transition remains outstanding.
+    """
+    import shlex
+
+    from nplet.adapters import claude, codex
+
+    # Model Windows path identity without replacing the shared preparation parser or policy.
+    path = r"C:\checkout\AGENTS.md"
+    monkeypatch.setattr(
+        common, "_preparation_path", lambda _event, value, exact=False: exact and value == path
+    )
+    monkeypatch.setenv("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS", "1")
+    monkeypatch.setattr(common, "lookup_required", lambda *_args: pending_ticket)
+    monkeypatch.setattr(common, "ticket_callback", lambda *_args: False)
+    monkeypatch.setattr(common, "pending_tool", lambda *_args: False)
+    monkeypatch.setattr(codex, "startup_lookup_state", lambda *_args: pending_ticket)
+    monkeypatch.setattr(codex, "bootstrap", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(codex, "provider_gate", lambda *_args: False)
+    monkeypatch.setattr(
+        core, "execute", lambda _request: pytest.fail("untracked governing read used lifecycle")
+    )
+    value = {
+        **native,
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": "cat " + shlex.quote(path)},
+    }
+    assert common.preparation_tool(value, host) is True
+    assert common.effect_decision(value, host).effect == "read"
+    adapter = codex if host == "codex" else claude
+    assert adapter.handle(value) == {}
+    # Valid native completion remains untracked instead of requiring a binding after the fact.
+    completed = {
+        **value,
+        "hook_event_name": "PostToolUse",
+        "tool_response": {"stdout": "source", "stderr": "", "interrupted": False},
+    }
+    assert adapter.handle(completed) == {}
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        r"cat 'C:\checkout\other.md'",
+        r"cat 'C:\checkout\AGENTS.md' && python mutate.py",
+        r"cat 'C:\checkout\AGENTS.md' > output.txt",
+    ],
+)
+def test_preparation_normalization_does_not_exempt_unknown_windows_shell(
+    native: JsonObject, monkeypatch: pytest.MonkeyPatch, command: str
+) -> None:
+    """Keep non-governing targets and composition outside the literal preparation contract.
+
+    Args:
+        native: Complete native identity with isolated repository discovery.
+        monkeypatch: Model only exact Windows governing-path identity.
+        command: Unsupported Windows-spelled shell input.
+    """
+    # Exact path admission does not widen the general shell grammar or composed execution.
+    monkeypatch.setattr(
+        common,
+        "_preparation_path",
+        lambda _event, value, exact=False: exact and value == r"C:\checkout\AGENTS.md",
+    )
+    value = {**native, "tool_name": "Bash", "tool_input": {"command": command}}
+    assert common.preparation_tool(value, "claude-code") is False
+    assert common.effect_decision(value, "claude-code").requires_task is True
+
+
+def test_recorded_native_admission_precedes_preparation_read_classification(
+    native: JsonObject, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Retain exact existing work even when completion now matches a trusted governing read.
+
+    Args:
+        native: Complete native identity with isolated repository discovery.
+        monkeypatch: Isolate existing admission and record the actual completion operation.
+    """
+    import shlex
+
+    # A real recorded operation still settles through the existing native completion contract.
+    monkeypatch.setenv("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS", "1")
+    monkeypatch.setattr(common, "pending_tool", lambda *_args: True)
+    monkeypatch.setattr(
+        common,
+        "_preparation_path",
+        lambda _event, value, exact=False: exact and value == r"C:\checkout\AGENTS.md",
+    )
+    monkeypatch.setattr(
+        common, "request_for", lambda _event, operation, _host: {"operation": operation}
+    )
+    observed: list[JsonObject] = []
+    monkeypatch.setattr(
+        core, "execute", lambda request: observed.append(request) or {"ok": True, "code": "OK"}
+    )
+    value = {
+        **native,
+        "tool_name": "Bash",
+        "tool_input": {"command": "cat " + shlex.quote(r"C:\checkout\AGENTS.md")},
+        "tool_response": {"stdout": "source", "stderr": "", "interrupted": False},
+    }
+    common.native_post(value, "claude-code", failed=False)
+    assert len(observed) == 1
+    assert observed[0]["operation"] == "tool-complete"
+    assert observed[0]["tool_id"] == "native-call"
+    assert observed[0]["completed"] is True
