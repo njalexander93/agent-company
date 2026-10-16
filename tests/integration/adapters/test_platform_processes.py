@@ -1,5 +1,6 @@
 """Exercise real native-shell transports and bounded hook workers in disposable copies."""
 
+import inspect
 import json
 import os
 import shutil
@@ -9,14 +10,95 @@ import time
 from pathlib import Path
 
 import pytest
+from coverage import Coverage
 
-from nplet.adapters import common
+from nplet.adapters import common, runner
 from tests.platform_support import environment_python, link_directory, shell_command
 from tests.support import ROOT
 
 pytestmark = pytest.mark.integration
 
 HOSTS = [("codex", "PreToolUse", 0), ("claude", "PreToolUse", 2), ("cursor", "preToolUse", 2)]
+
+
+def mutated_source_environment(source: Path) -> dict[str, str]:
+    """Isolate mutated fixture code from the production coverage collector.
+
+    Args:
+        source: Copied source tree containing an injected fault handler.
+
+    Returns:
+        Inherited process environment without coverage's two child-startup requests.
+    """
+    # Mutated copies are behavioral fixtures, not evidence for the submitted source bytes.
+    environment = {**os.environ, "PYTHONPATH": str(source)}
+    environment.pop("COVERAGE_PROCESS_CONFIG", None)
+    environment.pop("COVERAGE_PROCESS_START", None)
+    return environment
+
+
+@pytest.mark.parametrize("fault", ["oversized", "exception"])
+def test_mutated_fixture_does_not_pollute_production_coverage(tmp_path: Path, fault: str) -> None:
+    """Keep copied fault-injection code out of real subprocess coverage evidence.
+
+    Args:
+        tmp_path: Disposable coverage configuration, database and copied fixture.
+        fault: Existing process scenario whose mutated source must remain unmeasured.
+
+    Raises:
+        AssertionError: The fault scenario fails or copied source enters production evidence.
+    """
+    # Start a separate collector so this test cannot alter the suite's coverage session.
+    config = tmp_path / "coverage.toml"
+    database = tmp_path / ".coverage"
+    config.write_text(
+        "[tool.coverage.run]\nbranch = true\nparallel = true\n"
+        'relative_files = true\nsource = ["nplet"]\npatch = ["subprocess"]\n',
+        encoding="utf-8",
+    )
+    fixture = tmp_path / "mutated"
+    fixture.mkdir()
+    environment = {**os.environ, "COVERAGE_FILE": str(database)}
+    environment.pop("COVERAGE_PROCESS_CONFIG", None)
+    environment["COVERAGE_PROCESS_START"] = str(config)
+    environment["PYTHONPATH"] = os.pathsep.join((str(ROOT), str(ROOT / "src")))
+    # Run the actual fault fixture, then a genuine production child as a positive control.
+    program = (
+        "import subprocess, sys\nfrom pathlib import Path\n"
+        "from tests.integration.adapters import test_platform_processes as cases\n"
+        "fixture = Path(sys.argv[1])\n"
+        "if sys.argv[2] == 'oversized':\n"
+        "    cases.test_supervisor_rejects_oversized_worker_output(fixture)\n"
+        "else:\n"
+        "    cases.test_supervisor_reaps_worker_and_preserves_failure_contract(\n"
+        "        'codex', 'PreToolUse', 0, 'exception', fixture)\n"
+        "result = subprocess.run([sys.executable, '-m', 'nplet.adapters.runner'])\n"
+        "assert result.returncode == 2\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", program, str(fixture), fault],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    # Inspect the raw combined database, without deleting or remapping foreign sources.
+    coverage = Coverage(data_file=str(database), config_file=False)
+    coverage.combine(strict=True)
+    data = coverage.get_data()
+    try:
+        measured = {name.replace("\\", "/"): name for name in data.measured_files()}
+        assert measured
+        assert all(name.startswith("src/nplet/") for name in measured), sorted(measured)
+        # Import-only arcs cannot satisfy the positive control: main runs only in the child.
+        lines, start = inspect.getsourcelines(runner.main)
+        rejection = start + next(i for i, line in enumerate(lines) if line.strip() == "return 2")
+        assert rejection in (data.lines(measured["src/nplet/adapters/runner.py"]) or [])
+    finally:
+        # Release SQLite handles before Windows removes the disposable directory.
+        data.close()
 
 
 @pytest.mark.parametrize(("host", "event", "status"), HOSTS)
@@ -118,7 +200,7 @@ def test_supervisor_reaps_worker_and_preserves_failure_contract(
     path.write_text(
         original.replace(marker, "\ndef handle(event):\n" + body + marker), encoding="utf-8"
     )
-    environment = {**os.environ, "PYTHONPATH": str(source)}
+    environment = mutated_source_environment(source)
     environment.pop("CURSOR_VERSION", None)
     # Inject only the copied handler. Processes, deadlines and termination remain production code.
     result = subprocess.run(
@@ -169,7 +251,7 @@ def test_supervisor_rejects_oversized_worker_output(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
-    environment = {**os.environ, "PYTHONPATH": str(source)}
+    environment = mutated_source_environment(source)
     result = subprocess.run(
         [sys.executable, str(adapter)],
         input=json.dumps({"hook_event_name": "PreToolUse"}),
