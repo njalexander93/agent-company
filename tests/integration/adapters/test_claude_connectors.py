@@ -201,6 +201,7 @@ def test_preparation_reads_precede_ticket_without_lifecycle_effect(
             ("Read", {"file_path": str(case.root / "README.md")}),
             ("Read", {"file_path": str(case.root / "docs/../AGENTS.md")}),
             ("Read", {"file_path": "docs/runtime/contributor-workflow.md"}),
+            ("Bash", {"command": f"cat {shell_agents}"}),
             ("Bash", {"command": f"cat {shell_procedure} | head"}),
             ("Bash", {"command": f"cat {shell_procedure} {shell_agents}"}),
             ("Bash", {"command": f"cat -n {shell_procedure}"}),
@@ -228,12 +229,13 @@ def test_preparation_reads_precede_ticket_without_lifecycle_effect(
                 native_event("claude", case, "PreToolUse", tool_name=tool, tool_input=args)
             )
             assert _denied(response, "TICKET_READ_REQUIRED"), (tool, args)
+        # Isolate unsupported background execution from the portable recognized read command.
         background = native_event(
             "claude",
             case,
             "PreToolUse",
             tool_name="Bash",
-            tool_input={"command": f"cat {quoted_agents}", "run_in_background": True},
+            tool_input={"command": f"cat {shell_agents}", "run_in_background": True},
         )
         assert _denied(claude.handle(background), "HOST_UNSUPPORTED_ASYNC")
         # Known issue administration stays task-free before the ticket read.
