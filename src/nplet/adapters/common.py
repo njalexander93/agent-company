@@ -1938,9 +1938,6 @@ def native_post(event: core.JSONObject, host: str, failed: bool) -> None:
         native_tool(event, host)
         return
     tool = native_tool(event, host)
-    # No-effect loads, messages and hand-backs were never recorded as pending work.
-    if host == "claude-code" and tool in CLAUDE_NO_EFFECT_TOOLS | CLAUDE_CHILD_REPORT_TOOLS:
-        return
     # Require the documented success/failure payload before treating an event as completion.
     if failed:
         field = "error" if host == "claude-code" else "error_message"
