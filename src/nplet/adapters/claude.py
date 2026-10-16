@@ -64,8 +64,15 @@ def handle(event: core.JSONObject) -> core.JSONObject:
         if name == "PreToolUse":
             # An explicit Task permits its exact native Linear issue read first.
             if common.lookup_required(observed, HOST):
-                # Preparation reads keep the marker and leave Claude's permission flow.
+                # Exact preparation reads retain their existing native delivery contract.
                 if common.preparation_tool(observed, HOST):
+                    return {}
+                # Unrelated task-free research cannot consume the selected-ticket marker.
+                if (
+                    not common.selected_ticket(observed, HOST)
+                    and not common.effect_decision(observed, HOST).requires_task
+                ):
+                    common.native_pre(observed, HOST)
                     return {}
                 core.require(
                     common.native_ticket_lookup(observed, HOST) is not None, "TICKET_READ_REQUIRED"
@@ -77,6 +84,10 @@ def handle(event: core.JSONObject) -> core.JSONObject:
         if name in {"PostToolUse", "PostToolUseFailure"}:
             # A pending ticket read settles only through its native tool result.
             if common.lookup_required(observed, HOST):
+                # Only the exact reserved native call may complete or fail startup.
+                if not common.ticket_callback(observed, HOST):
+                    common.native_post(observed, HOST, failed=name == "PostToolUseFailure")
+                    return {}
                 # Completed preparation reads were never recorded and settle nothing.
                 if common.preparation_tool(observed, HOST):
                     return {}

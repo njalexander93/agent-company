@@ -9,6 +9,37 @@ from nplet.lifecycle import task_workspace as core
 from tests.types import JsonObject
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.fixture(autouse=True)
+def isolate_effect_policy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep lifecycle dispatch unit cases independent of shared effect classification.
+
+    Args:
+        monkeypatch: Isolate the new policy, existing-admission and ticket lookup seams.
+    """
+    # These tests supply partial envelopes and test lifecycle dispatch after admission.
+    # The effect translator's full native contracts have separate unit/integration cases.
+    from nplet.adapters import codex, common, effects
+
+    monkeypatch.setattr(
+        common,
+        "effect_decision",
+        lambda *_args: effects.Decision("protected", "IMPLEMENTATION_TARGET", ""),
+    )
+    monkeypatch.setattr(common, "pending_tool", lambda *_args: True)
+    monkeypatch.setattr(common, "selected_ticket", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        common,
+        "ticket_callback",
+        lambda native, host: (
+            codex.startup_lookup_state(native, ".lookup.json")
+            if host == "codex"
+            else common.lookup_required(native, host)
+        ),
+    )
+
+
 CONNECTOR = "01234567-89ab-4cde-8f01-23456789abcd"
 
 
@@ -125,7 +156,7 @@ def test_provider_admission_rejects_other_operations(
 def test_native_tool_routes_providers_and_no_effect_tools_by_host(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Admit configured Claude provider calls and no-effect tools; keep Cursor unchanged.
+    """Admit configured Claude providers and provisional known Cursor operations.
 
     Args:
         monkeypatch: Scoped configuration for the verified Linear connector.
@@ -139,10 +170,16 @@ def test_native_tool_routes_providers_and_no_effect_tools_by_host(
         "tool_use_id": "native-call",
     }
     assert common.native_tool(save, "claude-code") == save["tool_name"]
-    # Cursor's generic MCP callback remains unsupported after readiness.
+    # Cursor's operation-only generic gate still rejects unregistered provider operations.
+    assert (
+        common.native_tool(
+            {"tool_name": "MCP:get_issue", "tool_input": {}, "tool_use_id": "c"}, "cursor"
+        )
+        == "MCP:get_issue"
+    )
     for event, host, code in [
         (
-            {"tool_name": "MCP:get_issue", "tool_input": {}, "tool_use_id": "c"},
+            {"tool_name": "MCP:execute_code", "tool_input": {}, "tool_use_id": "c"},
             "cursor",
             "HOST_UNSUPPORTED_PROVIDER",
         ),

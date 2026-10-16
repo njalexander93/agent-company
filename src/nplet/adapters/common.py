@@ -13,7 +13,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from nplet.adapters import bootstrap as encoded_bootstrap
-from nplet.adapters import runner
+from nplet.adapters import effects, runner
 from nplet.lifecycle import task_workspace as core
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -1239,7 +1239,9 @@ def native_bootstrap(event: core.JSONObject, host: str, ready: bool = False) -> 
         return False
 
 
-CLAUDE_SYNC_TOOLS = frozenset({"Read", "Write", "Edit", "Glob", "Grep", "NotebookEdit"})
+CLAUDE_SYNC_TOOLS = frozenset(
+    {"Read", "Write", "Edit", "Glob", "Grep", "NotebookEdit", "WebSearch", "WebFetch"}
+)
 # Schema loading, skill loading, messaging and asking the user change no files or
 # provider state; a tool they surface is still evaluated on its own call, so these
 # record no pending work.
@@ -1274,6 +1276,14 @@ def native_tool(event: core.JSONObject, host: str) -> str:
     # desktop app's two PR-monitor operations become ordinary pending work; every
     # other provider route stays unsupported.
     if tool.startswith(("mcp__", "MCP:")) or event.get("mcp_server") is not None:
+        # Cursor's generic gate is provisional; its blocking MCP-specific hook verifies
+        # the server independently before execution. Protected provider routes stay denied.
+        if host == "cursor":
+            core.require(
+                tool.startswith("MCP:") and tool[4:] in _PROVIDER_READS | _PROVIDER_ADMIN,
+                "HOST_UNSUPPORTED_PROVIDER",
+            )
+            return tool
         # A parent may read and arm the app's PR monitor; delivery stays with the parent.
         if _app_pr_monitor_tool(event, host) is not None:
             core.require(event.get("child") is not True, "HOST_UNSUPPORTED_PROVIDER")
@@ -1341,6 +1351,470 @@ def native_tool(event: core.JSONObject, host: str) -> str:
     return tool
 
 
+# Exact provider contracts describe local implementation effects, not user authorization.
+_PROVIDER_READS = {
+    "get_issue",
+    "get_user",
+    "list_users",
+    "list_issue_statuses",
+    "list_comments",
+    "list_issues",
+    "search_issues",
+    "list_projects",
+    "get_project",
+    "list_teams",
+    "search",
+    "fetch",
+    "search_documentation",
+    "get_agent_skill",
+    "get_attachment",
+    "get_diff",
+    "get_diff_threads",
+    "get_document",
+    "get_initiative",
+    "get_issue_status",
+    "get_milestone",
+    "get_notifications",
+    "get_release",
+    "get_release_note",
+    "get_status_updates",
+    "get_team",
+    "get_template",
+    "get_workspace",
+    "list_agent_skills",
+    "list_customers",
+    "list_cycles",
+    "list_diffs",
+    "list_documents",
+    "list_initiative_labels",
+    "list_initiatives",
+    "list_issue_labels",
+    "list_milestones",
+    "list_project_labels",
+    "list_release_notes",
+    "list_release_pipelines",
+    "list_releases",
+    "list_templates",
+}
+_PROVIDER_ADMIN = {
+    "save_issue",
+    "save_comment",
+    "save_document",
+    "save_customer",
+    "save_customer_need",
+    "save_diff_comment",
+    "save_initiative",
+    "save_initiative_label",
+    "save_issue_label",
+    "save_milestone",
+    "save_project",
+    "save_project_label",
+    "save_release",
+    "save_release_note",
+    "save_status_update",
+    "create_issue_label",
+    "create_initiative_label",
+    "delete_comment",
+    "delete_customer",
+    "delete_customer_need",
+    "delete_diff_comment",
+    "delete_status_update",
+}
+_CODEX_APP_READS = {
+    "list_threads",
+    "read_thread",
+    "list_archived_threads",
+    "list_projects",
+    "list_artifacts",
+    "get_usage_limits",
+    "read_thread_terminal",
+    "get_worktree_creation_status",
+    "get_handoff_status",
+}
+_GITHUB_READS = {
+    "fetch_file",
+    "fetch_issue",
+    "fetch_issue_comments",
+    "fetch_pr_file_patch",
+    "get_profile",
+    "list_pr_changed_filenames",
+    "list_recent_issues",
+    "search",
+    "search_issues",
+    "search_prs",
+    "search_branches",
+    "search_commits",
+    "search_repositories",
+}
+_GITHUB_ADMIN = {
+    "create_issue",
+    "update_issue",
+    "add_comment_to_issue",
+    "update_issue_comment",
+    "add_issue_assignees",
+    "remove_issue_assignees",
+    "add_issue_labels",
+    "remove_issue_label",
+}
+_CODEX_APP_ADMIN = {"set_thread_title", "set_thread_read_state", "move_thread_to_sidebar_section"}
+
+
+def provider_contracts() -> dict[tuple[str, str], effects.ProviderContract]:
+    """Return trusted exact provider contracts shared by native normalization paths.
+
+    Returns:
+        Exact provider/operation effects; absent keys remain opaque execution.
+    """
+    # External issue metadata and prose administration cannot mutate local implementation.
+    providers: dict[tuple[str, str], effects.ProviderContract] = {}
+    # Register external issue inspection independently from issue mutation contracts.
+    for operation_name in _PROVIDER_READS:
+        providers[("linear", operation_name)] = effects.ProviderContract("read")
+    # External Linear metadata and prose changes carry no local implementation effect.
+    for operation_name in _PROVIDER_ADMIN:
+        providers[("linear", operation_name)] = effects.ProviderContract("admin")
+    # GitHub inspection includes remote file reads, never remote file mutation.
+    for operation_name in _GITHUB_READS:
+        providers[("github", operation_name)] = effects.ProviderContract("read")
+    # Only explicit issue/comment/label administration receives the admin contract.
+    for operation_name in _GITHUB_ADMIN:
+        providers[("github", operation_name)] = effects.ProviderContract("admin")
+    # App inspection does not imply permission for worktree creation or code execution.
+    for operation_name in _CODEX_APP_READS:
+        providers[("codex-app", operation_name)] = effects.ProviderContract("read")
+    # Limit app administration to naming, read state and sidebar placement.
+    for operation_name in _CODEX_APP_ADMIN:
+        providers[("codex-app", operation_name)] = effects.ProviderContract("admin")
+    providers[(APP_PR_SERVER, "get_status")] = effects.ProviderContract("read")
+    # Monitoring can enable automatic source corrections; never infer an admin-only effect.
+    providers[(APP_PR_SERVER, "set_monitor")] = effects.ProviderContract("execute")
+    return providers
+
+
+def patch_targets(value: object) -> list[str]:
+    """Extract every endpoint from a complete native apply-patch envelope.
+
+    Args:
+        value: Native patch text, including its begin and end markers.
+
+    Returns:
+        All create/delete/update/move paths, or an empty list for an unknown shape.
+    """
+    # Require the explicit patch framing before trusting its destination headers.
+    if not isinstance(value, str):
+        return []
+    lines = value.splitlines()
+    if len(lines) < 3 or lines[0] != "*** Begin Patch" or lines[-1] != "*** End Patch":
+        return []
+    targets: list[str] = []
+    can_move = False
+    # Inspect all native directives; an unfamiliar directive invalidates the whole edit.
+    for line in lines[1:-1]:
+        if line.startswith(("*** Add File: ", "*** Delete File: ", "*** Update File: ")):
+            path = line.split(": ", 1)[1]
+            if not path:
+                return []
+            targets.append(path)
+            can_move = line.startswith("*** Update File: ")
+        elif line.startswith("*** Move to: "):
+            if not can_move or not line[len("*** Move to: ") :]:
+                return []
+            targets.append(line[len("*** Move to: ") :])
+            can_move = False
+        elif line.startswith("*** ") and line != "*** End of File":
+            return []
+    return targets
+
+
+def effect_decision(event: core.JSONObject, host: str) -> effects.Decision:
+    """Normalize an observed native tool into the shared effect policy.
+
+    Args:
+        event: Host-validated identity, native tool name and structured arguments.
+        host: Explicit adapter identity, never a tool argument.
+
+    Returns:
+        Shared task-free or task-required effect decision.
+
+    Raises:
+        core.WorkspaceError: If the checkout or native identity is invalid.
+    """
+    # Validate observed identities without consulting or creating lifecycle storage.
+    native_token(event.get("session_id"))
+    native_token(event.get("tool_use_id"))
+    root, _, _ = core.repository(event["cwd"])
+    tool = event.get("tool_name")
+    args = event.get("tool_input")
+    family = "unknown"
+    arguments: Mapping[str, object] = args if isinstance(args, dict) else {}
+    providers = provider_contracts()
+    # Native read and administrative tools have contracts independent of task readiness.
+    if isinstance(args, dict):
+        if tool in {"Read", "Glob", "Grep", "WebSearch", "WebFetch", "webrun", "web.run"}:
+            family = "read"
+        elif tool in CLAUDE_NO_EFFECT_TOOLS | CLAUDE_CHILD_REPORT_TOOLS | {
+            "request_user_input",
+            "request_user_input_async",
+        }:
+            # Schema loading and clarification do not launch the surfaced operations.
+            family = "admin"
+        elif tool == "write_stdin":
+            # Polling without input reads an existing transport; typed input can drive writes.
+            handle = args.get("session_id")
+            if (
+                set(args) <= {"session_id", "chars", "yield_time_ms", "max_output_tokens"}
+                and args.get("chars", "") == ""
+                and type(handle) in {str, int}
+                and str(handle)
+            ):
+                family = "read"
+        elif tool in {"Write", "Edit", "Delete", "NotebookEdit"}:
+            # Retain every supplied native target rather than selecting a safe-looking alias.
+            family = "edit"
+            arguments = {
+                "targets": [
+                    args[key]
+                    for key in ("file_path", "path", "target_file", "notebook_path")
+                    if key in args
+                ],
+                "executable": args.get("executable", False),
+            }
+        elif tool == "apply_patch":
+            # The whole patch, including each rename endpoint, shares one admission decision.
+            family = "edit"
+            value = (
+                args.get("command", args.get("patch"))
+                if set(args) <= {"command", "patch"}
+                else None
+            )
+            arguments = {"targets": patch_targets(value)}
+        elif tool in {"Bash", "Shell", "exec_command"}:
+            # Translate the host's command field without treating its description as proof.
+            family = "shell"
+            arguments = {"command": args.get("cmd" if tool == "exec_command" else "command")}
+            # Opaque alternate interpreters and unsupported transport flags cannot inherit
+            # the read-command contract, even when their command string looks harmless.
+            if host == "codex":
+                allowed = (
+                    {"command"}
+                    if tool == "Bash"
+                    else {
+                        "cmd",
+                        "workdir",
+                        "login",
+                        "shell",
+                        "yield_time_ms",
+                        "max_output_tokens",
+                        "sandbox_permissions",
+                        "justification",
+                        "prefix_rule",
+                        "tty",
+                    }
+                )
+                if (
+                    not set(args) <= allowed
+                    or args.get("tty", False) is not False
+                    or (
+                        tool == "exec_command"
+                        and (args.get("login") is not False or args.get("shell") != "/bin/sh")
+                    )
+                ):
+                    family = "unknown"
+            # A shell's cwd override changes relative destination interpretation.
+            override = args.get("workdir", args.get("working_directory"))
+            if override is not None:
+                if not isinstance(override, str) or not Path(override).is_absolute():
+                    family = "unknown"
+                else:
+                    event = {**event, "cwd": override}
+        # Provider identity comes from a qualified native name or verified server metadata.
+        if isinstance(tool, str) and (tool.startswith(("mcp__", "MCP:"))):
+            family = "provider"
+            provider, operation = "unverified", "unverified"
+            if host == "claude-code":
+                linear = _linear_provider_tool(event, host)
+                monitor = _app_pr_monitor_tool(event, host)
+                if linear is not None:
+                    # Linear provenance was checked against the configured connector above.
+                    provider, operation = "linear", linear
+                elif monitor is not None:
+                    # Built-in monitor provenance does not erase its auto-correction effects.
+                    provider, operation = APP_PR_SERVER, monitor
+            elif host == "cursor" and tool.startswith("MCP:"):
+                # The mandatory blocking MCP-specific hook independently verifies the server.
+                # Generic callbacks expose only operation names, never server provenance.
+                provider, operation = "linear", tool[len("MCP:") :]
+            elif host == "codex":
+                # Match exact native server namespaces; unknown servers retain opaque effects.
+                for prefix, identity in (
+                    ("mcp__codex_apps__linear__", "linear"),
+                    ("mcp__codex_apps__linear_", "linear"),
+                    ("mcp__codex_app__", "codex-app"),
+                    ("mcp__codex_apps__github__", "github"),
+                    ("mcp__codex_apps__github_", "github"),
+                ):
+                    if tool.startswith(prefix):
+                        provider, operation = identity, tool[len(prefix) :]
+                        break
+            arguments = {"provider": provider, "operation": operation, "parameters": args}
+    # Keep the shared classifier as the only authority for task-free effect classes.
+    return effects.classify(
+        effects.Operation(family, arguments, event["cwd"]),
+        effects.Policy(root=root, providers=providers),
+    )
+
+
+def pending_tool(event: core.JSONObject, host: str) -> bool:
+    """Check an existing native operation before reclassifying its completion.
+
+    Args:
+        event: Native callback carrying the actual session and call identifier.
+        host: Explicit adapter identity.
+
+    Returns:
+        Whether this exact call is pending; missing registration or binding is false.
+
+    Raises:
+        core.WorkspaceError: For corrupt, foreign or otherwise invalid existing state.
+        OSError: If existing state cannot be safely read.
+    """
+    # Missing task setup is normal for task-free operations; other failures stay visible.
+    try:
+        request = request_for(event, "ready", host)
+    except core.WorkspaceError as error:
+        if error.code in {"REGISTRATION_REQUIRED", "BINDING_MISSING"}:
+            return False
+        raise
+    # Read exact participant state without running readiness or fabricating settlement.
+    state = _issue_state(request)
+    key = core.participant_key(request)
+    core.require(key in state["participants"], "BINDING_MISSING")
+    pending = state["participants"][key]["pending"]
+    if event.get("tool_use_id") in pending:
+        return True
+    # Empty-input polling can finish a protected original even without its own pre-hook.
+    if event.get("tool_name") == "write_stdin":
+        args = event.get("tool_input")
+        if not isinstance(args, dict):
+            raise core.WorkspaceError("INVALID_REQUEST")
+        handle = args.get("session_id")
+        core.require(type(handle) in {str, int}, "ASYNC_HANDLE_CONFLICT")
+        token = core.token(str(handle))
+        return any(entry.get("handle") == token for entry in pending.values())
+    return False
+
+
+def ticket_callback(event: core.JSONObject, host: str) -> bool:
+    """Match a completion to this session's exact reserved ticket-read call.
+
+    Args:
+        event: Native completion envelope with a call identifier.
+        host: Explicit adapter identity.
+
+    Returns:
+        Whether the stored ticket receipt names this native call ID.
+
+    Raises:
+        core.WorkspaceError: If the checkout or an existing marker is unsafe.
+        OSError: If existing markers cannot be read.
+    """
+    # An absent assignment has no ticket completion authority.
+    if not lookup_required(event, host):
+        return False
+    root, _, _ = core.repository(event["cwd"])
+    key = core.participant_key({"host": host, "session_id": event["session_id"]})
+    # Inspect only an already existing lookup marker; do not create task-free receipts.
+    with (
+        core.Directory.absolute(root) as directory,
+        directory.child(".task") as task,
+        task.child(".bindings") as bindings,
+    ):
+        name = key + ".lookup.json"
+        return bindings.exists(name) and bindings.json(name).get("tool_id") == event.get(
+            "tool_use_id"
+        )
+
+
+def selected_ticket(event: core.JSONObject, host: str, specific: bool = False) -> bool:
+    """Distinguish exact selected-ticket startup from unrelated provider research.
+
+    Args:
+        event: Native pre-tool callback while an explicit Task lookup is pending.
+        host: Explicit adapter identity.
+        specific: Whether Cursor supplied its MCP-specific argument string.
+
+    Returns:
+        Whether the observed operation reads the exact selected ticket.
+
+    Raises:
+        core.WorkspaceError: If existing assignment data or native input is malformed.
+        OSError: If existing assignment bytes cannot be read.
+    """
+    # Select only the native issue-read operation; other tools remain ordinary work.
+    tool = event.get("tool_name")
+    if host == "codex":
+        if tool not in {"mcp__codex_apps__linear__get_issue", "mcp__codex_apps__linear_get_issue"}:
+            return False
+        args = event.get("tool_input")
+    elif host == "cursor":
+        if tool != ("get_issue" if specific else "MCP:get_issue"):
+            return False
+        args = core.strict_json(event["tool_input"]) if specific else event.get("tool_input")
+    else:
+        selected = _linear_tool(event, host)
+        if selected is None:
+            return False
+        _, args = selected
+    # Compare the exact argument object with the existing explicit assignment.
+    root, _, _ = core.repository(event["cwd"])
+    key = core.participant_key({"host": host, "session_id": event["session_id"]})
+    with (
+        core.Directory.absolute(root) as directory,
+        directory.child(".task") as task,
+        task.child(".bindings") as bindings,
+    ):
+        return args == {"id": bindings.json(key + ".assignment.json")["issue_id"]}
+
+
+def cursor_provider(event: core.JSONObject) -> None:
+    """Validate Cursor's mandatory blocking server-specific task-free provider gate.
+
+    Args:
+        event: MCP-specific callback with native server URL and JSON arguments.
+
+    Raises:
+        core.WorkspaceError: If identity, operation or arguments are unverified.
+    """
+    # Only known Linear operations have task-free contracts on this native surface.
+    operation = event.get("tool_name")
+    core.require(operation in _PROVIDER_READS | _PROVIDER_ADMIN, "HOST_UNSUPPORTED_PROVIDER")
+    core.require(
+        event.get("mcp_server_name") in {"linear", "linear-server"}, "HOST_UNSUPPORTED_PROVIDER"
+    )
+    core.require(
+        event.get("mcp_server_url", event.get("url"))
+        in {"https://mcp.linear.app/mcp", "https://mcp.linear.app/mcp/readonly"},
+        "HOST_UNSUPPORTED_PROVIDER",
+    )
+    # Structured provider arguments are mandatory even for task-free administrative calls.
+    raw = event.get("tool_input")
+    if not isinstance(raw, str):
+        raise core.WorkspaceError("INVALID_REQUEST")
+    parameters = core.strict_json(raw)
+    core.require(isinstance(parameters, dict), "INVALID_REQUEST")
+    # The same exact provider registry/classifier governs both independent native gates.
+    root, _, _ = core.repository(event["cwd"])
+    decision = effects.classify(
+        effects.Operation(
+            "provider",
+            {"provider": "linear", "operation": operation, "parameters": parameters},
+            event["cwd"],
+        ),
+        effects.Policy(root, providers=provider_contracts()),
+    )
+    core.require(not decision.requires_task, decision.code)
+
+
 def native_pre(event: core.JSONObject, host: str) -> None:
     """Enforce readiness and record supported native tool admission.
 
@@ -1356,7 +1830,29 @@ def native_pre(event: core.JSONObject, host: str) -> None:
     # An exact lifecycle recovery command is allowed before readiness.
     if native_bootstrap(event, host):
         return
-    request = request_for(event, "ready", host)
+    # Admit understood inspection, administration and notes without task storage.
+    decision = effect_decision(event, host)
+    if not decision.requires_task:
+        native_tool(event, host)
+        # A native Claude child still needs its own previously joined participant.
+        if event.get("child") is True:
+            child = request_for(event, "ready", host)
+            core.require(
+                core.participant_key(child) in _issue_state(child)["participants"],
+                "BINDING_MISSING",
+            )
+        return
+    # Implementation and opaque execution retain the existing readiness gate.
+    try:
+        request = request_for(event, "ready", host)
+    except core.WorkspaceError as error:
+        # Explain a supported task-free alternative when opaque execution lacks setup.
+        if decision.effect == "unknown" and error.code in {
+            "REGISTRATION_REQUIRED",
+            "BINDING_MISSING",
+        }:
+            raise core.WorkspaceError(decision.code) from error
+        raise
     result = core.execute(request)
     core.require(result["ok"], result["code"])
     # After readiness, exact lifecycle commands remain distinct from work tools.
@@ -1394,6 +1890,10 @@ def native_post(event: core.JSONObject, host: str, failed: bool) -> None:
     """
     # Lifecycle calls own their transaction and are never admitted as external work.
     if native_bootstrap(event, host, ready=True):
+        return
+    # A recorded admission outranks current path classification at completion.
+    if not pending_tool(event, host) and not effect_decision(event, host).requires_task:
+        native_tool(event, host)
         return
     tool = native_tool(event, host)
     # No-effect loads, messages and hand-backs were never recorded as pending work.
@@ -1732,7 +2232,17 @@ def native_context(event: core.JSONObject, host: str) -> str:
         core.require(result["ok"], result["code"])
     # Convert a failed readiness check into bounded recovery text.
     except core.WorkspaceError as error:
-        return recovery(error.code, host)
+        # Missing setup is normal for task-free sessions; existing-task faults stay precise.
+        if error.code in {"REGISTRATION_REQUIRED", "BINDING_MISSING"}:
+            return (
+                "Inspection, administration and ordinary notes are available without a task. "
+                "Before implementation changes, use the Task ticket/readiness procedure."
+            )
+        return (
+            "Inspection, administration and ordinary notes remain available. "
+            "Implementation changes require the Task ticket/readiness procedure. "
+            + recovery(error.code, host)
+        )
     return "Task binding checked. Read the assigned packet through the lifecycle read operation."
 
 
@@ -1748,12 +2258,22 @@ def _recovery_route(code: str, host: str) -> str:
     """
     # Name the canonical command formatter once for every lifecycle route.
     command = "the exact lifecycle command from adapters.common.bootstrap_command"
+    # Opaque effect diagnostics name supported task-free alternatives and the task route.
+    if code.startswith("UNKNOWN_"):
+        guidance = effects.classify(
+            effects.Operation("unknown", {}, str(ROOT)), effects.Policy(ROOT)
+        ).guidance
+        # Legacy exec exposes login/shell options; omitted options use native defaults.
+        if host == "codex":
+            guidance += ' For exec_command inspection, pass login:false and shell:"/bin/sh".'
+        return guidance
     # Ticket preparation is host-specific and never consumes the required provider read.
     if code == "TICKET_READ_REQUIRED":
         preparation = (
-            " Before it, only ToolSearch selecting that get_issue tool and Read or a plain "
-            "`cat` of <checkout>/docs/runtime/contributor-workflow.md or <checkout>/AGENTS.md "
-            "are admitted."
+            " Ticket preparation also admits ToolSearch selecting that get_issue tool and Read or "
+            "plain `cat` of <checkout>/docs/runtime/contributor-workflow.md or "
+            "<checkout>/AGENTS.md "
+            "without clearing the ticket requirement."
             if host == "claude-code"
             else (
                 " Exact command-only Bash reads of AGENTS.md and "
@@ -1765,7 +2285,9 @@ def _recovery_route(code: str, host: str) -> str:
         )
         return (
             "Next admitted operation: the configured Linear get_issue call with exactly "
-            '{"id": "<selected issue>"}.' + preparation
+            '{"id": "<selected issue>"} before implementation. '
+            "Unrelated task-free inspection, administration and ordinary notes remain available."
+            + preparation
         )
     # An unbound session starts or resumes only through the ticket-first route.
     if code == "BINDING_MISSING":

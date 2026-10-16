@@ -15,6 +15,36 @@ from nplet.lifecycle import task_workspace as core
 
 pytestmark = pytest.mark.unit
 
+
+@pytest.fixture(autouse=True)
+def isolate_effect_policy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep lifecycle dispatch unit cases independent of shared effect classification.
+
+    Args:
+        monkeypatch: Isolate the new policy, existing-admission and ticket lookup seams.
+    """
+    # These tests supply partial envelopes and test lifecycle dispatch after admission.
+    # The effect translator's full native contracts have separate unit/integration cases.
+    from nplet.adapters import codex, common, effects
+
+    monkeypatch.setattr(
+        common,
+        "effect_decision",
+        lambda *_args: effects.Decision("protected", "IMPLEMENTATION_TARGET", ""),
+    )
+    monkeypatch.setattr(common, "pending_tool", lambda *_args: True)
+    monkeypatch.setattr(common, "selected_ticket", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        common,
+        "ticket_callback",
+        lambda native, host: (
+            codex.startup_lookup_state(native, ".lookup.json")
+            if host == "codex"
+            else common.lookup_required(native, host)
+        ),
+    )
+
+
 ISSUE = "TEST-30"
 UUID = "0920cdcc-1644-4fa1-bf71-eb8370134c70"
 ROOT = Path("/ticket-unit-repository")
@@ -1104,7 +1134,7 @@ def test_cursor_unselected_mcp_callbacks_cannot_complete_ticket(
         "native_post",
         lambda _event, _host, failed: settled.append(failed),
     )
-    assert cursor.handle({"hook_event_name": "beforeMCPExecution"}) == {}
+    assert cursor.handle({"hook_event_name": "beforeMCPExecution"})["permission"] == "deny"
     assert cursor.handle({"hook_event_name": "afterMCPExecution"}) == {}
     # Without a pending Task, the generic posthook enters ordinary settlement.
     assert cursor.handle({"hook_event_name": "postToolUse", "tool_name": "MCP:get_issue"}) == {}

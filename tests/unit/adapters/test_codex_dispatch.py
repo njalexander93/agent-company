@@ -14,6 +14,35 @@ from nplet.lifecycle import task_workspace as core
 pytestmark = pytest.mark.unit
 
 
+@pytest.fixture(autouse=True)
+def isolate_effect_policy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep lifecycle dispatch unit cases independent of shared effect classification.
+
+    Args:
+        monkeypatch: Isolate the new policy, existing-admission and ticket lookup seams.
+    """
+    # These tests supply partial envelopes and test lifecycle dispatch after admission.
+    # The effect translator's full native contracts have separate unit/integration cases.
+    from nplet.adapters import codex, common, effects
+
+    monkeypatch.setattr(
+        common,
+        "effect_decision",
+        lambda *_args: effects.Decision("protected", "IMPLEMENTATION_TARGET", ""),
+    )
+    monkeypatch.setattr(common, "pending_tool", lambda *_args: True)
+    monkeypatch.setattr(common, "selected_ticket", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        common,
+        "ticket_callback",
+        lambda native, host: (
+            codex.startup_lookup_state(native, ".lookup.json")
+            if host == "codex"
+            else common.lookup_required(native, host)
+        ),
+    )
+
+
 def test_native_web_result_settles_without_interpreting_content(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -981,10 +1010,8 @@ def test_codex_session_binding_error_and_optional_ending_error(
         lambda *_args: (_ for _ in ()).throw(core.WorkspaceError("BINDING_MISSING")),
     )
     result = codex.handle({"hook_event_name": "SessionStart"})
-    assert (
-        "TASK_WORKSPACE_NOT_READY: BINDING_MISSING"
-        in result["hookSpecificOutput"]["additionalContext"]
-    )
+    assert "available without a task" in result["hookSpecificOutput"]["additionalContext"]
+    assert "TASK_WORKSPACE_NOT_READY" not in result["hookSpecificOutput"]["additionalContext"]
     assert codex.handle({"hook_event_name": "SessionEnd"}) == {}
 
 

@@ -472,11 +472,14 @@ def handle(event: core.JSONObject) -> core.JSONObject:
         # A pending ticket read takes precedence over ordinary tool admission.
         # Keep recovery read-only until the assigned direct issue call succeeds.
         if startup_lookup_state(event, ".lookup-required.json"):
-            # Governing reads do not consume the first-provider-operation marker.
-            if common.preparation_tool(event, "codex"):
+            # Existing exact preparation and diagnosis routes preserve their native contracts.
+            if common.preparation_tool(event, "codex") or diagnostic_bootstrap(event):
                 return {}
-            # A bounded read-only diagnosis must remain reachable to explain startup failures.
-            if diagnostic_bootstrap(event):
+            # Task-free research remains available without consuming the selected ticket.
+            if (
+                not common.selected_ticket(event, "codex")
+                and not common.effect_decision(event, "codex").requires_task
+            ):
                 return {}
             # Any other tool must wait for the assigned issue response.
             # Reject unrelated calls without consuming the ticket marker.
@@ -534,8 +537,23 @@ def handle(event: core.JSONObject) -> core.JSONObject:
         if tool in {"request_user_input", "request_user_input_async"}:
             # Clarification remains available while readiness is unresolved.
             return {}
+        # Understood read/admin/note calls need no binding, readiness or pending record.
+        decision = common.effect_decision(event, "codex")
+        if not decision.requires_task and not (
+            tool == "write_stdin" and common.pending_tool(event, "codex")
+        ):
+            return {}
         # Build the request from explicit caller or observed session identities.
-        request = request_for(event, "ready")
+        try:
+            request = request_for(event, "ready")
+        except core.WorkspaceError as error:
+            # Unknown execution explains a supported reroute before task setup exists.
+            if decision.effect == "unknown" and error.code in {
+                "REGISTRATION_REQUIRED",
+                "BINDING_MISSING",
+            }:
+                return denial(decision.code)
+            return denial(error.code)
         result = core.execute(request)
         # Preserve the precise core failure in the host response.
         if not result["ok"]:
@@ -585,7 +603,7 @@ def handle(event: core.JSONObject) -> core.JSONObject:
             return {}
         # Settle a reserved Linear ticket read before generic tool completion.
         # The lookup marker identifies the pre-hook admitted issue call.
-        if event.get("tool_name") in TICKET_TOOLS and startup_lookup_state(event, ".lookup.json"):
+        if event.get("tool_name") in TICKET_TOOLS and common.ticket_callback(event, "codex"):
             # Verify the provider result and start the assigned workspace.
             try:
                 # Successful startup returns a host-visible readiness message.
@@ -613,6 +631,12 @@ def handle(event: core.JSONObject) -> core.JSONObject:
                         )
                     )
                 }
+        # A recorded native admission wins over changed paths or symlinks in a callback.
+        if (
+            not common.pending_tool(event, "codex")
+            and not common.effect_decision(event, "codex").requires_task
+        ):
+            return {}
         # Build the request from explicit caller or observed session identities.
         request = request_for(event, "tool-complete")
         response = event.get("tool_response", {})
@@ -762,12 +786,25 @@ def handle(event: core.JSONObject) -> core.JSONObject:
                     ),
                 }
             }
+        # An absent binding is the normal task-free startup state, not a global failure.
+        if result["code"] in {"REGISTRATION_REQUIRED", "BINDING_MISSING"}:
+            return {
+                "hookSpecificOutput": {
+                    "hookEventName": name,
+                    "additionalContext": (
+                        "Inspection, administration and ordinary notes are available "
+                        "without a task. "
+                        "Before implementation changes, use the Task ticket/readiness procedure."
+                    ),
+                }
+            }
         return {
             "hookSpecificOutput": {
                 "hookEventName": name,
                 "additionalContext": "TASK_WORKSPACE_NOT_READY: "
                 + result["code"]
-                + ". Ordinary task tools remain denied. Use only the assigned lifecycle "
+                + ". Inspection, administration and ordinary notes remain available. "
+                "Implementation changes require the assigned lifecycle "
                 "diagnostic/bootstrap routes to register, resume, read and acknowledge "
                 "the permitted packet, or repair the reported condition. Readiness was not "
                 "granted.",

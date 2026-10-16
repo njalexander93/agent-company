@@ -144,6 +144,8 @@ class ChildTests(Fixture):
                 "HOST_UNSUPPORTED_TOOL",
             ),
         ):
+            # Supply native call identity so each case isolates its intended authority failure.
+            event.setdefault("tool_use_id", str(uuid.uuid4()))
             with pytest.raises(core.WorkspaceError, match=code):
                 children.child_pre(event)
             assert self.state() == before
