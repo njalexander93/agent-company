@@ -21,7 +21,11 @@ POLICY = Policy(ROOT)
 
 @pytest.mark.parametrize("family", ["read", "admin"])
 def test_task_free_contracts(family: str) -> None:
-    """Trusted native inspection/admin needs no lifecycle storage or safety flags."""
+    """Trusted native inspection/admin needs no lifecycle storage or safety flags.
+
+    Args:
+        family: Adapter-derived operation family under test.
+    """
     # Classify without any lifecycle object, binding, approval or filesystem setup.
     result = classify(Operation(family, {"read_only": False}, str(ROOT)), POLICY)
     assert result.effect == family
@@ -59,7 +63,11 @@ def test_task_free_contracts(family: str) -> None:
     ],
 )
 def test_protected_targets(path: str) -> None:
-    """Implementation, instruction and normative destinations require a task."""
+    """Implementation, instruction and normative destinations require a task.
+
+    Args:
+        path: Destination path selected for this behavior case.
+    """
     assert target_effect(path, ROOT, POLICY) == "protected"
 
 
@@ -67,7 +75,11 @@ def test_protected_targets(path: str) -> None:
     "path", ["plan.md", "notes/design.txt", "../vault/plan.rst", "docs/planning.md"]
 )
 def test_ordinary_note(path: str) -> None:
-    """Explicit ordinary prose destinations remain task-free."""
+    """Explicit ordinary prose destinations remain task-free.
+
+    Args:
+        path: Destination path selected for this behavior case.
+    """
     result = classify(Operation("edit", {"targets": [path]}, str(ROOT)), POLICY)
     assert result.effect == "note"
     assert not result.requires_task
@@ -83,7 +95,11 @@ def test_ordinary_note(path: str) -> None:
     ],
 )
 def test_mixed_edits_and_renames(targets: list[object]) -> None:
-    """A protected endpoint gates the entire edit before any partial execution."""
+    """A protected endpoint gates the entire edit before any partial execution.
+
+    Args:
+        targets: Complete mutation targets, including every rename endpoint.
+    """
     result = classify(Operation("edit", {"targets": targets}, str(ROOT)), POLICY)
     assert result.effect == "protected"
     assert result.requires_task
@@ -102,7 +118,11 @@ def test_mixed_edits_and_renames(targets: list[object]) -> None:
     ],
 )
 def test_malformed_edits(arguments: dict[str, object]) -> None:
-    """Malformed target sets never become task-free notes."""
+    """Malformed target sets never become task-free notes.
+
+    Args:
+        arguments: Native argument shape or Git subcommand arguments under test.
+    """
     result = classify(Operation("edit", arguments, str(ROOT)), POLICY)
     assert result.effect == "unknown"
     assert result.requires_task
@@ -152,7 +172,11 @@ def test_executable_note_and_registered_loader() -> None:
     ],
 )
 def test_supported_shell_inspection(command: str) -> None:
-    """Known complete argument forms and fully understood compositions stay task-free."""
+    """Known complete argument forms and fully understood compositions stay task-free.
+
+    Args:
+        command: Complete shell command selected for this effect case.
+    """
     result = shell_effect(command)
     assert result.effect == "read"
     assert not result.requires_task
@@ -201,7 +225,11 @@ def test_supported_shell_inspection(command: str) -> None:
     ],
 )
 def test_opaque_shell_requires_task(command: str) -> None:
-    """Flags, wrappers, substitutions and mixed commands cannot inherit a read exemption."""
+    """Flags, wrappers, substitutions and mixed commands cannot inherit a read exemption.
+
+    Args:
+        command: Complete shell command selected for this effect case.
+    """
     result = shell_effect(command)
     assert result.effect == "unknown"
     assert result.requires_task
@@ -258,14 +286,24 @@ def test_provider_exact_contracts() -> None:
     ],
 )
 def test_unknown_envelopes(family: str, args: dict[str, object], cwd: str) -> None:
-    """Unknown identities, user safety labels and malformed envelopes confer no exemption."""
+    """Unknown identities, user safety labels and malformed envelopes confer no exemption.
+
+    Args:
+        family: Adapter-derived operation family under test.
+        args: Untrusted normalized argument payload under test.
+        cwd: Native working directory supplied by this case.
+    """
     result = classify(Operation(family, args, cwd), POLICY)
     assert result.requires_task
     assert result.guidance
 
 
 def test_path_failures_are_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Filesystem inspection errors and relative bases cannot silently admit notes."""
+    """Filesystem inspection errors and relative bases cannot silently admit notes.
+
+    Args:
+        monkeypatch: Fixture restoring the temporary native metadata fault or snapshot.
+    """
     assert target_effect("plan.md", Path("relative"), POLICY) == "unknown"
     assert target_effect("plan.md", ROOT, Policy(Path("relative"))) == "unknown"
 
@@ -301,7 +339,14 @@ def test_malformed_normalized_operation() -> None:
 def test_existing_metadata(
     links: int, mode: int, expected: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Existing ordinary files stay free; hardlinks and execute permissions retain the gate."""
+    """Existing ordinary files stay free; hardlinks and execute permissions retain the gate.
+
+    Args:
+        links: Native link count returned by the metadata boundary.
+        mode: Native permission bits returned by the metadata boundary.
+        expected: Independently selected effect required by the metadata case.
+        monkeypatch: Fixture restoring the temporary native metadata fault or snapshot.
+    """
 
     # Model only the native metadata boundary; real aliases have separate integration tests.
     def metadata(self: Path, *, follow_symlinks: bool = True) -> SimpleNamespace:
@@ -332,7 +377,11 @@ def test_existing_metadata(
     ],
 )
 def test_git_filename_separator(arguments: str) -> None:
-    """A Git filename separator ends option validation for recognized read commands."""
+    """A Git filename separator ends option validation for recognized read commands.
+
+    Args:
+        arguments: Native argument shape or Git subcommand arguments under test.
+    """
     # Native paths after the separator are filenames, even when they resemble options.
     prefix = "git --no-pager --no-optional-locks -c core.fsmonitor=false "
     result = shell_effect(prefix + arguments)
@@ -354,10 +403,84 @@ def test_git_filename_separator(arguments: str) -> None:
     ],
 )
 def test_git_separator_preserves_gate(arguments: str) -> None:
-    """Filename tokens cannot supply missing safety flags or admit unsupported operations."""
+    """Filename tokens cannot supply missing safety flags or admit unsupported operations.
+
+    Args:
+        arguments: Native argument shape or Git subcommand arguments under test.
+    """
     # Validate option evidence before the separator and keep mutation subcommands opaque.
     prefix = "git --no-pager --no-optional-locks -c core.fsmonitor=false "
     result = shell_effect(prefix + arguments)
     assert result.effect == "unknown"
     assert result.requires_task
     assert result.guidance
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "requirements.txt",
+        "requirements-dev.txt",
+        "requirements_test.txt",
+        "requirements/dev.txt",
+        "constraints.txt",
+        "constraints-dev.txt",
+        "constraints/production.txt",
+        "CMakeLists.txt",
+        "nested/CMAKELISTS.TXT",
+        "nested/package.json",
+        "Cargo.lock",
+        "poetry.lock",
+        "uv.lock",
+        "docs/runtime/DEVELOPMENT.md",
+        "DOCS/Runtime/Contributor-Workflow.MD",
+    ],
+)
+def test_dependency_and_governance_alias_targets(target: str) -> None:
+    """Dependency roles and governance case aliases require task readiness.
+
+    Args:
+        target: Conventional dependency/build destination or governance path case alias.
+    """
+    # Check new targets and mixed changes; an ordinary note cannot dilute the gate.
+    for targets in ([target], ["notes/plan.md", target]):
+        result = classify(Operation("edit", {"targets": targets}, str(ROOT)), POLICY)
+        assert result.effect == "protected"
+        assert result.requires_task
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "pip install requests",
+        "pip uninstall requests",
+        "pip install --upgrade requests",
+        "poetry add requests",
+        "poetry remove requests",
+        "poetry update",
+        "uv add requests",
+        "uv remove requests",
+        "uv sync",
+        "npm install example",
+        "npm uninstall example",
+        "npm update",
+        "yarn add example",
+        "pnpm remove example",
+        "cargo add example",
+        "go get example",
+    ],
+)
+def test_package_changes_require_task(command: str) -> None:
+    """Package install, remove and update execution always retains the task gate.
+
+    Args:
+        command: Package-manager operation that can mutate dependencies or lockfiles.
+    """
+    assert shell_effect(command).requires_task
+
+
+def test_registered_case_alias_before_creation() -> None:
+    """Explicit loader registrations protect new case aliases of their destination."""
+    policy = Policy(ROOT, protected_paths=(ROOT / "notes" / "runtime.md",))
+    assert target_effect("NOTES/RUNTIME.MD", ROOT, policy) == "protected"
+    assert target_effect("notes/ordinary.md", ROOT, policy) == "note"

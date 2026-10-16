@@ -14,35 +14,7 @@ from nplet.lifecycle import task_workspace as core
 pytestmark = pytest.mark.unit
 
 
-@pytest.fixture(autouse=True)
-def isolate_effect_policy(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep lifecycle dispatch unit cases independent of shared effect classification.
-
-    Args:
-        monkeypatch: Isolate the new policy, existing-admission and ticket lookup seams.
-    """
-    # These tests supply partial envelopes and test lifecycle dispatch after admission.
-    # The effect translator's full native contracts have separate unit/integration cases.
-    from nplet.adapters import codex, common, effects
-
-    monkeypatch.setattr(
-        common,
-        "effect_decision",
-        lambda *_args: effects.Decision("protected", "IMPLEMENTATION_TARGET", ""),
-    )
-    monkeypatch.setattr(common, "pending_tool", lambda *_args: True)
-    monkeypatch.setattr(common, "selected_ticket", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(
-        common,
-        "ticket_callback",
-        lambda native, host: (
-            codex.startup_lookup_state(native, ".lookup.json")
-            if host == "codex"
-            else common.lookup_required(native, host)
-        ),
-    )
-
-
+@pytest.mark.usefixtures("recorded_operation")
 def test_native_web_result_settles_without_interpreting_content(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -74,6 +46,7 @@ def test_native_web_result_settles_without_interpreting_content(
 
 @pytest.mark.parametrize("output", ["", "plain output", "{", '{"session_id":77}'])
 @pytest.mark.parametrize("tool_name", ["Bash", "apply_patch"])
+@pytest.mark.usefixtures("recorded_operation")
 def test_native_text_completion_settles_original_call(
     monkeypatch: pytest.MonkeyPatch, output: str, tool_name: str
 ) -> None:
@@ -239,6 +212,7 @@ def test_codex_pretool_denies_unsupported_child_control_without_binding_lookup(
     )
 
 
+@pytest.mark.usefixtures("recorded_operation")
 def test_codex_posttool_keeps_unknown_completion_pending(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -262,6 +236,7 @@ def test_codex_posttool_keeps_unknown_completion_pending(
     )
 
 
+@pytest.mark.usefixtures("recorded_operation")
 def test_codex_posttool_settles_typed_failure_without_handle(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -418,6 +393,7 @@ def test_startup_lookup_reads_only_explicit_session_marker(
     )
 
 
+@pytest.mark.usefixtures("protected_effect")
 def test_codex_pretool_preserves_failed_core_readiness_code(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -450,6 +426,7 @@ def test_codex_pretool_preserves_failed_core_readiness_code(
     assert calls == ["ready"]
 
 
+@pytest.mark.usefixtures("protected_effect")
 def test_codex_pretool_rejects_poll_without_observed_process_handle(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -489,6 +466,7 @@ def test_codex_pretool_rejects_poll_without_observed_process_handle(
     assert calls == ["ready"]
 
 
+@pytest.mark.usefixtures("recorded_operation")
 def test_codex_posttool_rejects_mismatched_poll_response_handle(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -511,6 +489,7 @@ def test_codex_posttool_rejects_mismatched_poll_response_handle(
     assert response == {"systemMessage": "TASK_WORKSPACE_NOT_READY: ASYNC_HANDLE_CONFLICT"}
 
 
+@pytest.mark.usefixtures("protected_effect", "selected_ticket_dispatch")
 def test_codex_pretool_requires_recorded_ticket_lookup_before_other_tools(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -532,6 +511,7 @@ def test_codex_pretool_requires_recorded_ticket_lookup_before_other_tools(
     )
 
 
+@pytest.mark.usefixtures("protected_effect", "selected_ticket_dispatch")
 def test_codex_pretool_preserves_ticket_lookup_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -571,6 +551,7 @@ def test_codex_pretool_admits_exact_provider_gate_without_tool_start(
     )
 
 
+@pytest.mark.usefixtures("protected_effect")
 def test_codex_pretool_records_ready_tool_or_exact_core_denial(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -613,6 +594,7 @@ def test_codex_pretool_records_ready_tool_or_exact_core_denial(
     assert requests[-1]["tool_id"] == "read-1"
 
 
+@pytest.mark.usefixtures("recorded_operation", "selected_ticket_dispatch")
 def test_codex_posttool_ticket_lookup_reports_exact_missing_issue(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -637,6 +619,7 @@ def test_codex_posttool_ticket_lookup_reports_exact_missing_issue(
     assert response == {"systemMessage": "TASK_WORKSPACE_NOT_READY: ISSUE_NOT_FOUND for TEST-30"}
 
 
+@pytest.mark.usefixtures("recorded_operation", "selected_ticket_dispatch")
 def test_codex_posttool_forwards_verified_ticket_startup_context(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -693,6 +676,7 @@ def test_codex_session_and_endings_report_readiness_without_settlement(
         ("Bash", {"command": "sleep 100 &", "login": False, "shell": "/bin/sh"}),
     ],
 )
+@pytest.mark.usefixtures("recorded_operation")
 def test_codex_posttool_records_observed_async_handle_without_inferred_completion(
     monkeypatch: pytest.MonkeyPatch,
     tool_name: str,
@@ -729,6 +713,7 @@ def test_codex_posttool_records_observed_async_handle_without_inferred_completio
     assert requests[0]["poll"] is False
 
 
+@pytest.mark.usefixtures("recorded_operation")
 def test_codex_posttool_preserves_core_correlation_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -783,6 +768,7 @@ def test_codex_pretool_admits_exact_unready_bootstrap_before_binding(
     assert codex.handle({"hook_event_name": "PreToolUse", "tool_name": "exec_command"}) == {}
 
 
+@pytest.mark.usefixtures("protected_effect")
 def test_codex_pretool_rechecks_ready_bootstrap_without_tool_start(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -805,6 +791,7 @@ def test_codex_pretool_rechecks_ready_bootstrap_without_tool_start(
     assert [call["operation"] for call in calls] == ["ready"]
 
 
+@pytest.mark.usefixtures("protected_effect")
 def test_codex_pretool_records_correlated_poll_handle(monkeypatch: pytest.MonkeyPatch) -> None:
     """Reserve a poll against the exact observed process handle.
 
@@ -832,6 +819,7 @@ def test_codex_pretool_records_correlated_poll_handle(monkeypatch: pytest.Monkey
     assert calls[-1]["poll_handle"] == "77"
 
 
+@pytest.mark.usefixtures("recorded_operation")
 def test_codex_posttool_uses_poll_input_when_response_omits_handle(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -860,6 +848,7 @@ def test_codex_posttool_uses_poll_input_when_response_omits_handle(
     assert calls[-1]["async_handle"] == "77"
 
 
+@pytest.mark.usefixtures("recorded_operation")
 def test_codex_posttool_does_not_infer_completion_from_bad_json(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -918,6 +907,7 @@ def test_codex_prompt_permission_and_child_hooks_keep_distinct_responses(
     assert "HOST_UNSUPPORTED" in codex.handle({"hook_event_name": "SubagentStart"})["systemMessage"]
 
 
+@pytest.mark.usefixtures("protected_effect")
 def test_codex_provider_gate_failure_falls_through_to_readiness(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -942,6 +932,7 @@ def test_codex_provider_gate_failure_falls_through_to_readiness(
     ) == codex.denial("SOURCE_STALE")
 
 
+@pytest.mark.usefixtures("recorded_operation")
 def test_codex_posttool_rejects_scalar_response_without_completion(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -965,6 +956,7 @@ def test_codex_posttool_rejects_scalar_response_without_completion(
     )
 
 
+@pytest.mark.usefixtures("selected_ticket_dispatch")
 def test_codex_posttool_linear_missing_reference_names_requested_issue(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -12,6 +12,7 @@ import pytest
 
 from nplet.adapters import claude, codex, cursor
 from nplet.lifecycle import task_workspace as core
+from tests.platform_support import link_directory, unlink_directory
 from tests.support import Fixture
 from tests.types import JsonObject
 
@@ -66,7 +67,14 @@ def dispatch(host: Host, value: JsonObject) -> JsonObject:
 
 
 def denied(value: JsonObject) -> bool:
-    """Return the native denial fact without conflating normal permissions."""
+    """Return the native denial fact without conflating normal permissions.
+
+    Args:
+        value: Native hook response from one adapter.
+
+    Returns:
+        Whether the response explicitly denies the observed operation.
+    """
     return (
         value.get("permission") == "deny"
         or value.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
@@ -610,3 +618,139 @@ def test_claude_turn_ui_does_not_settle_existing_protected_work(
     finally:
         # Release only this disposable store; installed native acceptance remains separate.
         case.doCleanups()
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "requirements.txt",
+        "requirements-dev.txt",
+        "constraints.txt",
+        "CMakeLists.txt",
+        "docs/runtime/DEVELOPMENT.md",
+    ],
+)
+@pytest.mark.parametrize("existing", [False, True])
+def test_dependency_and_build_text_writes_require_task(
+    fresh: tuple[Host, Path], path: str, existing: bool
+) -> None:
+    """Protect dependency/build/instruction text on creation and replacement.
+
+    Args:
+        fresh: Native host and unregistered checkout.
+        path: Independently selected dependency/build or normative instruction destination.
+        existing: Whether native admission would create or overwrite the destination.
+    """
+    # Existing text suffixes must not erase the loader's dependency or instruction role.
+    host, root = fresh
+    target = root / path
+    if existing:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("original", encoding="utf-8")
+    before = target.read_bytes() if existing else None
+    response = dispatch(
+        host,
+        event(host, root, "Write", {"file_path": str(target), "content": "changed dependency"}),
+    )
+    assert denied(response)
+    assert (target.read_bytes() if target.exists() else None) == before
+    assert not (root / ".task").exists()
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_dependency_tree_alias_keeps_implementation_role(
+    fresh: tuple[Host, Path], existing: bool
+) -> None:
+    """Retain dependency roles through ordinary-looking portable directory aliases.
+
+    Args:
+        fresh: Native host and unregistered checkout.
+        existing: Whether the aliased dependency target already exists.
+    """
+    # A note-looking filename inside a dependency tree is still a dependency input.
+    host, root = fresh
+    dependency = root / "requirements"
+    dependency.mkdir()
+    target = dependency / "planning.txt"
+    if existing:
+        target.write_text("original dependency", encoding="utf-8")
+    before = target.read_bytes() if existing else None
+    alias = root / "notes"
+    link_directory(alias, dependency)
+    try:
+        # Both lexical and resolved targets participate before native execution is admitted.
+        response = dispatch(
+            host,
+            event(
+                host,
+                root,
+                "Write",
+                {"file_path": str(alias / "planning.txt"), "content": "changed"},
+            ),
+        )
+        assert denied(response)
+        assert (target.read_bytes() if target.exists() else None) == before
+        assert not (root / ".task").exists()
+    finally:
+        # Remove the link only; pytest owns disposal of the dependency tree.
+        unlink_directory(alias)
+
+
+def test_mixed_native_note_and_dependency_target_denies_whole_call(
+    fresh: tuple[Host, Path],
+) -> None:
+    """Do not select an ordinary note alias while ignoring another supplied native target.
+
+    Args:
+        fresh: Native host and unregistered checkout.
+    """
+    # Native target-field aliases are all retained; a protected endpoint wins the full call.
+    host, root = fresh
+    note = root / "planning.md"
+    dependency = root / "requirements.txt"
+    note.write_text("original note", encoding="utf-8")
+    dependency.write_text("original dependency", encoding="utf-8")
+    arguments: JsonObject = {"file_path": str(note), "path": str(dependency), "content": "changed"}
+    if host == "codex":
+        # Codex's real multi-file patch contract expresses both endpoints explicitly.
+        tool = "apply_patch"
+        arguments = {
+            "command": "*** Begin Patch\n*** Update File: planning.md\n@@\n"
+            "-original note\n+changed\n"
+            "*** Update File: requirements.txt\n@@\n-original dependency\n+changed\n"
+            "*** End Patch"
+        }
+    else:
+        tool = "Write"
+    assert denied(dispatch(host, event(host, root, tool, arguments)))
+    assert note.read_text(encoding="utf-8") == "original note"
+    assert dependency.read_text(encoding="utf-8") == "original dependency"
+    assert not (root / ".task").exists()
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "pip install package",
+        "pip uninstall package",
+        "npm update package",
+        "poetry add package",
+        "printf note > planning.md; printf dependency > requirements.txt",
+    ],
+)
+def test_package_and_mixed_shell_changes_require_task(
+    fresh: tuple[Host, Path], command: str
+) -> None:
+    """Keep package mutation and mixed note/dependency commands behind task readiness.
+
+    Args:
+        fresh: Native host and unregistered checkout.
+        command: Package or mixed mutation command supplied as native shell input.
+    """
+    # Unknown execution effects cannot inherit an administrative or ordinary-note exemption.
+    host, root = fresh
+    tool = "Shell" if host == "cursor" else "Bash"
+    assert denied(dispatch(host, event(host, root, tool, {"command": command})))
+    assert not (root / "planning.md").exists()
+    assert not (root / "requirements.txt").exists()
+    assert not (root / ".task").exists()

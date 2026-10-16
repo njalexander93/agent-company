@@ -88,9 +88,6 @@ def handle(event: core.JSONObject) -> core.JSONObject:
                 if not common.ticket_callback(observed, HOST):
                     common.native_post(observed, HOST, failed=name == "PostToolUseFailure")
                     return {}
-                # Completed preparation reads were never recorded and settle nothing.
-                if common.preparation_tool(observed, HOST):
-                    return {}
                 # Failed provider calls release correlation for a later read.
                 if name == "PostToolUseFailure":
                     common.native_ticket_failed(observed, HOST)

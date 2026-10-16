@@ -11,35 +11,6 @@ from tests.types import JsonObject
 pytestmark = pytest.mark.unit
 
 
-@pytest.fixture(autouse=True)
-def isolate_effect_policy(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep lifecycle dispatch unit cases independent of shared effect classification.
-
-    Args:
-        monkeypatch: Isolate the new policy, existing-admission and ticket lookup seams.
-    """
-    # These tests supply partial envelopes and test lifecycle dispatch after admission.
-    # The effect translator's full native contracts have separate unit/integration cases.
-    from nplet.adapters import codex, common, effects
-
-    monkeypatch.setattr(
-        common,
-        "effect_decision",
-        lambda *_args: effects.Decision("protected", "IMPLEMENTATION_TARGET", ""),
-    )
-    monkeypatch.setattr(common, "pending_tool", lambda *_args: True)
-    monkeypatch.setattr(common, "selected_ticket", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(
-        common,
-        "ticket_callback",
-        lambda native, host: (
-            codex.startup_lookup_state(native, ".lookup.json")
-            if host == "codex"
-            else common.lookup_required(native, host)
-        ),
-    )
-
-
 CONNECTOR = "01234567-89ab-4cde-8f01-23456789abcd"
 
 
@@ -210,37 +181,36 @@ def test_native_tool_routes_providers_and_no_effect_tools_by_host(
 
 
 @pytest.mark.parametrize("tool", ["ToolSearch", "Skill", "SendMessage", "AskUserQuestion"])
-def test_no_effect_tools_require_readiness_but_record_no_pending_work(
-    monkeypatch: pytest.MonkeyPatch, tool: str
+def test_no_effect_tools_are_task_free_and_record_no_pending_work(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, tool: str
 ) -> None:
-    """Check readiness for schema and skill loads without tool-start or settlement.
+    """Use real effect classification for unbound schema, skill and clarification calls.
 
     Args:
-        monkeypatch: Replaces lifecycle boundaries and records core calls.
-        tool: No-effect Claude tool.
+        monkeypatch: Isolate repository discovery and the existing-admission read boundary.
+        tmp_path: Absolute root with no lifecycle storage.
+        tool: Native administrative tool with no implementation effect.
     """
-    # Record core calls while readiness succeeds.
-    monkeypatch.setattr(common, "native_bootstrap", lambda *_args, **_kwargs: False)
+    # Complete native identities reach the real policy; no readiness lookup is permitted.
+    monkeypatch.setattr(core, "repository", lambda _path: (tmp_path, None, []))
+    monkeypatch.setattr(common, "pending_tool", lambda *_args: False)
     monkeypatch.setattr(
-        common, "request_for", lambda _event, operation, _host: {"operation": operation}
+        common, "request_for", lambda *_args: pytest.fail("task-free readiness lookup")
     )
-    calls: list[JsonObject] = []
     monkeypatch.setattr(
-        common.core, "execute", lambda request: calls.append(request) or {"ok": True, "code": "OK"}
+        core, "execute", lambda _request: pytest.fail("task-free lifecycle mutation")
     )
-    event: JsonObject = {"tool_name": tool, "tool_input": {}, "tool_use_id": "tool-1"}
-    # The pre-hook checks readiness only and the post-hook settles nothing.
+    event: JsonObject = {
+        "session_id": "native-session",
+        "cwd": str(tmp_path),
+        "tool_name": tool,
+        "tool_input": {},
+        "tool_use_id": "tool-1",
+    }
+    # Pre and post remain free even when no task binding or state directory exists.
     common.native_pre(event, "claude-code")
-    assert [call["operation"] for call in calls] == ["ready"]
     common.native_post({**event, "tool_response": "ok"}, "claude-code", failed=False)
-    assert [call["operation"] for call in calls] == ["ready"]
-    # A failed readiness check still denies the load.
-    monkeypatch.setattr(
-        common.core, "execute", lambda _request: {"ok": False, "code": "SOURCE_STALE"}
-    )
-    with pytest.raises(core.WorkspaceError) as failure:
-        common.native_pre(event, "claude-code")
-    assert failure.value.code == "SOURCE_STALE"
+    assert not (tmp_path / ".task").exists()
 
 
 def test_preparation_tool_bounds_tool_search_and_paths(

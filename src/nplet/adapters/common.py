@@ -1861,7 +1861,7 @@ def cursor_provider(event: core.JSONObject) -> None:
 
 
 def native_pre(event: core.JSONObject, host: str) -> None:
-    """Enforce readiness and record supported native tool admission.
+    """Admit native effects and record only task-required operation work.
 
     Args:
         event: Identity-validated native envelope.
@@ -1905,9 +1905,6 @@ def native_pre(event: core.JSONObject, host: str) -> None:
         return
     # Native permission approval remains separate from recording pending work.
     tool = native_tool(event, host)
-    # A ready session's no-effect load, message or hand-back needs no settlement.
-    if host == "claude-code" and tool in CLAUDE_NO_EFFECT_TOOLS | CLAUDE_CHILD_REPORT_TOOLS:
-        return
     # Remember the parent's Agent call so SubagentStart can require it to be pending.
     if tool == "Agent":
         record_agent_call(event, host)

@@ -10,35 +10,6 @@ from nplet.lifecycle import task_workspace as core
 pytestmark = pytest.mark.unit
 
 
-@pytest.fixture(autouse=True)
-def isolate_effect_policy(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep lifecycle dispatch unit cases independent of shared effect classification.
-
-    Args:
-        monkeypatch: Isolate the new policy, existing-admission and ticket lookup seams.
-    """
-    # These tests supply partial envelopes and test lifecycle dispatch after admission.
-    # The effect translator's full native contracts have separate unit/integration cases.
-    from nplet.adapters import codex, common, effects
-
-    monkeypatch.setattr(
-        common,
-        "effect_decision",
-        lambda *_args: effects.Decision("protected", "IMPLEMENTATION_TARGET", ""),
-    )
-    monkeypatch.setattr(common, "pending_tool", lambda *_args: True)
-    monkeypatch.setattr(common, "selected_ticket", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(
-        common,
-        "ticket_callback",
-        lambda native, host: (
-            codex.startup_lookup_state(native, ".lookup.json")
-            if host == "codex"
-            else common.lookup_required(native, host)
-        ),
-    )
-
-
 def test_codex_async_handle_preserves_absence_and_rejects_boolean() -> None:
     """Codex async handle preserves absence and rejects boolean."""
     assert codex.async_handle(None) is None
@@ -79,6 +50,7 @@ def test_codex_pretool_denies_unsupported_child_control_before_request_or_core_c
     )
 
 
+@pytest.mark.usefixtures("protected_effect")
 def test_codex_pretool_records_exact_poll_handle_only_after_ready(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -122,6 +94,7 @@ def test_codex_pretool_records_exact_poll_handle_only_after_ready(
     assert operations[-1]["tool_id"] == "tool-1"
 
 
+@pytest.mark.usefixtures("protected_effect")
 def test_codex_pretool_invalid_poll_handle_has_no_tool_start(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -161,6 +134,7 @@ def test_codex_pretool_invalid_poll_handle_has_no_tool_start(
     assert "ASYNC_HANDLE_CONFLICT" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
+@pytest.mark.usefixtures("recorded_operation")
 def test_codex_posttool_keeps_unproven_completion_pending(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -181,6 +155,7 @@ def test_codex_posttool_keeps_unproven_completion_pending(
     assert codex.handle(event) == {}
 
 
+@pytest.mark.usefixtures("recorded_operation")
 def test_codex_posttool_records_typed_completion_and_handle(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -219,6 +194,7 @@ def test_codex_posttool_records_typed_completion_and_handle(
     assert calls[0]["tool_id"] == "tool-1"
 
 
+@pytest.mark.usefixtures("recorded_operation")
 def test_codex_posttool_rejects_conflicting_poll_handle_without_settlement(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -586,10 +562,15 @@ def test_claude_preparation_reads_pass_through_a_pending_ticket_lookup(
         claude.common, "native_ticket_lookup", lambda *_args, **_kwargs: pytest.fail("lookup")
     )
     monkeypatch.setattr(claude.common, "native_pre", lambda *_args: pytest.fail("pre"))
-    monkeypatch.setattr(claude.common, "native_post", lambda *_args, **_kwargs: pytest.fail("post"))
+    monkeypatch.setattr(claude.common, "ticket_callback", lambda *_args: False)
+    posts: list[object] = []
+    monkeypatch.setattr(
+        claude.common, "native_post", lambda value, *_args, **_kwargs: posts.append(value)
+    )
     # Neither the start nor the completion of a preparation read is recorded or settled.
     assert claude.handle({"hook_event_name": "PreToolUse", "tool_name": "Read"}) == {}
     assert claude.handle({"hook_event_name": "PostToolUse", "tool_name": "Read"}) == {}
+    assert posts == [{"hook_event_name": "PostToolUse", "tool_name": "Read"}]
 
 
 def test_claude_subagent_start_reports_the_child_join_as_context(

@@ -90,7 +90,7 @@ Native launch receipts admit a bounded cohort of roadmap-only readers. The host
 does not expose a direct spawn-call key on child start, so launch order, task name
 and arrival time never select write ownership. Only an explicit coordinator
 `scope` grants a particular observed participant its owned `context/` paths.
-Initial readers have no write permission.
+Initial readers have no managed-task write ownership.
 
 Startup returns exact lifecycle and source-read commands. A child reads its packet,
 reads each available source with the exact `cat -- <absolute path>` command,
@@ -99,9 +99,12 @@ canonical store, including from linked checkouts. Acknowledgment requires the
 child's own correlated final source bytes to match its current packet. Truncated,
 foreign and obsolete deliveries do not count. Children can use only their own
 `read`, `acknowledge`, `ready`, `diagnose` and ready, owned `update` transactions.
-Generic shell/file writes, provider tools and nested delegation remain denied.
-This route supports managed output notes, not arbitrary repository implementation
-commands. Normal host permissions remain in force.
+Known task-free inspection and structured ordinary-note writes remain available
+to verified joined children. Implementation writes remain gated; this child route
+permits scoped managed updates rather than arbitrary repository implementation
+commands. Generic child providers and nested delegation remain denied. Actual
+child identity, source-delivery and ownership checks still apply. Normal host
+permissions remain in force.
 
 The adapter records admitted source reads in the shared lifecycle pending map
 through `source-read-start`, as well as its delivery receipts. A missing completion

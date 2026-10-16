@@ -16,35 +16,6 @@ from nplet.lifecycle import task_workspace as core
 pytestmark = pytest.mark.unit
 
 
-@pytest.fixture(autouse=True)
-def isolate_effect_policy(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep lifecycle dispatch unit cases independent of shared effect classification.
-
-    Args:
-        monkeypatch: Isolate the new policy, existing-admission and ticket lookup seams.
-    """
-    # These tests supply partial envelopes and test lifecycle dispatch after admission.
-    # The effect translator's full native contracts have separate unit/integration cases.
-    from nplet.adapters import codex, common, effects
-
-    monkeypatch.setattr(
-        common,
-        "effect_decision",
-        lambda *_args: effects.Decision("protected", "IMPLEMENTATION_TARGET", ""),
-    )
-    monkeypatch.setattr(common, "pending_tool", lambda *_args: True)
-    monkeypatch.setattr(common, "selected_ticket", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(
-        common,
-        "ticket_callback",
-        lambda native, host: (
-            codex.startup_lookup_state(native, ".lookup.json")
-            if host == "codex"
-            else common.lookup_required(native, host)
-        ),
-    )
-
-
 ISSUE = "TEST-30"
 UUID = "0920cdcc-1644-4fa1-bf71-eb8370134c70"
 ROOT = Path("/ticket-unit-repository")
@@ -981,6 +952,7 @@ def test_cursor_startup_failure_requires_a_fresh_native_read(
         (cursor, "preToolUse", "postToolUse", "postToolUseFailure"),
     ],
 )
+@pytest.mark.usefixtures("recorded_operation", "protected_effect", "selected_ticket_dispatch")
 def test_native_handlers_gate_ticket_first_and_route_completion(
     monkeypatch: pytest.MonkeyPatch, adapter: Any, pre: str, post: str, failed: str
 ) -> None:
@@ -1049,6 +1021,7 @@ def test_native_handlers_gate_ticket_first_and_route_completion(
         assert denied["permission"] == "deny"
 
 
+@pytest.mark.usefixtures("selected_ticket_dispatch")
 def test_cursor_mcp_specific_admission_requires_ticket_server(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1087,6 +1060,7 @@ def test_cursor_mcp_specific_admission_requires_ticket_server(
     assert denied["permission"] == "deny"
 
 
+@pytest.mark.usefixtures("recorded_operation", "selected_ticket_dispatch")
 def test_native_completion_without_verified_ticket_stays_unready(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

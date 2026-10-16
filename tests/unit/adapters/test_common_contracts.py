@@ -17,35 +17,6 @@ from nplet.lifecycle import task_workspace as core
 pytestmark = pytest.mark.unit
 
 
-@pytest.fixture(autouse=True)
-def isolate_effect_policy(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep lifecycle dispatch unit cases independent of shared effect classification.
-
-    Args:
-        monkeypatch: Isolate the new policy, existing-admission and ticket lookup seams.
-    """
-    # These tests supply partial envelopes and test lifecycle dispatch after admission.
-    # The effect translator's full native contracts have separate unit/integration cases.
-    from nplet.adapters import codex, common, effects
-
-    monkeypatch.setattr(
-        common,
-        "effect_decision",
-        lambda *_args: effects.Decision("protected", "IMPLEMENTATION_TARGET", ""),
-    )
-    monkeypatch.setattr(common, "pending_tool", lambda *_args: True)
-    monkeypatch.setattr(common, "selected_ticket", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(
-        common,
-        "ticket_callback",
-        lambda native, host: (
-            codex.startup_lookup_state(native, ".lookup.json")
-            if host == "codex"
-            else common.lookup_required(native, host)
-        ),
-    )
-
-
 @pytest.mark.parametrize("value", [None, 1, [], {}])
 def test_native_token_rejects_nonstring_identity(value: object) -> None:
     """Native token rejects nonstring identity.
@@ -654,6 +625,7 @@ def test_shared_recovery_branches_keep_code_specific_sentences_apart(host: str) 
     assert "another provider issue UUID" not in common.recovery("PROVIDER_RESPONSE_INVALID", host)
 
 
+@pytest.mark.usefixtures("recorded_operation")
 def test_native_post_does_not_settle_cursor_without_output(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -671,6 +643,7 @@ def test_native_post_does_not_settle_cursor_without_output(
     assert captured.value.code == "INVALID_REQUEST"
 
 
+@pytest.mark.usefixtures("recorded_operation")
 def test_native_post_records_exact_synchronous_completion(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -706,6 +679,7 @@ def test_native_post_records_exact_synchronous_completion(
     assert calls[0]["completed"] is True
 
 
+@pytest.mark.usefixtures("protected_effect")
 def test_native_pre_rejects_unsupported_tool_before_tool_start(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -740,8 +714,9 @@ def test_native_pre_rejects_unsupported_tool_before_tool_start(
     assert calls == ["ready"]
 
 
+@pytest.mark.usefixtures("protected_effect")
 def test_native_pre_records_supported_tool_after_ready(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Record a supported tool only after lifecycle readiness succeeds.
+    """Record a supported implementation edit only after lifecycle readiness succeeds.
 
     Args:
         monkeypatch: Replaces repository or lifecycle boundaries for the case.
@@ -765,7 +740,12 @@ def test_native_pre_records_supported_tool_after_ready(monkeypatch: pytest.Monke
         return {"ok": True, "code": "OK"}
 
     monkeypatch.setattr(common.core, "execute", execute)
-    assert common.native_pre(native_event("Read"), "cursor") is None
+    assert (
+        common.native_pre(
+            native_event("Write", {"file_path": "src/main.py", "content": "source"}), "cursor"
+        )
+        is None
+    )
     assert [item["operation"] for item in calls] == ["ready", "tool-start"]
     assert calls[-1]["tool_id"] == "tool-1"
 

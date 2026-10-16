@@ -56,9 +56,10 @@ class Policy:
         protected_paths: Additional absolute loader-consumed instructions/configuration.
         providers: Exact (provider identity, operation) keys; never inferred by prefix.
 
-    Ordinary notes are .md/.txt/.rst files outside protected trees. Unknown file types
-    require a task. Repository governance guides are explicitly registered; external vault
-    loaders must register their own protected instruction paths. Managed .task paths
+    Ordinary notes are .md/.txt/.rst files outside protected trees and conventional
+    dependency/build inputs. Registered paths also protect case variants on every OS.
+    Unknown file types require a task. Repository governance guides are explicitly registered;
+    external vault loaders must register their own protected instruction paths. Managed .task paths
     always retain the lifecycle route and never qualify as task-free notes.
     """
 
@@ -92,6 +93,8 @@ _PROTECTED_PARTS = {
     "tests",
     "scripts",
     "node_modules",
+    "requirements",
+    "constraints",
     ".git",
     ".task",
     ".github",
@@ -186,9 +189,18 @@ def target_effect(target: object, cwd: Path, policy: Policy) -> Effect:
     # Directory roles and loader names remain protected anywhere, including outside root.
     for candidate in candidates:
         parts = {part.casefold() for part in candidate.parts}
-        if parts & _PROTECTED_PARTS or candidate.name.casefold() in _INSTRUCTIONS:
+        name = candidate.name.casefold()
+        if parts & _PROTECTED_PARTS or name in _INSTRUCTIONS:
             return "protected"
-        if any(candidate == p or p in candidate.parents for p in protected):
+        # Conventional dependency/build inputs remain protected despite prose suffixes.
+        if name == "cmakelists.txt" or re.fullmatch(r"(?:requirements|constraints).*\.txt", name):
+            return "protected"
+        # Fold each path component conservatively, including not-yet-created case aliases.
+        # This intentionally also gates distinct case variants on case-sensitive hosts.
+        folded = tuple(part.casefold() for part in candidate.parts)
+        if any(
+            folded[: len(p.parts)] == tuple(part.casefold() for part in p.parts) for p in protected
+        ):
             return "protected"
     # Only explicit prose suffixes qualify; content alone does not confer execution.
     if all(p.suffix.casefold() in {".md", ".txt", ".rst"} for p in candidates):

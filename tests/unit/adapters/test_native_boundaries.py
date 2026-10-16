@@ -13,35 +13,6 @@ from nplet.lifecycle import task_workspace as core
 pytestmark = pytest.mark.unit
 
 
-@pytest.fixture(autouse=True)
-def isolate_effect_policy(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep lifecycle dispatch unit cases independent of shared effect classification.
-
-    Args:
-        monkeypatch: Isolate the new policy, existing-admission and ticket lookup seams.
-    """
-    # These tests supply partial envelopes and test lifecycle dispatch after admission.
-    # The effect translator's full native contracts have separate unit/integration cases.
-    from nplet.adapters import codex, common, effects
-
-    monkeypatch.setattr(
-        common,
-        "effect_decision",
-        lambda *_args: effects.Decision("protected", "IMPLEMENTATION_TARGET", ""),
-    )
-    monkeypatch.setattr(common, "pending_tool", lambda *_args: True)
-    monkeypatch.setattr(common, "selected_ticket", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(
-        common,
-        "ticket_callback",
-        lambda native, host: (
-            codex.startup_lookup_state(native, ".lookup.json")
-            if host == "codex"
-            else common.lookup_required(native, host)
-        ),
-    )
-
-
 CHECKOUT = Path(Path.cwd().anchor) / "checkout"
 OTHER = Path(Path.cwd().anchor) / "other"
 
@@ -361,6 +332,7 @@ def test_automatic_attach_uses_only_persisted_startup_assignment(
     assert calls[-1]["expected_revision"] == 4
 
 
+@pytest.mark.usefixtures("protected_effect")
 def test_native_pre_stops_on_failed_readiness_without_tool_start(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -396,6 +368,7 @@ def test_native_pre_stops_on_failed_readiness_without_tool_start(
     assert calls == ["ready"]
 
 
+@pytest.mark.usefixtures("recorded_operation")
 def test_native_post_rejects_cursor_failure_without_documented_type(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -419,6 +392,7 @@ def test_native_post_rejects_cursor_failure_without_documented_type(
     assert captured.value.code == "INVALID_REQUEST"
 
 
+@pytest.mark.usefixtures("recorded_operation")
 def test_native_post_rejects_async_cursor_shell_output_without_settlement(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -436,6 +410,7 @@ def test_native_post_rejects_async_cursor_shell_output_without_settlement(
     assert captured.value.code == "HOST_UNSUPPORTED_ASYNC"
 
 
+@pytest.mark.usefixtures("recorded_operation")
 def test_native_post_preserves_core_settlement_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -840,6 +815,7 @@ def test_native_pre_admits_exact_unready_bootstrap_without_binding_lookup(
     assert common.native_pre(event(), "cursor") is None
 
 
+@pytest.mark.usefixtures("protected_effect")
 def test_native_pre_does_not_record_ready_bootstrap_as_external_tool(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -887,6 +863,7 @@ def test_native_post_ignores_exact_lifecycle_transaction_completion(
     assert common.native_post(event(), "cursor", failed=False) is None
 
 
+@pytest.mark.usefixtures("recorded_operation")
 def test_native_post_rejects_unproven_claude_bash_completion(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -928,6 +905,7 @@ def test_native_post_rejects_unproven_claude_bash_completion(
         ("cursor", "Shell", {"tool_output": '{"exitCode":0}'}),
     ],
 )
+@pytest.mark.usefixtures("recorded_operation")
 def test_native_post_settles_only_documented_synchronous_success(
     monkeypatch: pytest.MonkeyPatch, host: str, tool: str, response: dict[str, object]
 ) -> None:
@@ -963,6 +941,7 @@ def test_native_post_settles_only_documented_synchronous_success(
         ("cursor", "error_message", {"failure_type": "timeout"}),
     ],
 )
+@pytest.mark.usefixtures("recorded_operation")
 def test_native_post_settles_documented_file_tool_failure(
     monkeypatch: pytest.MonkeyPatch, host: str, field: str, extra: dict[str, object]
 ) -> None:
@@ -989,16 +968,17 @@ def test_native_post_settles_documented_file_tool_failure(
     assert calls[0]["completed"] is True
 
 
+@pytest.mark.usefixtures("protected_effect")
 def test_native_pre_records_only_eligible_tool_after_readiness(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A native tool starts only after readiness and native transport validation.
+    """A native implementation edit starts after readiness and transport validation.
 
     Args:
         monkeypatch: Pytest fixture that isolates external state for this case.
     """
     monkeypatch.setattr(common, "native_bootstrap", lambda *_args, **_kwargs: False)
-    monkeypatch.setattr(common, "native_tool", lambda *_args: "Read")
+    monkeypatch.setattr(common, "native_tool", lambda *_args: "Write")
     monkeypatch.setattr(
         common, "request_for", lambda _event, operation, _host: {"operation": operation}
     )
@@ -1006,6 +986,11 @@ def test_native_pre_records_only_eligible_tool_after_readiness(
     monkeypatch.setattr(
         common.core, "execute", lambda request: calls.append(request) or {"ok": True, "code": "OK"}
     )
-    assert common.native_pre({**event(), "tool_name": "Read", "tool_input": {}}, "cursor") is None
+    assert (
+        common.native_pre(
+            {**event(), "tool_name": "Write", "tool_input": {"file_path": "src/main.py"}}, "cursor"
+        )
+        is None
+    )
     assert [call["operation"] for call in calls] == ["ready", "tool-start"]
     assert calls[-1]["request_id"] == "pre:tool-1"
