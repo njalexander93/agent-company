@@ -634,6 +634,65 @@ shapes, duplicate callbacks, host separation, strict bootstrap rejection, and im
 All three adapters have ticket-first startup regression coverage. Native protocol
 tests use synthetic events; they are not actual host callbacks.
 
+### Desktop workflow observations, 2026-10-15
+
+The local macOS run used app bundle `26.1007.21159` (build `20052`), bundled
+`codex-cli 0.162.0-alpha.17.2`, macOS `26.6.2` on ARM64, and Python `3.14.8`.
+The disposable checkout's Git HEAD was `e393f85822598dce9ee462ec1d96c06b8ab5326f`;
+its installed runtime bytes matched merged source
+`d7baf7a2e791bb8648d6ee1305127cce14031989`. A 136-file manifest pinned the effective
+working-tree snapshot, including the reviewed usage-guide corrections. Git HEAD
+alone did not identify that installed snapshot. Enabled project hooks retained
+normal host permissions and the existing metadata-only capture prefix.
+
+| Configured event | Installed-host evidence and limit |
+| --- | --- |
+| `SessionStart` | Fresh chats emitted the callback; missing binding remained unready. |
+| `UserPromptSubmit` | Direct human Task input triggered exact ticket verification and automatic startup. Tool-created initial messages omitted this callback and failed with `BINDING_MISSING`. |
+| `PreToolUse` | Unacknowledged roadmap changes denied ordinary work with `NOT_READY`; changed required source bytes denied it with `SOURCE_STALE`. Exact bootstrap recovery restored readiness. |
+| `PermissionRequest` | Assignee/state and comment writes emitted callbacks with empty adapter decisions. Host permission authority remained intact; captured metadata does not establish a visible prompt or the user's choice. |
+| `PostToolUse` | Exact Linear read/write/read-back calls, parallel shell calls, nonzero exit, patch create/edit/delete and delayed shell completion settled their correlated work. |
+| `PreCompact` / `PostCompact` | Synthetic dispatch coverage; no native observation in this run. |
+| `SubagentStart` / `SubagentStop` | Native UUID readers, explicit coordinator scopes, source deliveries and owned-note handbacks were observed. Stops did not detach participants. |
+| `Stop` | Observed across completed turns; the issue stayed active and attached participants remained recorded. |
+| `Interrupt` | Synthetic dispatch coverage; no native main-session interruption observation in this run. |
+| `SessionEnd` | Prior installed-host observation is retained separately; this workflow run does not establish it. |
+
+The host normalized delayed execution and polling into `Bash` completion callbacks.
+An unknown poll handle returned a host error without clearing the real operation.
+This does not establish native delivery of legacy `write_stdin` envelopes; those
+handle-correlation and malformed/duplicate/out-of-order cases remain protocol-test
+evidence. A ready parent's false-session lifecycle command ran as ordinary shell
+work and was rejected by the core with `BINDING_MISSING`; it was not admitted as a
+bootstrap exception.
+
+Native roadmap update/read/acknowledgment, safe changed-source digest refresh and
+explicit coordinator transfer were observed. A required scratch source placed
+directly in root-owned `/private/tmp` failed the source-reader boundary. Its
+reference was removed through an explicitly authorized manual lifecycle repair.
+That intervention is not native recovery evidence. A corrected fixture in a
+user-owned directory then passed native digest-only recovery and cleanup; see
+[source placement and recovery](task-workspace-usage.md#explicit-setup-and-bootstrap).
+Repeated startup, legacy assignment recovery, issue switching and failed-switch
+return have synthetic regression coverage; this run does not establish those
+flows through direct native Task input. Tool discovery, skill loading, compaction
+and main-session interruption were not separately driven through native controls.
+
+| Execution surface | Installed-hook evidence | Protocol / launcher evidence |
+| --- | --- | --- |
+| macOS Desktop, versions above | Startup, providers, tools, recovery and restricted children as recorded above | Local checks on this OS; preserve exact candidate and outcomes in the delivery record. |
+| macOS CLI | Not established by Desktop callbacks or the bundled binary's version output | Shared protocol tests do not establish CLI activation. |
+| Linux Desktop / CLI | Unverified in this run | Required native Linux CI checks are separate evidence for the submitted candidate. |
+| Native Windows Desktop / CLI | Unverified in this run | Required native Windows CI checks are separate evidence; POSIX callbacks do not validate PowerShell or NTFS host activation. |
+
+Retain `final-native-candidate.json`, redacted callback records, before/after
+lifecycle snapshots, owned output hashes and independent overlap verification
+with the delivery evidence. Preserve initial failed probes and manual repairs
+alongside corrected results. Neither synthetic results nor another platform's
+CI pass converts an unverified installed host into a passed host.
+
+### Other validation limits
+
 Inside the Claude desktop app's command sandbox, the `tests/integration/tooling` cases that
 require child-process coverage (the coverage smoke, `check-local`, platform-coverage and
 PR-workflow tests) fail with `child-only coverage: failed` at any commit, because the sandbox

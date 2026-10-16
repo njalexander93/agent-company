@@ -54,6 +54,21 @@ dependency. Use the platform filesystem requirements in the
    This checks supplied evidence; it does not independently authenticate a human
    decision or provider response. Cancellation records an explicit separate outcome.
 
+Before adding an absolute source to the coordinator's own packet, check that the
+external source reader can read it. On POSIX, the immediate parent directory must
+belong to the current user; the file must also satisfy the owned, regular,
+single-link, non-group/world-writable and no-symlink boundary. A file directly in
+root-owned `/private/tmp` fails that parent check even when an ordinary shell read
+succeeds. Put disposable sources in a user-owned private directory instead.
+See [storage and identity](task-workspace.md#storage-and-identity).
+
+When diagnosis returns `current_sha256: null`, a digest-only self-refresh cannot
+repair the unavailable source. Restore safe, readable bytes at its existing
+locator before retrying. If that locator cannot be repaired, replacing or removing
+the reference needs explicit operator recovery through the lifecycle API outside
+the native unready-session exception. Record that intervention as manual recovery;
+do not claim it as native refresh evidence or edit lifecycle control files.
+
 Construct bootstrap commands with the shared formatter. It selects the native
 Windows encoded request route for Codex/Cursor and preserves POSIX shell quoting
 for Unix hosts and Claude's Bash tool. Pass the result through the native host's
@@ -110,8 +125,8 @@ The startup prompt accepts exactly one standalone `Task: <issue-id>` line, for e
 requiring local registration. Its exact Linear issue read is admitted before
 readiness through the [host-specific ticket-read protocol](host-hooks.md#ticket-read-protocols).
 Only the bounded preparation reads in
-[setup step 3](host-hooks.md#setup-and-bootstrap) may precede it. That rule is runtime-neutral;
-the Claude Code adapter is the only one implementing it so far.
+[setup step 3](host-hooks.md#setup-and-bootstrap) may precede it. Codex and Claude Code
+implement their documented preparation routes; Cursor has no preparation phase.
 The adapter verifies the response's identifier and immutable issue UUID, then
 invokes the shared startup orchestrator with the actual runtime/session identity.
 
