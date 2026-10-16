@@ -634,6 +634,54 @@ shapes, duplicate callbacks, host separation, strict bootstrap rejection, and im
 All three adapters have ticket-first startup regression coverage. Native protocol
 tests use synthetic events; they are not actual host callbacks.
 
+### Validate the Codex workflow
+
+Keep run-specific observations, versions, source hashes, failures and artifact
+locations in the Linear ticket. Use this guide for the validation procedure and
+reusable operating constraints.
+
+1. Use a disposable registered repository with trusted project hooks and normal
+   host permissions. Record the app and bundled runtime versions, OS, interpreter,
+   configuration and evidence that hooks loaded once. Pin the effective source
+   bytes; record any difference between the checkout's Git HEAD and installed code.
+2. Maintain a coverage matrix in the ticket for every configured hook. Record the
+   expected decision, lifecycle mutation, native identity and completion behavior.
+   Label evidence as installed-host callbacks, synthetic tests or manual lifecycle
+   calls. Mark unobserved events explicitly unverified, including compaction,
+   interruption and session end; never infer them from a successful stop.
+3. Verify the complete ticket-first startup and preparation contract. Confirm an
+   actual `UserPromptSubmit` callback, exact issue identity, source delivery,
+   acknowledgment and readiness. If a tool-created Task message produces no prompt
+   callback, obtain direct human input; do not fabricate the callback or substitute
+   manual registration for native startup evidence.
+4. Exercise required provider reads, writes and read-back, file edits, parallel
+   shell calls, nonzero exits and delayed completion. Correlate native call IDs
+   with pending-work settlement. Test unknown and foreign handles without clearing
+   another operation. Record the actual tool envelopes; normalized `Bash` callbacks
+   do not establish legacy `write_stdin` coverage. Preserve host permission authority;
+   an empty adapter decision alone does not prove a visible permission prompt.
+5. Verify roadmap acknowledgment, coordinator source refresh, reader refresh,
+   repeated startup, legacy recovery, issue switching and failed-switch return.
+   For an invalidated or stale packet, verify an ordinary-work denial before
+   recovery and readiness afterward. Follow
+   [source placement and recovery](task-workspace-usage.md#explicit-setup-and-bootstrap).
+   Preserve old work and label any operator intervention as manual recovery.
+6. Validate the [restricted native child route](#codex-native-child-route-restricted)
+   with host-issued identities, separate packets, actual source delivery and owned
+   output verification. Prove three-way overlap across three fresh sibling bursts,
+   successful handback and zero orphan pending work. Exercise inherited-context,
+   child-provider and nested-launch denials without widening the contract.
+7. Report Desktop and CLI separately for macOS, Linux and native Windows. Keep
+   installed-hook acceptance separate from each platform's CI protocol and launcher
+   results. Another surface's success does not establish activation on an untested
+   host; record unavailable coverage and its next action in the ticket.
+8. Retain redacted callbacks, before/after lifecycle state, source and output hashes,
+   commands, timestamps and independent verification with the ticket's delivery
+   evidence. Preserve initial failures and corrected results separately. Do not
+   settle ambiguous work, edit control files or disable hooks to obtain a pass.
+
+### Other validation limits
+
 Inside the Claude desktop app's command sandbox, the `tests/integration/tooling` cases that
 require child-process coverage (the coverage smoke, `check-local`, platform-coverage and
 PR-workflow tests) fail with `child-only coverage: failed` at any commit, because the sandbox

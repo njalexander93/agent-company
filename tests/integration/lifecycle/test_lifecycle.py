@@ -147,6 +147,25 @@ class LifecycleTests(Fixture):
         Raises:
             AssertionError: An asserted lifecycle or boundary invariant does not hold.
         """
+        self.assert_competing_updates(force_busy=False)
+
+    def test_T04_busy_contender_preserves_stale_revision(self) -> None:
+        """Exercise a real lock timeout before replaying the unchanged stale request.
+
+        Raises:
+            AssertionError: Contention permits a second writer or loses revision protection.
+        """
+        self.assert_competing_updates(force_busy=True)
+
+    def assert_competing_updates(self, *, force_busy: bool) -> None:
+        """Check the one-writer invariant across racing and lock-timeout schedules.
+
+        Args:
+            force_busy: Hold the real binding lock until the stale child times out.
+
+        Raises:
+            AssertionError: More than one update commits or the loser bypasses its stale revision.
+        """
         # Prepare two competing writes from the same committed revision.
         self.create()
         state = self.state()
@@ -165,12 +184,41 @@ class LifecycleTests(Fixture):
             )
             for i in range(2)
         ]
-        # Race the writes in separate processes under the shared issue lock.
-        with multiprocessing.get_context("spawn").Pool(2) as pool:
-            results = pool.map(call_process, requests)
-        # Require one winner and one explicit revision conflict.
+        # Force contention with a real cross-process lock, without sleeps or mocked results.
+        if force_busy:
+            results = [call_process(requests[0])]
+            with multiprocessing.get_context("spawn").Pool(1) as pool:
+                with (
+                    w.Store(requests[1]) as store,
+                    store.bindings.lock(w.participant_key(requests[1]) + ".lock"),
+                ):
+                    results.append(pool.apply(call_process, (requests[1],)))
+            self.assertEqual(results[1]["code"], "BUSY", results)
+        else:
+            # Race the writes in separate processes under the shared issue lock.
+            with multiprocessing.get_context("spawn").Pool(2) as pool:
+                results = pool.map(call_process, requests)
+        # A bounded lock wait may refuse the loser before it can check the revision.
         self.assertEqual(sum(r["ok"] for r in results), 1, results)
-        self.assertIn("REVISION_CONFLICT", [r["code"] for r in results])
+        loser = next(i for i, result in enumerate(results) if not result["ok"])
+        self.assertIn(results[loser]["code"], {"BUSY", "REVISION_CONFLICT"})
+        committed = self.state()
+        state_path = self.root / ".task/.control/issues/TEST-1/state.json"
+        committed_bytes = state_path.read_bytes()
+        payloads = {
+            name: (self.root / ".task/TEST-1" / name).read_bytes()
+            for name in ("roadmap.md", "events.jsonl")
+        }
+        self.assertEqual(payloads["roadmap.md"], requests[1 - loser]["content"].encode())
+        # Once both processes have exited, replay the exact stale request without refreshing it.
+        replay = call_process(requests[loser])
+        self.assertFalse(replay["ok"], replay)
+        self.assertEqual(replay["code"], "REVISION_CONFLICT", replay)
+        self.assertEqual(self.state(), committed)
+        self.assertEqual(state_path.read_bytes(), committed_bytes)
+        # A refused replay must preserve both the winning payload and the event history.
+        for name, content in payloads.items():
+            self.assertEqual((self.root / ".task/TEST-1" / name).read_bytes(), content)
 
     def test_T05_transaction_boundaries_exactly_once(self) -> None:
         """Recover each interrupted creation with exactly one committed event.
