@@ -102,7 +102,15 @@ The plan identifies at least:
 - dependency, collision, security, destructive-action, external-account, publication, merge, deployment and rollback requirements when applicable;
 - known uncertainty, unresolved decisions that block execution, and conditions that require replanning rather than specialist improvisation.
 
-The human-readable plan has five stable sections: identity and authority (Work Item, plan version and digest, status, Planner and Plan Reviewer dispositions, Human Leadership authorization, workflow Profile, Estimate, Agent Class, Assurance Level); outcome and boundaries; an execution graph of work packages, each carrying only its applicable Role lanes with objective, inputs, writable artifacts, prohibited actions, prerequisites, handoff, evidence receipt, correction route and next gate; assurance and terminal gates; and amendments and exceptions. The machine-readable graph is a directed acyclic graph where possible. Numbered steps are a human projection of the valid order; a checked box projects an accepted state event and is neither authorization nor evidence. Reusable workflow Profiles supply generic lane rules, mandatory evidence classes and standard gates by reference; the plan records only the task-specific application, permitted overrides and exact artifact boundaries.
+The human-readable plan has five stable sections:
+
+- identity and authority: Work Item, plan version and digest, status, Planner and Plan Reviewer dispositions, Human Leadership authorization, workflow Profile, Estimate, Agent Class and Assurance Level;
+- outcome and boundaries;
+- an execution graph of work packages, each carrying only its applicable Role lanes with objective, inputs, writable artifacts, prohibited actions, prerequisites, handoff, evidence receipt, correction route and next gate;
+- assurance and terminal gates;
+- amendments and exceptions.
+
+The machine-readable graph is a directed acyclic graph where possible. Numbered steps are a human projection of the valid order; a checked box projects an accepted state event and is neither authorization nor evidence. Reusable workflow Profiles supply generic lane rules, mandatory evidence classes and standard gates by reference; the plan records only the task-specific application, permitted overrides and exact artifact boundaries.
 
 Human authorization creates an immutable plan-version baseline bound to its digest. Execution events reference that baseline and never edit it. An amendment is a new attributable version recording changed fields, reason, evidence, author, review disposition, required authority and relationship to the prior version; it passes through the Planning Workflow as a new instance with renewed independent review and human authorization. Specialists exercise only the bounded discretion the plan and Role contract leave open. A discovery that changes product intent, material scope, Role topology, mandatory gates, risk classification, budget commitment, protected targets or terminal outcome pauses affected execution where continuing would be unsafe or invalid, and returns to the amendment path. The exact field schema, amendment-materiality matrix and provider-specific rendering remain unresolved implementation work; this section establishes artifact identity, contents and authority boundaries.
 
