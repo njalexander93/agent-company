@@ -632,11 +632,14 @@ def handle(event: core.JSONObject) -> core.JSONObject:
                     )
                 }
         # A recorded native admission wins over changed paths or symlinks in a callback.
-        if (
-            not common.pending_tool(event, "codex")
-            and not common.effect_decision(event, "codex").requires_task
-        ):
-            return {}
+        try:
+            # Malformed polling metadata is advisory after execution and settles no work.
+            pending = common.pending_tool(event, "codex")
+            if not pending and not common.effect_decision(event, "codex").requires_task:
+                return {}
+        except core.WorkspaceError as error:
+            # Preserve native post-hook diagnostics instead of leaking an adapter exception.
+            return {"systemMessage": "TASK_WORKSPACE_NOT_READY: " + error.code}
         # Build the request from explicit caller or observed session identities.
         request = request_for(event, "tool-complete")
         response = event.get("tool_response", {})

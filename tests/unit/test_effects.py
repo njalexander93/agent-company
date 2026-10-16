@@ -318,3 +318,46 @@ def test_existing_metadata(
 
     monkeypatch.setattr(Path, "stat", metadata)
     assert target_effect("ordinary.md", ROOT, POLICY) == expected
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        "status --short -- notes/",
+        "status --short -- --output=report.txt",
+        "ls-files -- notes/ --ext-diff",
+        "diff --no-ext-diff --no-textconv -- notes/ --ext-diff",
+        "log --no-ext-diff --no-textconv -- notes/",
+        "show --no-ext-diff --no-textconv -- notes/",
+    ],
+)
+def test_git_filename_separator(arguments: str) -> None:
+    """A Git filename separator ends option validation for recognized read commands."""
+    # Native paths after the separator are filenames, even when they resemble options.
+    prefix = "git --no-pager --no-optional-locks -c core.fsmonitor=false "
+    result = shell_effect(prefix + arguments)
+    assert result.effect == "read"
+    assert not result.requires_task
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        "status --output=report.txt -- notes/",
+        "diff --ext-diff --no-ext-diff --no-textconv -- notes/",
+        "diff -- --no-ext-diff --no-textconv",
+        "log --no-ext-diff -- --no-textconv",
+        "show --no-textconv -- --no-ext-diff",
+        "add -- notes/",
+        "reset -- notes/",
+        "branch --show-current -- notes/",
+    ],
+)
+def test_git_separator_preserves_gate(arguments: str) -> None:
+    """Filename tokens cannot supply missing safety flags or admit unsupported operations."""
+    # Validate option evidence before the separator and keep mutation subcommands opaque.
+    prefix = "git --no-pager --no-optional-locks -c core.fsmonitor=false "
+    result = shell_effect(prefix + arguments)
+    assert result.effect == "unknown"
+    assert result.requires_task
+    assert result.guidance

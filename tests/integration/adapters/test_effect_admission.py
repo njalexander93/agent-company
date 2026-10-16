@@ -501,3 +501,112 @@ def test_codex_stale_packet_allows_inspection_but_denies_implementation() -> Non
     finally:
         # Remove only this disposable repository and its independent lifecycle state.
         case.doCleanups()
+
+
+@pytest.mark.parametrize(
+    "operation,arguments",
+    [
+        (
+            "update_plan",
+            {
+                "items": [{"content": "Inspect source", "status": "in_progress"}],
+                "scope": "first_task",
+            },
+        ),
+        (
+            "wrap_up",
+            {"recap": "Research complete", "ask": "Continue?", "actions": [{"action": "fix_ci"}]},
+        ),
+    ],
+)
+def test_claude_desktop_turn_ui_has_no_issue_side_effects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str, arguments: JsonObject
+) -> None:
+    """Admit pinned parent plan/recap UI before binding without creating task state.
+
+    Args:
+        tmp_path: Disposable unregistered checkout.
+        monkeypatch: Native environment restoration fixture.
+        operation: Exact built-in UI operation.
+        arguments: Native plan or recap, including nonexecuting action offers.
+    """
+    # Verified built-in server provenance is independent of tool input or model safety labels.
+    monkeypatch.delenv("CURSOR_VERSION", raising=False)
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    pre = event("claude-code", tmp_path, "mcp__ccd_turn__" + operation, arguments)
+    pre["mcp_server"] = {"name": "ccd_turn", "source": "sdk"}
+    assert dispatch("claude-code", pre) == {}
+    assert (
+        dispatch(
+            "claude-code",
+            {**pre, "hook_event_name": "PostToolUse", "tool_response": {"result": "Plan shown"}},
+        )
+        == {}
+    )
+    assert not (tmp_path / ".task").exists()
+    # Foreign/missing provenance and child UI calls cannot inherit the parent's exemption.
+    for changes in (
+        {"mcp_server": None},
+        {"mcp_server": {"name": "foreign", "source": "sdk"}},
+        {"mcp_server": {"name": "ccd_turn", "source": "user"}},
+        {"agent_id": "native-child"},
+    ):
+        assert denied(dispatch("claude-code", {**pre, **changes}))
+    assert not (tmp_path / ".task").exists()
+
+
+def test_claude_turn_ui_does_not_settle_existing_protected_work(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep untracked UI administration separate from another native call's pending work.
+
+    Args:
+        monkeypatch: Native environment restoration fixture.
+    """
+    # Begin a protected edit under its own exact call ID in a ready real lifecycle store.
+    monkeypatch.delenv("CURSOR_VERSION", raising=False)
+    case = Fixture()
+    case.setUp()
+    try:
+        case.base.update(
+            host="claude-code",
+            coordinator=core.participant_key({"host": "claude-code", "session_id": "coordinator"}),
+        )
+        case.create()
+        case.ready()
+        protected = event(
+            "claude-code", case.root, "Write", {"file_path": "src/main.py", "content": "source"}
+        )
+        assert dispatch("claude-code", protected) == {}
+        before = case.state()
+        # A different UI call must neither start pending work nor settle the protected edit.
+        ui = {
+            **event("claude-code", case.root, "mcp__ccd_turn__wrap_up", {"recap": "Still working"}),
+            "tool_use_id": "ui-call",
+            "mcp_server": {"name": "ccd_turn", "source": "sdk"},
+        }
+        assert dispatch("claude-code", ui) == {}
+        assert (
+            dispatch(
+                "claude-code",
+                {**ui, "hook_event_name": "PostToolUse", "tool_response": {"result": "Shown"}},
+            )
+            == {}
+        )
+        assert case.state() == before
+        assert (
+            dispatch(
+                "claude-code",
+                {
+                    **protected,
+                    "hook_event_name": "PostToolUse",
+                    "tool_response": {"result": "Done"},
+                },
+            )
+            == {}
+        )
+        key = core.participant_key(case.base)
+        assert not case.state()["participants"][key]["pending"]
+    finally:
+        # Release only this disposable store; installed native acceptance remains separate.
+        case.doCleanups()

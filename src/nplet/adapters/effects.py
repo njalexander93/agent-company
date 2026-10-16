@@ -315,14 +315,23 @@ def _read_command(tokens: list[str]) -> bool:
         if args[:4] != prefix:
             return False
         args = args[4:]
-        if args and args[0] in {"diff", "log", "show"}:
-            if not {"--no-ext-diff", "--no-textconv"}.issubset(
-                args[: args.index("--")] if "--" in args else args
-            ):
+        # A filename separator ends option parsing; later paths confer no flag evidence.
+        options = args[: args.index("--")] if "--" in args else args
+        if options and options[0] in {"diff", "log", "show"}:
+            if not {"--no-ext-diff", "--no-textconv"}.issubset(options):
                 return False
-        if not args or args[0] not in {"status", "diff", "log", "show", "rev-parse", "ls-files"}:
+        # Preserve the exact branch inspection form and reject mutation subcommands.
+        if not options or options[0] not in {
+            "status",
+            "diff",
+            "log",
+            "show",
+            "rev-parse",
+            "ls-files",
+        }:
             return args == ["branch", "--show-current"]
-        return all(not arg.startswith("-") or arg in _GIT_FLAGS for arg in args[1:])
+        # Validate only actual options; option-looking filenames are harmless operands.
+        return all(not arg.startswith("-") or arg in _GIT_FLAGS for arg in options[1:])
     # Sed admits printing addresses only; substitution, files and execution are excluded.
     if command == "sed":
         return (

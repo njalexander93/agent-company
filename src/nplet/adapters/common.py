@@ -406,6 +406,12 @@ APP_PR_OPERATIONS = frozenset({"get_status", "set_monitor"})
 # from a live PreToolUse event on 2026-10-11 (macOS Desktop) and pinned like the
 # configured Linear connector's sources.
 APP_PR_SOURCE = "sdk"
+# Observed macOS Claude Desktop 2.42304.0 PreToolUse on 2026-10-16 pins turn UI to sdk.
+# Inspected Qt/Zt module SHA-256: cb065151a7b8ffbe377bea003362301b6c93bffe659ba91b03fdeabeb12157ba.
+# Its handler updates in-memory plan/UI offers; displayed offers do not execute actions.
+APP_TURN_SERVER = "ccd_turn"
+APP_TURN_SOURCE = "sdk"
+APP_TURN_OPERATIONS = frozenset({"update_plan", "wrap_up"})
 
 
 def _linear_provider_tool(event: core.JSONObject, host: str) -> str | None:
@@ -474,6 +480,34 @@ def _app_pr_monitor_tool(event: core.JSONObject, host: str) -> str | None:
         isinstance(server, dict)
         and server.get("name") == APP_PR_SERVER
         and server.get("source") == APP_PR_SOURCE
+    ):
+        return None
+    return operation
+
+
+def _app_turn_tool(event: core.JSONObject, host: str) -> str | None:
+    """Identify a pinned Desktop turn-plan or wrap-up UI operation.
+
+    Args:
+        event: Native tool envelope carrying qualified name and server provenance.
+        host: Explicit adapter identity; this built-in contract belongs to Claude Code.
+
+    Returns:
+        The exact UI operation, or None for another host, identity or operation.
+    """
+    # The built-in server is not a generic connector or a child authority grant.
+    if host != "claude-code":
+        return None
+    name = event.get("tool_name")
+    prefix = "mcp__" + APP_TURN_SERVER + "__"
+    operation = name[len(prefix) :] if isinstance(name, str) and name.startswith(prefix) else None
+    # Native provenance must match the observed built-in server independently of arguments.
+    server = event.get("mcp_server")
+    if not (
+        operation in APP_TURN_OPERATIONS
+        and isinstance(server, dict)
+        and server.get("name") == APP_TURN_SERVER
+        and server.get("source") == APP_TURN_SOURCE
     ):
         return None
     return operation
@@ -1284,6 +1318,10 @@ def native_tool(event: core.JSONObject, host: str) -> str:
                 "HOST_UNSUPPORTED_PROVIDER",
             )
             return tool
+        # Built-in planning/wrap-up changes only the parent's in-memory conversation UI.
+        if _app_turn_tool(event, host) is not None:
+            core.require(event.get("child") is not True, "HOST_UNSUPPORTED_PROVIDER")
+            return tool
         # A parent may read and arm the app's PR monitor; delivery stays with the parent.
         if _app_pr_monitor_tool(event, host) is not None:
             core.require(event.get("child") is not True, "HOST_UNSUPPORTED_PROVIDER")
@@ -1485,6 +1523,9 @@ def provider_contracts() -> dict[tuple[str, str], effects.ProviderContract]:
     # Limit app administration to naming, read state and sidebar placement.
     for operation_name in _CODEX_APP_ADMIN:
         providers[("codex-app", operation_name)] = effects.ProviderContract("admin")
+    # Turn-plan and recap offers are UI administration, not execution of their buttons.
+    for operation_name in APP_TURN_OPERATIONS:
+        providers[(APP_TURN_SERVER, operation_name)] = effects.ProviderContract("admin")
     providers[(APP_PR_SERVER, "get_status")] = effects.ProviderContract("read")
     # Monitoring can enable automatic source corrections; never infer an admin-only effect.
     providers[(APP_PR_SERVER, "set_monitor")] = effects.ProviderContract("execute")
@@ -1634,12 +1675,16 @@ def effect_decision(event: core.JSONObject, host: str) -> effects.Decision:
             if host == "claude-code":
                 linear = _linear_provider_tool(event, host)
                 monitor = _app_pr_monitor_tool(event, host)
+                turn = _app_turn_tool(event, host)
                 if linear is not None:
                     # Linear provenance was checked against the configured connector above.
                     provider, operation = "linear", linear
                 elif monitor is not None:
                     # Built-in monitor provenance does not erase its auto-correction effects.
                     provider, operation = APP_PR_SERVER, monitor
+                elif turn is not None:
+                    # The inspected handler updates plan/recap UI without running offered actions.
+                    provider, operation = APP_TURN_SERVER, turn
             elif host == "cursor" and tool.startswith("MCP:"):
                 # The mandatory blocking MCP-specific hook independently verifies the server.
                 # Generic callbacks expose only operation names, never server provenance.
@@ -2397,20 +2442,21 @@ def _recovery_route(code: str, host: str) -> str:
             "created or moved. Import it with an adopt request carrying its exact inventory, "
             f"owners and evidence, using {command}."
         )
-    # Provider admission is fixed by host, readiness and the configured connector.
+    # Unsupported provider identity/operations cannot acquire authority through readiness.
     if code == "HOST_UNSUPPORTED_PROVIDER":
         admitted = (
-            " After readiness, only the configured Linear connector's get_issue, get_user, "
-            "list_users, list_issue_statuses, list_comments, save_issue and save_comment, "
-            "and for a parent session the desktop app's PR monitor get_status and "
-            "set_monitor (ccd_pr), are admitted."
+            " The configured Linear connector's get_issue, get_user, list_users, "
+            "list_issue_statuses, list_comments, save_issue and save_comment have task-free "
+            "contracts. Parent-only built-in ccd_turn update_plan/wrap_up and ccd_pr get_status "
+            "also have task-free contracts; ccd_pr set_monitor requires readiness."
             if host == "claude-code"
-            else ""
+            else " Known registered read/admin contracts retain their native provenance checks."
         )
         return (
-            "No lifecycle operation admits this provider call. Before readiness only the "
-            "exact selected-ticket get_issue is admitted." + admitted + " Another server or "
-            "operation needs a separately verified provider workflow."
+            "No lifecycle operation admits this unsupported provider call. The exact "
+            "selected-ticket get_issue establishes task startup; unrelated known task-free "
+            "provider work remains available." + admitted + " Another server or operation "
+            "needs a separately verified provider workflow."
         )
     # Unsupported tools need a different tool, not lifecycle recovery.
     if code == "HOST_UNSUPPORTED_TOOL":

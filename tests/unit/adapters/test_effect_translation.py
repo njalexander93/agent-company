@@ -823,3 +823,117 @@ def test_cursor_handler_requires_specific_provider_gate(
     value = {**native, "hook_event_name": "beforeMCPExecution"}
     assert cursor.handle(value) == {"permission": "allow"}
     assert observed == [value]
+
+
+@pytest.mark.parametrize(
+    "host,name,server,expected",
+    [
+        (
+            "claude-code",
+            "mcp__ccd_turn__update_plan",
+            {"name": "ccd_turn", "source": "sdk"},
+            "update_plan",
+        ),
+        ("claude-code", "mcp__ccd_turn__wrap_up", {"name": "ccd_turn", "source": "sdk"}, "wrap_up"),
+        ("codex", "mcp__ccd_turn__update_plan", {"name": "ccd_turn", "source": "sdk"}, None),
+        ("cursor", "mcp__ccd_turn__wrap_up", {"name": "ccd_turn", "source": "sdk"}, None),
+        ("claude-code", "mcp__foreign__update_plan", {"name": "ccd_turn", "source": "sdk"}, None),
+        ("claude-code", None, {"name": "ccd_turn", "source": "sdk"}, None),
+        ("claude-code", "mcp__ccd_turn__execute", {"name": "ccd_turn", "source": "sdk"}, None),
+        ("claude-code", "mcp__ccd_turn__update_plan", None, None),
+        ("claude-code", "mcp__ccd_turn__update_plan", {"name": "foreign", "source": "sdk"}, None),
+        ("claude-code", "mcp__ccd_turn__update_plan", {"name": "ccd_turn", "source": "user"}, None),
+        ("claude-code", "mcp__ccd_turn__update_plan", {"name": "ccd_turn"}, None),
+    ],
+)
+def test_desktop_turn_ui_requires_exact_native_contract(
+    host: str, name: str | None, server: JsonObject | None, expected: str | None
+) -> None:
+    """Never infer turn-UI administration from tool names or untrusted annotations.
+
+    Args:
+        host: Explicit native adapter identity.
+        name: Observed qualified tool name or missing value.
+        server: Observed native server provenance or missing value.
+        expected: The pinned operation, or None for unsupported provenance.
+    """
+    assert common._app_turn_tool({"tool_name": name, "mcp_server": server}, host) == expected
+
+
+@pytest.mark.parametrize("operation", ["update_plan", "wrap_up"])
+def test_desktop_turn_ui_is_task_free_without_pending_work(
+    native: JsonObject, monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+    """Keep the built-in plan and recap UI usable before a task exists.
+
+    Args:
+        native: Complete native identity fixture.
+        monkeypatch: Isolate lifecycle boundaries that task-free UI must not mutate.
+        operation: Exact pinned UI operation.
+    """
+    # Action buttons remain offers; their names do not execute source changes here.
+    value = {
+        **native,
+        "tool_name": "mcp__ccd_turn__" + operation,
+        "mcp_server": {"name": "ccd_turn", "source": "sdk"},
+        "tool_input": {"recap": "Planning only", "actions": [{"action": "fix_ci"}]},
+    }
+    assert common.effect_decision(value, "claude-code").effect == "admin"
+    assert common.native_tool(value, "claude-code") == value["tool_name"]
+    monkeypatch.setattr(common, "pending_tool", lambda *_args: False)
+    monkeypatch.setattr(core, "execute", lambda _request: pytest.fail("UI created lifecycle state"))
+    common.native_pre(value, "claude-code")
+    common.native_post(value, "claude-code", failed=False)
+
+
+@pytest.mark.parametrize("operation", ["update_plan", "wrap_up"])
+def test_desktop_turn_ui_does_not_grant_child_provider_authority(
+    native: JsonObject, operation: str
+) -> None:
+    """Retain the child provider boundary for parent-only conversation UI.
+
+    Args:
+        native: Complete native identity fixture.
+        operation: Exact pinned app UI operation.
+    """
+    value = {
+        **native,
+        "child": True,
+        "tool_name": "mcp__ccd_turn__" + operation,
+        "mcp_server": {"name": "ccd_turn", "source": "sdk"},
+    }
+    with pytest.raises(core.WorkspaceError) as failure:
+        common.native_tool(value, "claude-code")
+    assert failure.value.code == "HOST_UNSUPPORTED_PROVIDER"
+
+
+@pytest.mark.parametrize("code", ["ASYNC_HANDLE_CONFLICT", "INVALID_REQUEST"])
+def test_codex_post_pending_lookup_error_remains_advisory(
+    native: JsonObject, monkeypatch: pytest.MonkeyPatch, code: str
+) -> None:
+    """Report invalid completion handles without raising or settling another operation.
+
+    Args:
+        native: Complete native identity fixture.
+        monkeypatch: Isolate the exact failing pending-correlation boundary.
+        code: Contractual malformed-handle diagnostic.
+    """
+    from nplet.adapters import codex
+
+    # The post-hook must preserve uncertainty when its new pre-classification lookup fails.
+    monkeypatch.setattr(codex, "bootstrap", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        common, "pending_tool", lambda *_args: (_ for _ in ()).throw(core.WorkspaceError(code))
+    )
+    monkeypatch.setattr(
+        core, "execute", lambda _request: pytest.fail("invalid handle settled work")
+    )
+    result = codex.handle(
+        {
+            **native,
+            "hook_event_name": "PostToolUse",
+            "tool_name": "write_stdin",
+            "tool_input": {"session_id": True},
+        }
+    )
+    assert result == {"systemMessage": "TASK_WORKSPACE_NOT_READY: " + code}
