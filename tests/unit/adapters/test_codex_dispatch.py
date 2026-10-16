@@ -421,7 +421,13 @@ def test_codex_pretool_preserves_failed_core_readiness_code(
         return {"ok": False, "code": "SOURCE_STALE"}
 
     monkeypatch.setattr(codex.core, "execute", execute)
-    response = codex.handle({"hook_event_name": "PreToolUse", "tool_name": "Read"})
+    response = codex.handle(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": "src/main.py", "content": "source"},
+        }
+    )
     assert response == codex.denial("SOURCE_STALE")
     assert calls == ["ready"]
 
@@ -493,16 +499,20 @@ def test_codex_posttool_rejects_mismatched_poll_response_handle(
 def test_codex_pretool_requires_recorded_ticket_lookup_before_other_tools(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Admit only the exact issue read while a recorded Task lookup is outstanding.
+    """Fence implementation edits until the exact recorded Task issue read completes.
 
     Args:
         monkeypatch: Pytest fixture that isolates external state for this case.
     """
     monkeypatch.setattr(codex, "startup_lookup_state", lambda *_args: True)
     monkeypatch.setattr(codex, "ticket_lookup", lambda *_args: {})
-    assert codex.handle({"hook_event_name": "PreToolUse", "tool_name": "Read"}) == codex.denial(
-        "TICKET_READ_REQUIRED"
-    )
+    assert codex.handle(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": "src/main.py", "content": "source"},
+        }
+    ) == codex.denial("TICKET_READ_REQUIRED")
     assert (
         codex.handle(
             {"hook_event_name": "PreToolUse", "tool_name": "mcp__codex_apps__linear_get_issue"}
@@ -587,11 +597,16 @@ def test_codex_pretool_records_ready_tool_or_exact_core_denial(
 
     monkeypatch.setattr(codex.core, "execute", execute)
     response = codex.handle(
-        {"hook_event_name": "PreToolUse", "tool_name": "Read", "tool_use_id": "read-1"}
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": "src/main.py", "content": "source"},
+            "tool_use_id": "write-1",
+        }
     )
     assert response == codex.denial("REQUEST_CONFLICT")
     assert [item["operation"] for item in requests] == ["ready", "tool-start"]
-    assert requests[-1]["tool_id"] == "read-1"
+    assert requests[-1]["tool_id"] == "write-1"
 
 
 @pytest.mark.usefixtures("recorded_operation", "selected_ticket_dispatch")
@@ -791,7 +806,7 @@ def test_codex_pretool_rechecks_ready_bootstrap_without_tool_start(
     assert [call["operation"] for call in calls] == ["ready"]
 
 
-@pytest.mark.usefixtures("protected_effect")
+@pytest.mark.usefixtures("recorded_operation")
 def test_codex_pretool_records_correlated_poll_handle(monkeypatch: pytest.MonkeyPatch) -> None:
     """Reserve a poll against the exact observed process handle.
 
@@ -802,6 +817,8 @@ def test_codex_pretool_records_correlated_poll_handle(monkeypatch: pytest.Monkey
     monkeypatch.setattr(codex, "bootstrap", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(codex, "provider_gate", lambda *_args: False)
     monkeypatch.setattr(codex, "request_for", lambda *_args: {"operation": "ready"})
+    # The real read-only polling effect retains an existing protected process admission.
+    monkeypatch.setattr(codex.core, "repository", lambda _path: (codex.ROOT, None, []))
     calls: list[dict[str, Any]] = []
     monkeypatch.setattr(
         codex.core,
@@ -809,6 +826,8 @@ def test_codex_pretool_records_correlated_poll_handle(monkeypatch: pytest.Monkey
         lambda request: calls.append(request) or {"ok": True, "code": "READY"},
     )
     event = {
+        "session_id": "session",
+        "cwd": str(codex.ROOT),
         "hook_event_name": "PreToolUse",
         "tool_name": "write_stdin",
         "tool_use_id": "poll-1",
@@ -928,7 +947,11 @@ def test_codex_provider_gate_failure_falls_through_to_readiness(
         codex.core, "execute", lambda _request: {"ok": False, "code": "SOURCE_STALE"}
     )
     assert codex.handle(
-        {"hook_event_name": "PreToolUse", "tool_name": "mcp__codex_apps__linear_get_document"}
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "mcp__codex_apps__github_update_file",
+            "tool_input": {"path": "src/main.py", "content": "source"},
+        }
     ) == codex.denial("SOURCE_STALE")
 
 

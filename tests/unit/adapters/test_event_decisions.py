@@ -50,7 +50,7 @@ def test_codex_pretool_denies_unsupported_child_control_before_request_or_core_c
     )
 
 
-@pytest.mark.usefixtures("protected_effect")
+@pytest.mark.usefixtures("recorded_operation")
 def test_codex_pretool_records_exact_poll_handle_only_after_ready(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -59,6 +59,8 @@ def test_codex_pretool_records_exact_poll_handle_only_after_ready(
     Args:
         monkeypatch: Pytest fixture that isolates external state for this case.
     """
+    # A real read-only poll follows its previously admitted protected process.
+    monkeypatch.setattr(codex.core, "repository", lambda _path: (codex.ROOT, None, []))
     operations: list[dict[str, object]] = []
     monkeypatch.setattr(codex, "startup_lookup_state", lambda _event, _suffix: False)
     monkeypatch.setattr(codex, "bootstrap", lambda _event, ready=False: False)
@@ -83,6 +85,8 @@ def test_codex_pretool_records_exact_poll_handle_only_after_ready(
 
     monkeypatch.setattr(codex.core, "execute", execute)
     event = {
+        "session_id": "session",
+        "cwd": str(codex.ROOT),
         "hook_event_name": "PreToolUse",
         "tool_name": "write_stdin",
         "tool_use_id": "tool-1",

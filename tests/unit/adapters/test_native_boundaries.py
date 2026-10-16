@@ -360,7 +360,11 @@ def test_native_pre_stops_on_failed_readiness_without_tool_start(
         return {"ok": False, "code": "SOURCE_STALE"}
 
     monkeypatch.setattr(common.core, "execute", execute)
-    native = {**event(), "tool_name": "Read", "tool_input": {}}
+    native = {
+        **event(),
+        "tool_name": "Write",
+        "tool_input": {"file_path": "src/main.py", "content": "source"},
+    }
     # The native boundary must reject a mismatched lifecycle command.
     with pytest.raises(core.WorkspaceError) as captured:
         common.native_pre(native, "cursor")
