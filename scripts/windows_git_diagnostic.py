@@ -30,6 +30,7 @@ ROLLOVER = (
     "test_crash_retry_all_publication_boundaries_and_global_chain"
 )
 MAX_RECORDS = 2048
+SAMPLE_COUNT = 400
 MAX_TRACE_BYTES = 65536
 MAX_OUTPUT_BYTES = 1048576
 
@@ -276,7 +277,7 @@ def checkout_identity() -> dict[str, Any]:
 
 
 def run_samples(records: list[dict[str, Any]], phase: list[str]) -> None:
-    """Run twenty independent repository discoveries in a disposable linked-worktree fixture.
+    """Run bounded repository discoveries, stopping at the first failure without retrying.
 
     Args:
         records: Per-sample results, retaining every failure without retries.
@@ -291,7 +292,7 @@ def run_samples(records: list[dict[str, Any]], phase: list[str]) -> None:
     try:
         phase[0] = "sample-fixture-setup"
         fixture.setUp()
-        for index in range(20):
+        for index in range(SAMPLE_COUNT):
             phase[0] = f"repository-sample-{index:02d}"
             started = time.perf_counter()
             sample: dict[str, Any] = {"index": index}
@@ -303,6 +304,9 @@ def run_samples(records: list[dict[str, Any]], phase: list[str]) -> None:
             finally:
                 sample["seconds"] = time.perf_counter() - started
                 records.append(sample)
+            # Preserve the failed sample and leave the independent rollover run eligible.
+            if not sample["ok"]:
+                break
     # Reap and remove only the fixture's own disposable repositories.
     finally:
         fixture.doCleanups()
@@ -387,7 +391,7 @@ def run(output: Path, expected_head: str) -> int:
         "diagnostic_only": True,
         "python": sys.version,
         "platform": platform.platform(),
-        "sample_count": 20,
+        "sample_count": SAMPLE_COUNT,
         "rollover": ROLLOVER,
         "errors": [],
     }
@@ -443,7 +447,7 @@ def run(output: Path, expected_head: str) -> int:
         status = int(
             not (
                 before == after
-                and len(samples) == 20
+                and len(samples) == SAMPLE_COUNT
                 and all(s["ok"] for s in samples)
                 and manifest["pytest_exit"] == 0
                 and not manifest["errors"]

@@ -117,26 +117,37 @@ def test_observer_preserves_environment_non_git_and_restores_on_error(
     assert records[0]["phase"] == "sample"
 
 
-def test_samples_do_not_retry_and_always_cleanup(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Retain all twenty independent samples and clean up after a single query failure.
+@pytest.mark.parametrize("failure_index", [None, 0, 2])
+def test_samples_bound_count_stop_first_failure_and_cleanup(
+    monkeypatch: pytest.MonkeyPatch, failure_index: int | None
+) -> None:
+    """Stop at the first failed query or collect exactly four hundred successful samples.
 
     Args:
         monkeypatch: Scoped disposable-fixture and repository boundary replacement.
+        failure_index: Selected query failure; None allows the bounded run to finish.
     """
+    # Supply enough results to expose any forbidden query after the selected failure.
     fixture = mock.Mock(root=Path("fixture"))
     monkeypatch.setattr("tests.support.Fixture", mock.Mock(return_value=fixture))
-    repository = mock.Mock(
-        side_effect=[subprocess.TimeoutExpired("git", 2)]
-        + [(Path("root"), Path("common"), [Path("root")])] * 19
-    )
+    results = [(Path("root"), Path("common"), [Path("root")])] * 400
+    if failure_index is not None:
+        results[failure_index] = subprocess.TimeoutExpired("git", 2)
+    repository = mock.Mock(side_effect=results)
     monkeypatch.setattr(diagnostic.workspace, "repository", repository)
     records = []
-    diagnostic.run_samples(records, ["initial"])
-    assert len(records) == 20
-    assert repository.call_count == 20
-    assert not records[0]["ok"]
-    assert records[0]["error"]["type"] == "TimeoutExpired"
-    assert all(record["ok"] for record in records[1:])
+    phase = ["initial"]
+    diagnostic.run_samples(records, phase)
+    # Verify the approved fixed budget and retention of the exact first failed observation.
+    expected_count = 400 if failure_index is None else failure_index + 1
+    assert diagnostic.SAMPLE_COUNT == 400
+    assert len(records) == repository.call_count == expected_count
+    assert all(record["ok"] for record in records[:failure_index])
+    if failure_index is not None:
+        assert not records[-1]["ok"]
+        assert records[-1]["index"] == failure_index
+        assert records[-1]["error"]["type"] == "TimeoutExpired"
+        assert phase[0] == f"repository-sample-{failure_index:02d}"
     fixture.doCleanups.assert_called_once_with()
     # Setup failures also release cleanup ownership without inventing sample results.
     fixture.reset_mock()
@@ -197,7 +208,9 @@ def test_run_retains_nonzero_failure_and_manifest(
         diagnostic,
         "run_samples",
         lambda records, phase: records.extend(
-            {"ok": sample_ok, "index": index} for index in range(20)
+            [{"ok": True, "index": index} for index in range(diagnostic.SAMPLE_COUNT)]
+            if sample_ok
+            else [{"ok": False, "index": 0}]
         ),
     )
     if process_fault == "sample-stage":
@@ -243,6 +256,7 @@ def test_run_retains_nonzero_failure_and_manifest(
     assert status == int(not sample_ok or pytest_status != 0 or process_fault is not None)
     manifest = json.loads((output / "manifest.json").read_text())
     assert manifest["exit_code"] == status
+    assert manifest["sample_count"] == 400
     # Rejected candidates and foreign imports must not run samples or pytest at all.
     if process_fault in {"wrong-head", "foreign-package"}:
         pytest_main.assert_not_called()
