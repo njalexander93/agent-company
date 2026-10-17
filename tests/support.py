@@ -5,15 +5,91 @@ These fixtures call the canonical production modules without claiming live host 
 
 import json
 import subprocess
+import sys
 import tempfile
+import threading
+import traceback
 import unittest
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
+from types import CodeType
 
 from nplet.lifecycle import task_workspace as w
 from tests.types import JsonObject, JsonValue
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+@contextmanager
+def fixture_diagnostics() -> Iterator[list[JsonObject]]:
+    """Observe bounded errors handled by this thread's lifecycle dispatcher.
+
+    Yields:
+        Scalar exception metadata for assertion messages, never frame locals or requests.
+        An unavailable marker when all monitoring slots already belong to other tools.
+    """
+    # Reserve a free slot without replacing coverage, debuggers or concurrent observers.
+    diagnostics: list[JsonObject] = []
+    tool = None
+    for candidate in range(5, -1, -1):
+        try:
+            sys.monitoring.use_tool_id(candidate, "fixture-diagnostics")
+        except ValueError:
+            continue
+        tool = candidate
+        break
+    # Continue with the original dispatch behavior when instrumentation is unavailable.
+    if tool is None:
+        diagnostics.append({"unavailable": "All sys.monitoring tool slots are occupied"})
+        yield diagnostics
+        return
+    owner_thread = threading.get_ident()
+    execute_code = w.execute.__code__
+
+    def handled(code: CodeType, offset: int, error: BaseException) -> None:
+        """Retain only selected errors handled in the observed execute frame.
+
+        Args:
+            code: Code object handling the exception.
+            offset: Bytecode offset supplied by the monitoring API.
+            error: Handled exception, inspected without retaining frames or locals.
+        """
+        # Ignore foreign frames, threads, exception families and excess observations.
+        if (
+            code is not execute_code
+            or threading.get_ident() != owner_thread
+            or not isinstance(error, (OSError, subprocess.SubprocessError))
+            or len(diagnostics) >= 4
+        ):
+            return
+        # Bound text and traceback locations; never inspect process output or frame locals.
+        record: JsonObject = {"type": type(error).__name__, "message": str(error)[:512]}
+        for name in ("errno", "winerror", "filename", "filename2"):
+            value = getattr(error, name, None)
+            if value is not None:
+                record[name] = value if isinstance(value, int) else str(value)[:512]
+        # Expose the timed-out command and configured limit without stdout or stderr.
+        if isinstance(error, subprocess.TimeoutExpired):
+            record["command"] = str(error.cmd)[:512]
+            record["timeout"] = error.timeout
+        record["traceback"] = [
+            f"{frame.f_code.co_filename}:{line}:{frame.f_code.co_name}"[:512]
+            for frame, line in traceback.walk_tb(error.__traceback__)
+        ][-8:]
+        diagnostics.append(record)
+
+    # Enable the global event: EXCEPTION_HANDLED does not support local events.
+    try:
+        sys.monitoring.register_callback(tool, sys.monitoring.events.EXCEPTION_HANDLED, handled)
+        sys.monitoring.set_events(tool, sys.monitoring.events.EXCEPTION_HANDLED)
+        yield diagnostics
+    # Release only this observer's events, callback and slot on every dispatch exit.
+    finally:
+        sys.monitoring.set_events(tool, 0)
+        sys.monitoring.register_callback(tool, sys.monitoring.events.EXCEPTION_HANDLED, None)
+        sys.monitoring.free_tool_id(tool)
 
 
 def call_process(request: JsonObject) -> JsonObject:
@@ -155,8 +231,14 @@ class Fixture(unittest.TestCase):
         Raises:
             AssertionError: The core rejects the request.
         """
-        # Dispatch the constructed request and require its declared success.
-        return self.require_ok(w.execute(self.req(operation, **kwargs)))
+        # Observe only the dispatch, then release instrumentation before asserting.
+        request = self.req(operation, **kwargs)
+        with fixture_diagnostics() as diagnostics:
+            result = w.execute(request)
+        # Supplement failures without changing the response or successful return identity.
+        if not result["ok"] and diagnostics:
+            self.assertTrue(result["ok"], f"{result}\nFixture diagnostics: {diagnostics}")
+        return self.require_ok(result)
 
     def create(self) -> JsonObject:
         """Create the fixture issue and remember its returned binding generation.
