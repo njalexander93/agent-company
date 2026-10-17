@@ -2,8 +2,11 @@
 
 import errno
 import inspect
+import json
+import os
 import subprocess
 import sys
+import textwrap
 import threading
 from pathlib import Path
 
@@ -11,7 +14,7 @@ import coverage
 import pytest
 
 from nplet.lifecycle import task_workspace as w
-from tests.support import Fixture, fixture_diagnostics
+from tests.support import ROOT, Fixture, fixture_diagnostics
 from tests.types import JsonObject
 
 pytestmark = pytest.mark.integration
@@ -88,11 +91,12 @@ def test_failed_call_reports_handled_error(
     if isinstance(error, OSError):
         error.winerror = 32
     fail_register(monkeypatch, error)
-    with pytest.raises(AssertionError) as caught:
-        fixture.call("register")
+    with fixture_diagnostics() as diagnostics:
+        with pytest.raises(AssertionError) as caught:
+            fixture.call("register")
     # Assert both the original contract and the diagnostic location and attributes.
-    message = str(caught.value)
-    assert "RECOVERY_REQUIRED" in message
+    assert "RECOVERY_REQUIRED" in str(caught.value)
+    message = str(list(diagnostics))
     assert type(error).__name__ in message
     assert expected in message
     assert "register" in message
@@ -152,7 +156,7 @@ def test_foreign_frames_threads_and_exception_families(
         # Translate a non-filesystem/process error in the actual dispatcher.
         fail_register(monkeypatch, ValueError("unrelated family"))
         assert w.execute(envelope)["code"] == "INVALID_REQUEST"
-    assert diagnostics == []
+    assert list(diagnostics) == []
 
 
 def test_text_count_and_traceback_are_bounded(
@@ -168,10 +172,13 @@ def test_text_count_and_traceback_are_bounded(
     error = subprocess.TimeoutExpired(["git", "x" * 1000], 10, output="private-output")
     fail_register(monkeypatch, error)
     with fixture_diagnostics() as diagnostics:
-        for _ in range(7):
+        for index in range(23):
+            error.cmd = ["git", str(index) + "x" * 1000]
             assert not w.execute(envelope)["ok"]
     # Only bounded scalar fields and code locations survive capture.
-    assert len(diagnostics) == 4
+    assert len(diagnostics) == 16
+    assert "7xxxx" in diagnostics[0]["command"]
+    assert "22xxxx" in diagnostics[-1]["command"]
     for record in diagnostics:
         assert len(record["message"]) <= 512
         assert len(record["command"]) <= 512
@@ -241,10 +248,11 @@ def test_occupied_slots_preserved(monkeypatch: pytest.MonkeyPatch, fixture: Fixt
                 sys.monitoring.set_events(i, event)
         snapshot = [sys.monitoring.get_tool(i) for i in range(6)]
         fail_register(monkeypatch, OSError("unobserved"))
-        with pytest.raises(AssertionError) as caught:
-            fixture.call("register")
+        with fixture_diagnostics() as diagnostics:
+            with pytest.raises(AssertionError) as caught:
+                fixture.call("register")
         assert "RECOVERY_REQUIRED" in str(caught.value)
-        assert "All sys.monitoring tool slots are occupied" in str(caught.value)
+        assert "All sys.monitoring tool slots are occupied" in str(diagnostics)
         assert [sys.monitoring.get_tool(i) for i in range(6)] == snapshot
         for i in slots:
             assert sys.monitoring.get_events(i) == event
@@ -290,3 +298,136 @@ def test_ctrace_stays_active(monkeypatch: pytest.MonkeyPatch, envelope: JsonObje
     )
     assert recovery_line in data.lines(filename)
     assert data.arcs(filename)
+
+
+def test_child_pytest_reports_direct_adapter_and_unittest_subtest_failures(tmp_path: Path) -> None:
+    """Prove real pytest phase/subtest failures retain outcomes and gain diagnostics.
+
+    Args:
+        tmp_path: Disposable child suite, plugin reports and coverage data directory.
+    """
+    # Run the installed report wrappers in a fresh interpreter with ordinary and unittest tests.
+    suite = tmp_path / "test_report_probe.py"
+    suite.write_text(
+        textwrap.dedent('''\
+            import unittest
+            from unittest.mock import patch
+            import pytest
+            from nplet.adapters import cursor
+
+            def handled(message):
+                """Exercise a handled error through a direct adapter call."""
+                with patch.object(cursor.common, "native_identity", side_effect=OSError(message)):
+                    return cursor.handle({"hook_event_name": "preToolUse"})
+
+            @pytest.fixture(autouse=True)
+            def phases(request):
+                """Exercise setup and teardown while preserving their original failures."""
+                handled("setup-marker")
+                if request.node.name == "test_setup_failure":
+                    raise AssertionError("ORIGINAL_SETUP")
+                yield
+                handled("teardown-marker")
+                if request.node.name == "test_teardown_failure":
+                    raise AssertionError("ORIGINAL_TEARDOWN")
+
+            def test_ordinary_failure():
+                """Keep a direct handle assertion visible in the failed report."""
+                assert handled("direct-marker") == {"permission": "allow"}, "ORIGINAL_DIRECT"
+
+            class TestSubtest(unittest.TestCase):
+                """Exercise pytest's real unittest subtest conversion."""
+                def test_subtest(self):
+                    """Keep one failed and one passing subtest independent."""
+                    with self.subTest(case="failure"):
+                        self.assertEqual(handled("subtest-marker"), {"permission": "allow"},
+                                         "ORIGINAL_SUBTEST")
+                    with self.subTest(case="success"):
+                        self.assertTrue(True)
+
+            def test_success():
+                """Keep passing reports quiet despite observed handled errors."""
+                assert handled("passing-marker")["permission"] == "deny"
+
+            def test_teardown_failure():
+                """Reach a failing teardown without failing the call."""
+
+            def test_setup_failure():
+                """Remain uncalled after the original setup failure."""
+        '''),
+        encoding="utf-8",
+    )
+    # Record the exact reports emitted after unittest has converted its subtest report.
+    (tmp_path / "conftest.py").write_text(
+        textwrap.dedent('''\
+            import json
+            import os
+            from pathlib import Path
+
+            def pytest_runtest_logreport(report):
+                """Retain emitted report contracts for the parent assertions."""
+                with Path(os.environ["DIAGNOSTIC_REPORTS"]).open("a", encoding="utf-8") as stream:
+                    stream.write(json.dumps({"nodeid": report.nodeid, "when": report.when,
+                        "outcome": report.outcome, "type": type(report).__name__,
+                        "sections": report.sections, "longrepr": str(report.longrepr)}) + "\\n")
+        '''),
+        encoding="utf-8",
+    )
+    reports_file = tmp_path / "reports.jsonl"
+    environment = {
+        **os.environ,
+        "PYTHONPATH": os.pathsep.join((str(ROOT), str(ROOT / "src"))),
+        "DIAGNOSTIC_REPORTS": str(reports_file),
+        "COVERAGE_FILE": str(tmp_path / ".coverage"),
+    }
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-p",
+            "tests.conftest",
+            "-c",
+            str(ROOT / "pyproject.toml"),
+            str(suite),
+            "--cov=nplet",
+            "--cov-report=",
+            "--cov-fail-under=0",
+            "-q",
+        ],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    # Every intended failure survives, including the emitted SubtestReport and phase errors.
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "Handled package exceptions" in result.stdout
+    assert '"message": "direct-marker"' in result.stdout
+    assert '"message": "subtest-marker"' in result.stdout
+    reports = [json.loads(line) for line in reports_file.read_text(encoding="utf-8").splitlines()]
+    failed = [report for report in reports if report["outcome"] == "failed"]
+    assert len(failed) == 4, reports
+    expected = {"ORIGINAL_DIRECT", "ORIGINAL_SUBTEST", "ORIGINAL_SETUP", "ORIGINAL_TEARDOWN"}
+    assert all(any(marker in report["longrepr"] for report in failed) for marker in expected)
+    subtest = next(report for report in failed if "ORIGINAL_SUBTEST" in report["longrepr"])
+    assert subtest["type"] == "SubtestReport"
+    assert {report["when"] for report in failed} == {"setup", "call", "teardown"}
+    for report in failed:
+        sections = [
+            body for title, body in report["sections"] if title == "Handled package exceptions"
+        ]
+        assert len(sections) == 1
+        assert "OSError" in sections[0]
+        assert "setup-marker" in sections[0]
+    assert "subtest-marker" in str(subtest["sections"])
+    assert "direct-marker" in str(
+        next(r for r in failed if "ORIGINAL_DIRECT" in r["longrepr"])["sections"]
+    )
+    assert "teardown-marker" in str(next(r for r in failed if r["when"] == "teardown")["sections"])
+    # A handled error alone never changes success or adds a report section.
+    success = [report for report in reports if report["nodeid"].endswith("::test_success")]
+    assert len(success) == 3
+    assert all(report["outcome"] == "passed" for report in success)
+    assert all(not report["sections"] for report in success)

@@ -4,6 +4,7 @@ These fixtures call the canonical production modules without claiming live host 
 """
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -11,6 +12,7 @@ import threading
 import traceback
 import unittest
 import uuid
+from collections import deque
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -20,18 +22,19 @@ from nplet.lifecycle import task_workspace as w
 from tests.types import JsonObject, JsonValue
 
 ROOT = Path(__file__).resolve().parents[1]
+PACKAGE_SOURCE_PREFIX = os.path.normcase(str(Path(w.__file__).resolve().parents[1]) + os.sep)
 
 
 @contextmanager
-def fixture_diagnostics() -> Iterator[list[JsonObject]]:
-    """Observe bounded errors handled by this thread's lifecycle dispatcher.
+def fixture_diagnostics() -> Iterator[deque[JsonObject]]:
+    """Observe recent errors handled by this thread's package source code.
 
     Yields:
-        Scalar exception metadata for assertion messages, never frame locals or requests.
+        Scalar exception metadata for failed reports, never frame locals or requests.
         An unavailable marker when all monitoring slots already belong to other tools.
     """
     # Reserve a free slot without replacing coverage, debuggers or concurrent observers.
-    diagnostics: list[JsonObject] = []
+    diagnostics: deque[JsonObject] = deque(maxlen=16)
     tool = None
     for candidate in range(5, -1, -1):
         try:
@@ -46,22 +49,20 @@ def fixture_diagnostics() -> Iterator[list[JsonObject]]:
         yield diagnostics
         return
     owner_thread = threading.get_ident()
-    execute_code = w.execute.__code__
 
     def handled(code: CodeType, offset: int, error: BaseException) -> None:
-        """Retain only selected errors handled in the observed execute frame.
+        """Retain only selected errors handled inside the package source boundary.
 
         Args:
             code: Code object handling the exception.
             offset: Bytecode offset supplied by the monitoring API.
             error: Handled exception, inspected without retaining frames or locals.
         """
-        # Ignore foreign frames, threads, exception families and excess observations.
+        # Filter lexical source paths without filesystem work inside the callback.
         if (
-            code is not execute_code
+            not os.path.normcase(code.co_filename).startswith(PACKAGE_SOURCE_PREFIX)
             or threading.get_ident() != owner_thread
             or not isinstance(error, (OSError, subprocess.SubprocessError))
-            or len(diagnostics) >= 4
         ):
             return
         # Bound text and traceback locations; never inspect process output or frame locals.
@@ -231,14 +232,8 @@ class Fixture(unittest.TestCase):
         Raises:
             AssertionError: The core rejects the request.
         """
-        # Observe only the dispatch, then release instrumentation before asserting.
-        request = self.req(operation, **kwargs)
-        with fixture_diagnostics() as diagnostics:
-            result = w.execute(request)
-        # Supplement failures without changing the response or successful return identity.
-        if not result["ok"] and diagnostics:
-            self.assertTrue(result["ok"], f"{result}\nFixture diagnostics: {diagnostics}")
-        return self.require_ok(result)
+        # Dispatch the constructed request and require its declared success.
+        return self.require_ok(w.execute(self.req(operation, **kwargs)))
 
     def create(self) -> JsonObject:
         """Create the fixture issue and remember its returned binding generation.
