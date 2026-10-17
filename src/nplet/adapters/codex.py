@@ -167,7 +167,7 @@ def provider_gate(event: core.JSONObject) -> bool:
         "mcp__codex_apps__linear_save_document",
         "mcp__codex_apps__linear_get_document",
     }:
-        # Ordinary provider tools stay subject to the normal readiness gate.
+        # Other provider tools use their separate effect and admission rules.
         return False
     # Build the request from explicit caller or observed session identities.
     request = request_for(event, "ready")
@@ -467,10 +467,10 @@ def handle(event: core.JSONObject) -> core.JSONObject:
     if name == "PermissionRequest":
         # This lifecycle adapter never decides host permissions.
         return {}  # Never grant host permissions.
-    # Require readiness or an exact recovery route before admitting tool work.
+    # Apply startup, task-free and implementation admission routes to tool work.
     if name == "PreToolUse":
-        # A pending ticket read takes precedence over ordinary tool admission.
-        # Keep recovery read-only until the assigned direct issue call succeeds.
+        # A pending ticket read preserves exact startup and task-free routes.
+        # Implementation waits until the selected issue transition establishes readiness.
         if startup_lookup_state(event, ".lookup-required.json"):
             # Existing exact preparation and diagnosis routes preserve their native contracts.
             if common.preparation_tool(event, "codex") or diagnostic_bootstrap(event):
@@ -499,7 +499,7 @@ def handle(event: core.JSONObject) -> core.JSONObject:
         if bootstrap(event):
             # The admitted bootstrap call establishes readiness itself.
             return {}
-        # Provider gates validate pending external reads before ordinary work.
+        # Validate correlated archive saves and reads before ordinary admission.
         try:
             # Allow the exact pending archive provider call only after gate validation.
             if provider_gate(event):

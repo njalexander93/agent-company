@@ -537,9 +537,9 @@ def _preparation_path(event: core.JSONObject, value: object, exact: bool = False
 def preparation_tool(event: core.JSONObject, host: str) -> bool:
     """Recognize one read-only preparation call allowed before the selected ticket read.
 
-    The call receives no lifecycle decision and writes nothing: the lookup marker
-    stays in place, so the exact ``get_issue`` remains the first issue-provider
-    operation. Claude's normal permission flow still applies to the call.
+    Preparation leaves the lookup marker in place. The exact ``get_issue``
+    establishes the selected issue transition; unrelated task-free calls remain
+    available through their separate effect policy. Native permissions still apply.
 
     Args:
         event: Identity-validated native tool event.
@@ -636,7 +636,7 @@ def preparation_tool(event: core.JSONObject, host: str) -> bool:
     # Unparseable commands and unreadable checkouts are not preparation reads.
     except (core.WorkspaceError, OSError, ValueError, KeyError, TypeError):
         return False
-    # Every other tool waits for the ticket read.
+    # Other tools do not qualify for this preparation exception.
     return False
 
 

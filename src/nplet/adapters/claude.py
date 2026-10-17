@@ -60,9 +60,9 @@ def handle(event: core.JSONObject) -> core.JSONObject:
         # Never reuse a coordinator binding for a child or fabricate a missing identity;
         # a Claude subagent is keyed by its own normalized child session.
         observed = common.native_identity(event, HOST)
-        # The first issue-provider call after Task selection must read the selected ticket.
+        # The exact selected-ticket read establishes the issue transition.
         if name == "PreToolUse":
-            # An explicit Task permits its exact native Linear issue read first.
+            # A pending Task retains exact startup and separate task-free routes.
             if common.lookup_required(observed, HOST):
                 # Exact preparation reads retain their existing native delivery contract.
                 if common.preparation_tool(observed, HOST):
