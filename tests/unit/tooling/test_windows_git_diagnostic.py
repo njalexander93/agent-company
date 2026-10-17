@@ -1116,187 +1116,6 @@ def test_capability_cli_and_output_guard(monkeypatch: pytest.MonkeyPatch) -> Non
     probe.assert_called_once_with(Path("/tmp/probe"), "candidate")
 
 
-def scheduling_xml(path: Path, fault: str = "none") -> dict:
-    """Write private synthetic schemas with deliberately sensitive discarded fields.
-
-    Args:
-        path: Test-owned XML destination.
-        fault: Selected schema, lifetime, field or timestamp boundary failure.
-
-    Returns:
-        Actual synthetic query identities and wall window for attribution assertions.
-    """
-    # Build target and foreign lifecycle events without relying on event-header identities.
-    query = {
-        "python_pid": 10,
-        "git_pid": 20,
-        "calling_tid": 11,
-        "reader_tids": [12, 13],
-        "start_wall_ns": 1000000000,
-        "end_wall_ns": 9000000000,
-    }
-    events = []
-    for tid in (11, 12, 13):
-        events.append((diagnostic.THREAD_GUID, 3, 0, {"ProcessId": 10, "TThreadId": tid}))
-        events.append((diagnostic.THREAD_GUID, 4, 10, {"ProcessId": 10, "TThreadId": tid}))
-    events.extend(
-        [
-            (diagnostic.PROCESS_GUID, 1, 2, {"ProcessId": 20, "ParentId": 10, "ExitStatus": 0}),
-            (diagnostic.THREAD_GUID, 1, 2, {"ProcessId": 20, "TThreadId": 21}),
-            (
-                diagnostic.THREAD_GUID,
-                36,
-                3,
-                {
-                    "NewThreadId": 11,
-                    "OldThreadId": 999,
-                    "OldThreadState": 5,
-                    "OldThreadWaitReason": 4,
-                    "OldThreadWaitMode": 1,
-                },
-            ),
-            (
-                diagnostic.THREAD_GUID,
-                50,
-                4,
-                {"TThreadId": 12, "AdjustReason": 0, "AdjustIncrement": 1, "Flag": 0},
-            ),
-            (diagnostic.THREAD_GUID, 2, 6, {"ProcessId": 20, "TThreadId": 21}),
-            (diagnostic.PROCESS_GUID, 2, 7, {"ProcessId": 20, "ParentId": 999, "ExitStatus": 0}),
-            (
-                diagnostic.THREAD_GUID,
-                50,
-                5,
-                {"TThreadId": 999, "AdjustReason": 0, "AdjustIncrement": 1, "Flag": 0},
-            ),
-        ]
-    )
-    # An unrelated scheduler event must never publish either counterparty identity.
-    events.append(
-        (
-            diagnostic.THREAD_GUID,
-            36,
-            5,
-            {
-                "NewThreadId": 998,
-                "OldThreadId": 999,
-                "OldThreadState": 5,
-                "OldThreadWaitReason": 4,
-                "OldThreadWaitMode": 1,
-            },
-        )
-    )
-    if fault == "reuse":
-        events.append(
-            (diagnostic.PROCESS_GUID, 1, 8, {"ProcessId": 20, "ParentId": 10, "ExitStatus": 0})
-        )
-    if fault == "thread-reuse":
-        events.append((diagnostic.THREAD_GUID, 1, 8, {"ProcessId": 999, "TThreadId": 11}))
-    # Render known XML fields plus private values that must never enter sanitized evidence.
-    root = diagnostic.ET.Element("Events")
-    for guid, opcode, stamp, payload in events:
-        event = diagnostic.ET.SubElement(root, "Event")
-        system = diagnostic.ET.SubElement(event, "System")
-        diagnostic.ET.SubElement(system, "Provider", Guid="{9e814aad-3204-11d2-9a82-006008a86939}")
-        extended = diagnostic.ET.SubElement(
-            event, "{http://schemas.microsoft.com/win/2004/08/events/trace}ExtendedTracingInfo"
-        )
-        diagnostic.ET.SubElement(
-            extended, "{http://schemas.microsoft.com/win/2004/08/events/trace}EventGuid"
-        ).text = "{" + guid + "}"
-        diagnostic.ET.SubElement(system, "EventID").text = "0"
-        diagnostic.ET.SubElement(system, "Task").text = "0"
-        diagnostic.ET.SubElement(system, "Version").text = "99" if fault == "unknown" else "2"
-        diagnostic.ET.SubElement(system, "Opcode").text = str(opcode)
-        diagnostic.ET.SubElement(
-            system,
-            "TimeCreated",
-            SystemTime=(
-                "SECRET_TIMESTAMP" if fault == "time" else f"1970-01-01T00:00:{stamp:02d}.1234567Z"
-            ),
-        )
-        diagnostic.ET.SubElement(
-            system, "Execution", ProcessID="888", ThreadID="777", ProcessorID="2"
-        )
-        data = diagnostic.ET.SubElement(event, "EventData")
-        for name, value in payload.items():
-            diagnostic.ET.SubElement(data, "Data", Name=name).text = (
-                "SECRET_NUMERIC" if fault == "numeric" else str(value)
-            )
-        diagnostic.ET.SubElement(data, "Data", Name="CommandLine").text = "SECRET_COMMAND"
-        diagnostic.ET.SubElement(data, "Data", Name="UniqueProcessKey").text = "SECRET_ADDRESS"
-    path.write_bytes(diagnostic.ET.tostring(root))
-    return query
-
-
-@pytest.mark.parametrize(
-    "fault",
-    [
-        "none",
-        "unknown",
-        "reuse",
-        "thread-reuse",
-        "numeric",
-        "time",
-        "malformed",
-        "dtd",
-        "size",
-        "events",
-        "retained",
-    ],
-)
-def test_scheduling_decoder_fails_closed_and_redacts_foreign_ids(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str
-) -> None:
-    """Prove strict fields, lifetime identity, timestamp precision and bounded retention.
-
-    Args:
-        tmp_path: Private synthetic export directory.
-        monkeypatch: Cheap hard-limit boundary replacements.
-        fault: Selected invalid export or bounded retention route.
-    """
-    # Construct realistic payload identities and one controlled invalid/bounded boundary.
-    path = tmp_path / "private.xml"
-    query = scheduling_xml(path, fault)
-    if fault == "malformed":
-        path.write_text("<Events><Event>")
-    if fault == "dtd":
-        path.write_text('<!DOCTYPE x [<!ENTITY s "SECRET">]><Events/>')
-    if fault == "size":
-        monkeypatch.setattr(diagnostic, "XML_LIMIT_BYTES", 1)
-    if fault == "events":
-        monkeypatch.setattr(diagnostic, "EVENT_LIMIT", 1)
-    if fault == "retained":
-        monkeypatch.setattr(diagnostic, "SANITIZED_LIMIT", 1)
-    # Invalid private content never gets echoed in published exception text by the caller.
-    if fault in {"reuse", "thread-reuse", "size", "events", "dtd"}:
-        with pytest.raises(ValueError, match="ambiguous|numeric|timestamp|limit|declaration"):
-            diagnostic.decode_scheduling(path, query)
-        return
-    report = diagnostic.decode_scheduling(path, query)
-    serialized = json.dumps(report)
-    assert "SECRET" not in serialized and "999" not in serialized
-    assert "888" not in serialized and "777" not in serialized
-    if fault == "none":
-        assert not report["gaps"]
-        assert report["counts"] == {"process": 2, "thread": 2, "cswitch": 1, "ready": 1}
-        assert report["events"][0]["time_ns"] == 2123456700
-    elif fault in {"numeric", "time", "malformed"}:
-        assert "event-decode" in report["gaps"]
-        assert report["decode_errors"] and report["schemas"]
-        assert report["decode_errors"][0]["code"] in {
-            "numeric-format",
-            "timestamp-format",
-            "xml-parse",
-        }
-    elif fault == "unknown":
-        assert report["gaps"] and report["unknown_events"] == 14
-        assert not report["events"]
-    else:
-        assert report["omitted"] > 0 and len(report["events"]) == 1
-        assert "sanitized-record-limit" in report["gaps"]
-
-
 @pytest.mark.parametrize("fault", ["none", "timeout", "communication", "creation"])
 def test_scheduling_query_captures_native_identity_and_original_cleanup(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str
@@ -1366,285 +1185,20 @@ def test_private_export_bounds_and_reaps_owned_process(
     if fault == "oserror":
         constructor.side_effect = OSError("sensitive raw error")
     if fault == "running":
-        process.wait.side_effect = [subprocess.TimeoutExpired("tracerpt", 0.05), 0]
+        process.wait.side_effect = [subprocess.TimeoutExpired("xperf", 0.05), 0]
     if fault == "deadline":
         monkeypatch.setattr(diagnostic.time, "monotonic", mock.Mock(side_effect=[0, 91, 92]))
     if fault == "overflow":
         monkeypatch.setattr(diagnostic, "RAW_LIMIT_BYTES", -1)
     if fault == "late-overflow":
         monkeypatch.setattr(diagnostic, "RAW_LIMIT_BYTES", 1)
-        process.wait.side_effect = lambda **kwargs: (tmp_path / "huge.xml").write_bytes(b"xx") and 0
+        process.wait.side_effect = lambda **kwargs: (tmp_path / "huge.csv").write_bytes(b"xx") and 0
     # Publish numeric outcomes only, never native export stdout/stderr or exception messages.
-    result = diagnostic.bounded_export(["tracerpt", "private.etl"], tmp_path)
+    result = diagnostic.bounded_export(["xperf", "private.etl"], tmp_path)
     assert "sensitive" not in json.dumps(result)
     assert "stdout" not in result and "stderr" not in result
     assert process.kill.call_count == int(fault in {"deadline", "overflow"})
     assert ("error" in result) == (fault not in {"none", "running"})
-
-
-@pytest.mark.parametrize(
-    "fault",
-    [
-        "none",
-        "malformed",
-        "numeric",
-        "enum",
-        "time",
-        "late-malformed",
-        "unknown",
-        "export",
-        "normal-export",
-        "lr-export",
-        "lr-malformed",
-        "lr-different",
-        "config",
-        "keywords",
-        "keywords-replaced",
-        "loss",
-        "query",
-        "raw-limit",
-    ],
-)
-def test_scheduling_roundtrip_publishes_only_sanitized_metadata(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str
-) -> None:
-    """Require observed schema/configuration and omit all private XML failure contents.
-
-    Args:
-        tmp_path: External publication directory.
-        monkeypatch: Deterministic native command and export boundaries.
-        fault: Selected native capability gap.
-    """
-    # Keep normal integration and the broad CPU capability probe out of this short mode.
-    if fault == "raw-limit":
-        monkeypatch.setattr(diagnostic, "RAW_LIMIT_BYTES", 1)
-    monkeypatch.setattr(diagnostic.platform, "system", lambda: "Windows")
-    monkeypatch.setattr(diagnostic.shutil, "which", lambda name: name)
-    monkeypatch.setattr(
-        diagnostic, "checkout_identity", lambda: {"head": "candidate", "status": ""}
-    )
-    query = {
-        "python_pid": 10,
-        "git_pid": 20,
-        "calling_tid": 11,
-        "reader_tids": [12, 13],
-        "start_wall_ns": 1000000000,
-        "end_wall_ns": 9000000000,
-        "returncode": int(fault == "query"),
-    }
-    observed_query = mock.Mock(return_value=query)
-    monkeypatch.setattr(diagnostic, "scheduling_query", observed_query)
-    collectors = (
-        "WPR recording is in progress\nDropped event : 0\nLogging mode : Memory\n"
-        "Collector Name : owned\nBuffer Size (KB) : 1024\nNumber of Buffers : 64\n"
-        "Events Lost : 0\nProviders\nSystem Keywords\n"
-        "\tProcessThread\n\tCSwitch\n\tReadyThread\n"
-    )
-    if fault == "config":
-        collectors = collectors.replace("64", "818")
-    if fault == "loss":
-        collectors = collectors.replace("Events Lost : 0", "Events Lost : 1")
-    if fault == "keywords":
-        collectors += "\tSampledProfile\n"
-    if fault == "keywords-replaced":
-        collectors = collectors.replace("CSwitch", "SampledProfile")
-
-    def command(arguments: list[str], timeout: int) -> dict:
-        """Provide only actual recorder metadata and create an owned synthetic ETL.
-
-        Args:
-            arguments: Native command vector.
-            timeout: Bounded native communication duration.
-
-        Returns:
-            Completed recorder metadata with no trace payload.
-        """
-        result = {"returncode": 0, "stdout": "", "stderr": ""}
-        if "-Command" in arguments:
-            result["stdout"] = json.dumps({"admin": True, "wpr": "10", "tracerpt": "10"})
-        elif "-profiledetails" in arguments:
-            result["stdout"] = "Profile : Scheduling.Verbose.Memory"
-            profile = Path(arguments[2].split("!")[0])
-            assert profile.read_text() == diagnostic.SCHEDULING_PROFILE
-            assert 'Value="64"' in profile.read_text()
-            assert "<Stack" not in profile.read_text()
-        elif "collectors" in arguments:
-            result["stdout"] = collectors
-        elif "-status" in arguments:
-            result["stdout"] = "WPR is not recording"
-        elif "-stop" in arguments:
-            Path(arguments[2]).write_bytes(b"PRIVATE_ETL")
-        return result
-
-    export_calls = []
-
-    def export(arguments: list[str], scratch: Path) -> dict:
-        """Create private XML containing values that published artifacts must redact.
-
-        Args:
-            arguments: Original tracerpt export arguments.
-            scratch: External raw tree owned by the probe.
-
-        Returns:
-            Explicit native export status.
-        """
-        export_calls.append(arguments)
-        path = Path(arguments[arguments.index("-o") + 1])
-        scheduling_xml(path, fault)
-        if "-lr" in arguments and fault == "lr-malformed":
-            path.write_text("<Events>SECRET_LR_XML")
-        if "-lr" in arguments and fault == "lr-different":
-            tree = diagnostic.ET.parse(path)
-            diagnostic.ET.SubElement(
-                tree.getroot()[0].find("EventData"), "Data", Name="ExtraField"
-            ).text = "SECRET_LR_PAYLOAD"
-            tree.write(path)
-        if fault == "malformed":
-            path.write_text("<Events>SECRET_MALFORMED_XML")
-        if fault == "enum":
-            tree = diagnostic.ET.parse(path)
-            tree.getroot().find(".//Data[@Name='OldThreadState']").text = "SECRET_WAIT_ENUM"
-            tree.write(path)
-        if fault == "late-malformed":
-            path.write_bytes(path.read_bytes().replace(b"</Events>", b"<Event>SECRET_LATE_XML"))
-        failed = (
-            fault == "export"
-            or (fault == "normal-export" and "-lr" not in arguments)
-            or (fault == "lr-export" and "-lr" in arguments)
-        )
-        return {"returncode": int(failed)}
-
-    monkeypatch.setattr(diagnostic, "capability_command", command)
-    monkeypatch.setattr(diagnostic, "bounded_export", export)
-    # Hash/read back the metadata allowlist and reject successful claims on every capability gap.
-    output = tmp_path / "published"
-    assert diagnostic.wpr_capability(output, "candidate", scheduling=True) == int(fault != "none")
-    raw = (output / "capability.json").read_text()
-    assert "SECRET" not in raw and "PRIVATE_ETL" not in raw
-    report = json.loads(raw)
-    assert report["mode"] == "wpr-scheduling" and report["raw_scratch_removed"]
-    assert len(list(output.iterdir())) == 2
-    observed_query.assert_called_once()
-    if fault != "raw-limit":
-        assert len(export_calls) == 2 and "-lr" not in export_calls[0] and "-lr" in export_calls[1]
-        assert export_calls[0][1] == export_calls[1][1]
-        assert report["best_effort"]["etl_sha256"] == report["etl"]["sha256"]
-        assert report["export_provenance"]["mode"] == "normal"
-        if fault == "normal-export":
-            assert report["scheduling"]["gaps"] and not report["best_effort"]["report"]["gaps"]
-        if fault == "lr-export":
-            assert report["best_effort"]["report"]["gaps"] and not report["scheduling"]["gaps"]
-    if fault in {"numeric", "enum", "time", "late-malformed"}:
-        evidence = report["scheduling"]
-        assert evidence["schemas"] and evidence["decode_errors"]
-        assert "event-decode" in evidence["gaps"]
-        assert evidence["decode_errors"][0]["field"] in {
-            "ProcessId",
-            "OldThreadState",
-            "SystemTime",
-            "XML",
-        }
-        if fault == "late-malformed":
-            assert any(
-                schema["class_guid"] == diagnostic.PROCESS_GUID for schema in evidence["schemas"]
-            )
-    manifest = json.loads((output / "manifest.json").read_text())
-    assert manifest["artifacts"]["capability.json"] == hashlib.sha256(raw.encode()).hexdigest()
-
-
-@pytest.mark.parametrize(
-    "fault",
-    [
-        "fields",
-        "range",
-        "process-limit",
-        "thread-limit",
-        "many-threads",
-        "duplicate-end",
-        "mapping",
-        "newer",
-        "no-cpu",
-        "foreign-lifecycle",
-    ],
-)
-def test_scheduling_payload_and_lifetime_bounds(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str
-) -> None:
-    """Reject ambiguous numeric identities and bound private lifecycle state.
-
-    Args:
-        tmp_path: Private synthetic export directory.
-        monkeypatch: Scoped argument limits.
-        fault: Selected payload/lifetime boundary.
-    """
-    # Mutate controlled XML shapes while keeping private sentinel values unpublished.
-    path = tmp_path / "raw.xml"
-    query = scheduling_xml(path)
-    root = diagnostic.ET.parse(path).getroot()
-    if fault == "fields":
-        data = root[0].find("EventData")
-        for index in range(65):
-            diagnostic.ET.SubElement(data, "Data", Name=f"Field{index}").text = "SECRET"
-    if fault == "range":
-        root[0].find("EventData/Data").text = "4294967296"
-    if fault in {"process-limit", "thread-limit", "many-threads", "duplicate-end"}:
-        prototype = (
-            root[6]
-            if fault == "process-limit"
-            else root[7]
-            if fault == "many-threads"
-            else root[0]
-            if fault == "thread-limit"
-            else root[1]
-        )
-        for index in range(
-            130 if fault == "many-threads" else 9 if fault != "duplicate-end" else 1
-        ):
-            clone = diagnostic.ET.fromstring(diagnostic.ET.tostring(prototype))
-            if fault == "many-threads":
-                clone.find("EventData/Data[@Name='TThreadId']").text = str(1000 + index)
-            root.append(clone)
-    if fault == "mapping":
-        query["reader_tids"] = [12]
-    if fault == "newer":
-        for event in root:
-            guid = event.find(
-                "{http://schemas.microsoft.com/win/2004/08/events/trace}ExtendedTracingInfo/{http://schemas.microsoft.com/win/2004/08/events/trace}EventGuid"
-            ).text.strip("{}")
-            op = int(event.find("System/Opcode").text)
-            if guid == diagnostic.PROCESS_GUID or op == 36:
-                event.find("System/Version").text = "4"
-            elif op != 50:
-                event.find("System/Version").text = "3"
-    if fault == "no-cpu":
-        for event in root:
-            event.find("System/Execution").attrib.pop("ProcessorID")
-    if fault == "foreign-lifecycle":
-        root[6].find("EventData/Data[@Name='ProcessId']").text = "999"
-        root[7].find("EventData/Data[@Name='ProcessId']").text = "999"
-    path.write_bytes(diagnostic.ET.tostring(root))
-    # Reject hard bounds, retain gaps for missing mappings, and support verified prefix versions.
-    if fault in {
-        "process-limit",
-        "thread-limit",
-        "many-threads",
-        "duplicate-end",
-    }:
-        with pytest.raises(ValueError, match="limit|range|ambiguous"):
-            diagnostic.decode_scheduling(path, query)
-    else:
-        result = diagnostic.decode_scheduling(path, query)
-        assert "SECRET" not in json.dumps(result)
-        if fault in {"mapping", "foreign-lifecycle", "no-cpu"}:
-            assert result["gaps"]
-        if fault == "newer":
-            assert not result["gaps"]
-        if fault == "fields":
-            assert result["decode_errors"][0]["code"] == "field-limit"
-            assert result["schemas"][0]["field_count"] > 64
-        if fault == "range":
-            assert result["decode_errors"][0]["code"] == "numeric-range"
-            assert "event-decode" in result["gaps"]
 
 
 def test_scheduling_cli_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1673,203 +1227,268 @@ def test_scheduling_cli_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
     probe.assert_called_once_with(Path("/tmp/probe"), "candidate", scheduling=True)
 
 
-def test_decode_error_evidence_is_bounded_and_keeps_prior_schemas(tmp_path: Path) -> None:
-    """Keep fixed failure locations without values, even after the report error cap fills.
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "none",
+        "utf16",
+        "missing",
+        "incomplete",
+        "incomplete-secret",
+        "malformed-secret",
+        "data-error",
+        "duplicate",
+        "empty",
+        "bad-order",
+        "row-in-header",
+        "csv",
+        "line",
+        "records",
+        "headers",
+        "fields",
+        "name-length",
+        "size",
+        "decode",
+        "absent",
+    ],
+)
+def test_xperf_header_boundaries_counts_and_privacy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str
+) -> None:
+    """Require explicit complete headers and never retain CSV content values.
 
     Args:
-        tmp_path: Private export directory with deliberately invalid numeric payloads.
+        tmp_path: Private xperf CSV destination.
+        monkeypatch: Scoped small hard-limit controls.
+        fault: Selected format, encoding, absence or bound failure.
     """
-    # Accumulate more failures than the metadata bound, then append malformed private XML.
-    path = tmp_path / "private.xml"
-    query = scheduling_xml(path, "numeric")
-    tree = diagnostic.ET.parse(path).getroot()
-    prototype = diagnostic.ET.tostring(tree[0])
-    for _ in range(40):
-        tree.append(diagnostic.ET.fromstring(prototype))
-    path.write_bytes(diagnostic.ET.tostring(tree).replace(b"</Events>", b"<Event>SECRET_LATE_XML"))
-    # Preserve the permanent failure count and bounded schema/code/field evidence only.
-    report = diagnostic.decode_scheduling(path, query)
-    assert report["decode_error_count"] > 32
-    assert len(report["decode_errors"]) == 32
-    assert report["schemas"] and "event-decode" in report["gaps"]
-    assert "SECRET" not in json.dumps(report)
-    assert all(error["code"] == "numeric-format" for error in report["decode_errors"])
-    assert all(
-        error["field"] in {"ProcessId", "TThreadId", "NewThreadId"}
-        for error in report["decode_errors"]
+    # Native header markers remain an unverified expectation, exercised with synthetic schemas.
+    path = tmp_path / "events.csv"
+    content = (
+        "BeginHeader\nCSwitch,TimeStamp,New Thread Id,Old Thread Id\n"
+        "ReadyThread,TimeStamp,Thread Id\nEndHeader\n\n"
+        "CSwitch,1,SECRET_PROCESS,SECRET_COMMAND\n"
+        "ReadyThread,2,SECRET_THREAD\nUnknown,SECRET_OTHER\n"
     )
-
-
-def test_invalid_calendar_timestamp_retains_fixed_error(tmp_path: Path) -> None:
-    """Reject impossible dates without losing schema or echoing the private date value.
-
-    Args:
-        tmp_path: Private synthetic export directory.
-    """
-    # A syntactically valid timestamp still needs calendar validation before conversion.
-    path = tmp_path / "private.xml"
-    query = scheduling_xml(path)
-    path.write_bytes(path.read_bytes().replace(b"1970-01-01", b"1970-99-99"))
-    report = diagnostic.decode_scheduling(path, query)
-    assert report["decode_errors"][0]["code"] == "timestamp-value"
-    assert report["decode_errors"][0]["field"] == "SystemTime"
-    assert "1970-99-99" not in json.dumps(report)
-    assert "event-decode" in report["gaps"]
-
-
-@pytest.mark.parametrize("identity", ["class", "missing", "invalid", "namespace", "duplicate"])
-def test_class_identity_comes_only_from_extended_guid(tmp_path: Path, identity: str) -> None:
-    """Separate SystemTrace provider identity from the explicit classic event class.
-
-    Args:
-        tmp_path: Private realistic tracerpt XML destination.
-        identity: Selected valid, absent, invalid or ambiguous class source.
-    """
-    # Keep plausible payload/opcode/Task data even when the class identity is unavailable.
-    path = tmp_path / "raw.xml"
-    query = scheduling_xml(path)
-    tree = diagnostic.ET.parse(path)
-    namespace = "{http://schemas.microsoft.com/win/2004/08/events/trace}"
-    for event in tree.getroot():
-        extended = event.find(namespace + "ExtendedTracingInfo")
-        if identity == "missing":
-            event.remove(extended)
-        elif identity == "invalid":
-            extended[0].text = "SECRET_BAD_GUID"
-        elif identity == "namespace":
-            extended.tag = "ExtendedTracingInfo"
-        elif identity == "duplicate":
-            extended.append(diagnostic.ET.fromstring(diagnostic.ET.tostring(extended[0])))
-    tree.write(path)
-    # No opcode, payload resemblance or System provider fallback can manufacture a class.
-    report = diagnostic.decode_scheduling(path, query)
+    if fault == "missing":
+        content = "CSwitch,1,SECRET_PROCESS\n"
+    elif fault == "incomplete":
+        content = "BeginHeader\nCSwitch,TimeStamp\n"
+    elif fault == "incomplete-secret":
+        content = "BeginHeader\nSECRET_CONTENT,PRIVATE_VALUE\n"
+    elif fault == "malformed-secret":
+        content = "BeginHeader\nCSwitch,TimeStamp\nSECRET_CONTENT,123\nEndHeader\n"
+    elif fault == "data-error":
+        content += 'CSwitch,"SECRET_UNCLOSED\n'
+    elif fault == "duplicate":
+        content += "BeginHeader\nCSwitch,TimeStamp\nEndHeader\n"
+    elif fault == "empty":
+        content = "BeginHeader\nEndHeader\n"
+    elif fault == "bad-order":
+        content += "EndHeader\n"
+    elif fault == "row-in-header":
+        content = "BeginHeader\nCSwitch,123,SECRET_PROCESS\nEndHeader\n"
+    elif fault == "csv":
+        content = 'BeginHeader\nCSwitch,"SECRET_UNCLOSED\n'
+    elif fault == "line":
+        monkeypatch.setattr(diagnostic, "CSV_LINE_LIMIT", 3)
+    elif fault == "records":
+        monkeypatch.setattr(diagnostic, "CSV_RECORD_LIMIT", 1)
+    elif fault == "headers":
+        monkeypatch.setattr(diagnostic, "HEADER_LIMIT", 1)
+    elif fault == "fields":
+        monkeypatch.setattr(diagnostic, "HEADER_FIELD_LIMIT", 2)
+    elif fault == "name-length":
+        monkeypatch.setattr(diagnostic, "HEADER_NAME_LIMIT", 3)
+    elif fault == "size":
+        monkeypatch.setattr(diagnostic, "EXPORT_LIMIT_BYTES", 1)
+    path.write_text(content, encoding="utf-16" if fault == "utf16" else "utf-8")
+    if fault == "decode":
+        path.write_bytes(b"\xffSECRET_INVALID_ENCODING")
+    if fault == "absent":
+        path.unlink()
+    # Only marker-delimited schemas and literal event counters enter published metadata.
+    report = diagnostic.xperf_schema(path)
     assert "SECRET" not in json.dumps(report)
-    assert all(
-        schema["provider"] == "9e814aad-3204-11d2-9a82-006008a86939" for schema in report["schemas"]
-    )
-    if identity == "class":
-        assert not report["gaps"] and report["counts"]["process"] == 2
-        assert all(schema["EventID"] == schema["Task"] == 0 for schema in report["schemas"])
-    else:
-        assert report["gaps"] and not report["events"]
-        assert all(schema["class_guid"] == "unknown" for schema in report["schemas"])
+    assert bool(report["errors"]) == (fault not in {"none", "utf16"})
+    assert len(report["headers"]) <= diagnostic.HEADER_LIMIT
+    if fault in {"none", "utf16"}:
+        assert report["header_sections"] == 1 and len(report["headers"]) == 2
+        assert report["event_counts"]["CSwitch"] == report["event_counts"]["ReadyThread"] == 1
+        assert report["unknown_rows"] == 1
+    if fault in {"incomplete-secret", "malformed-secret"}:
+        assert not report["headers"] and report["header_sections"] == 0
+    if fault == "data-error":
+        assert report["headers"] and report["header_sections"] == 1
+    if fault == "missing":
+        assert not report["headers"] and report["errors"] == ["header-marker-missing"]
 
 
 @pytest.mark.parametrize(
-    "payload,shape,length",
+    "fault",
     [
-        ("", "empty", 0),
-        ("de ad be ef", "hex", 4),
-        ("YWJjZA==", "base64", 4),
-        ("SECRET_NON_BINARY!", "other", None),
+        "none",
+        "xperf-missing",
+        "help",
+        "dumper",
+        "cswitch",
+        "csv",
+        "missing-file",
+        "oversize",
+        "raw-limit",
+        "config",
+        "cleanup",
     ],
 )
-def test_structural_inventory_has_no_payload_values(
-    payload: str, shape: str, length: int | None
+def test_xperf_roundtrip_preserves_private_exports_and_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest, fault: str
 ) -> None:
-    """Retain encoding shapes and possible lengths without exposing bytes or display values.
+    """Export one owned ETL twice and publish schemas instead of arbitrary native report text.
 
     Args:
-        payload: Private binary-shaped text, never retained.
-        shape: Expected lexical encoding shape.
-        length: Length implied by that lexical shape, without binary decoding.
+        tmp_path: External metadata publication directory.
+        monkeypatch: Deterministic native platform/tool/process boundaries.
+        request: Cleanup registration even if raw-survival assertions fail.
+        fault: Selected installed-tool/export/format/configuration/cleanup gap.
     """
-    # Generate more names/binary elements than the metadata bounds and arbitrary display text.
-    event = diagnostic.ET.Element("Event")
-    display = diagnostic.ET.SubElement(event, "RenderingInfo")
-    diagnostic.ET.SubElement(display, "PrivateDisplay").text = "SECRET_RENDERING"
-    userdata = diagnostic.ET.SubElement(event, "UserData")
-    diagnostic.ET.SubElement(
-        userdata, "private-invalid-name", {"private-invalid-attribute": "SECRET"}
+    # Reuse native recording guards while ensuring no integration suite or dependency installation.
+    if fault == "raw-limit":
+        monkeypatch.setattr(diagnostic, "RAW_LIMIT_BYTES", 1)
+    monkeypatch.setattr(diagnostic.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(
+        diagnostic.shutil,
+        "which",
+        lambda name: None if fault == "xperf-missing" and name == "xperf.exe" else name,
     )
-    node = userdata
-    for index in range(40):
-        node = diagnostic.ET.SubElement(
-            node, f"Node{index}", {f"Attribute{index}": "SECRET_ATTRIBUTE"}
-        )
-    for _ in range(10):
-        diagnostic.ET.SubElement(node, "Binary").text = payload
-    # Shape/name counts remain useful while every data/attribute/display value stays private.
-    result = diagnostic.event_structure(event)
-    assert result["containers"] == ["UserData"]
-    assert len(result["elements"]) == len(result["attributes"]) == 32
-    assert result["max_depth"] == 42 and result["name_overflow_observations"] > 0
-    assert result["binary_present"] and len(result["binary"]) == 8 and result["binary_omitted"] == 2
-    assert result["binary"][0]["encoding_shape"] == shape
-    assert result["binary"][0]["decoded_bytes"] == length
-    assert "SECRET" not in json.dumps(result)
-    assert "RenderingInfo" not in json.dumps(result)
-    assert diagnostic.event_structure(display)["containers"] == ["absent"]
+    original_is_file = Path.is_file
+    monkeypatch.setattr(
+        diagnostic.Path,
+        "is_file",
+        lambda path: (
+            False if "Windows Performance Toolkit" in str(path) else original_is_file(path)
+        ),
+    )
+    monkeypatch.setattr(
+        diagnostic, "checkout_identity", lambda: {"head": "candidate", "status": ""}
+    )
+    query = mock.Mock(
+        return_value={
+            "python_pid": 10,
+            "git_pid": 20,
+            "calling_tid": 11,
+            "reader_tids": [12, 13],
+            "returncode": 0,
+        }
+    )
+    monkeypatch.setattr(diagnostic, "scheduling_query", query)
+    if fault == "cleanup":
+        original_cleanup = diagnostic.tempfile.TemporaryDirectory._rmtree
 
+        def denied_cleanup(*args: object, **kwargs: object) -> None:
+            """Register test-owned raw cleanup before simulating a locked sidecar.
 
-def test_schema_inventory_prioritizes_classes_and_counts_overflow(tmp_path: Path) -> None:
-    """Preserve target class groups and account for every omitted unknown schema event.
+            Args:
+                *args: Original private-tree deletion arguments.
+                **kwargs: Original deletion policy arguments.
 
-    Args:
-        tmp_path: Private export with deliberately crowded schema inventory.
-    """
-    # Prepend many distinct unrelated classes before the target lifecycle/scheduling events.
-    path = tmp_path / "raw.xml"
-    query = scheduling_xml(path)
-    root = diagnostic.ET.parse(path).getroot()
-    namespace = "{http://schemas.microsoft.com/win/2004/08/events/trace}"
-    prototype = diagnostic.ET.tostring(root[0])
-    for index in range(20):
-        node = diagnostic.ET.fromstring(prototype)
-        node.find(
-            namespace + "ExtendedTracingInfo/" + namespace + "EventGuid"
-        ).text = f"{{00000000-0000-0000-0000-{index:012d}}}"
-        root.insert(0, node)
-    path.write_bytes(diagnostic.ET.tostring(root))
-    # Retained group counts plus overflow always equal the total observations.
-    report = diagnostic.decode_scheduling(path, query)
-    assert len(report["schemas"]) == 16 and report["schema_priority_evictions"] > 0
-    assert sum(report["schema_counts"]) + report["schema_overflow_events"] == len(root)
-    assert report["unknown_events"] == 20 and not report["gaps"]
-    assert any(schema["class_guid"] == diagnostic.PROCESS_GUID for schema in report["schemas"])
+            Raises:
+                OSError: Simulated recorder sidecar remains locked.
+            """
+            request.addfinalizer(
+                lambda: original_cleanup(*args, **kwargs) if Path(str(args[0])).exists() else None
+            )
+            raise OSError("locked sidecar")
 
+        monkeypatch.setattr(diagnostic.tempfile.TemporaryDirectory, "_rmtree", denied_cleanup)
+    calls = []
+    exports = []
+    collectors = (
+        "Dropped event : 0\nLogging mode : Memory\nCollector Name : owned\n"
+        "Buffer Size (KB) : 1024\nNumber of Buffers : 64\nEvents Lost : 0\n"
+        "System Keywords\n\tProcessThread\n\tCSwitch\n\tReadyThread\n"
+    )
+    if fault == "config":
+        collectors = collectors.replace("64", "818")
 
-@pytest.mark.parametrize("fault", ["none", "field", "key", "bound", "missing"])
-def test_paired_export_comparison_is_bounded_and_not_a_decoder_proof(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str
-) -> None:
-    """Compare only explicit class/time/occurrence keys and payload-field availability.
+    def command(arguments: list[str], timeout: int) -> dict:
+        """Return static recorder/help metadata and create only a private synthetic ETL.
 
-    Args:
-        tmp_path: Separate private XML export destinations from one synthetic ETL.
-        monkeypatch: Scoped small key limit.
-        fault: Selected difference or missing comparison identity.
-    """
-    # Create independent exports with a controlled key/schema difference.
-    normal, best = tmp_path / "normal.xml", tmp_path / "lr.xml"
-    scheduling_xml(normal)
-    scheduling_xml(best)
-    tree = diagnostic.ET.parse(best)
-    if fault == "field":
-        diagnostic.ET.SubElement(
-            tree.getroot()[0].find("EventData"), "Data", Name="Extra"
-        ).text = "SECRET_BEST_EFFORT"
-    elif fault == "key":
-        tree.getroot()[0].find("System/TimeCreated").set(
-            "SystemTime", "1970-01-01T00:00:00.1234568Z"
-        )
-    elif fault == "missing":
-        tree.getroot()[0].find("System/TimeCreated").set("SystemTime", "SECRET_TIMESTAMP")
-    if fault == "bound":
-        monkeypatch.setattr(diagnostic, "SANITIZED_LIMIT", 1)
-    tree.write(best)
-    # Differences are metadata only; never promote -lr output to normal schema evidence.
-    result = diagnostic.compare_exports(normal, best)
-    assert result["provenance"] == "normal-versus-best-effort-not-proof"
-    assert "SECRET" not in json.dumps(result)
-    assert result["normal_keys"] <= diagnostic.SANITIZED_LIMIT
-    if fault == "field":
-        assert result["field_differences"] == 1 and len(result["examples"]) == 1
-    elif fault == "key":
-        assert result["normal_only"] == result["best_effort_only"] == 1
-    elif fault == "bound":
-        assert result["overflow_events"][0] > 0
-    elif fault == "missing":
-        assert result["missing_key_events"][1] == 1
+        Args:
+            arguments: Explicit native recorder/help invocation.
+            timeout: Command communication bound.
+
+        Returns:
+            Original command outcome without trace content.
+        """
+        calls.append(arguments)
+        result = {"returncode": 0, "stdout": "", "stderr": ""}
+        if "-Command" in arguments:
+            result["stdout"] = json.dumps(
+                {"admin": True, "wpr": "10", "tracerpt": "10", "xperf": "10"}
+            )
+        elif "-help" in arguments:
+            result["stdout"] = "Static native help"
+            result["returncode"] = int(fault == "help")
+        elif "-profiledetails" in arguments:
+            result["stdout"] = "Profile : Scheduling.Verbose.Memory"
+        elif "collectors" in arguments:
+            result["stdout"] = collectors
+        elif "-status" in arguments:
+            result["stdout"] = "WPR is not recording"
+        elif "-stop" in arguments:
+            Path(arguments[2]).write_bytes(b"PRIVATE_ETL")
+        return result
+
+    def export(arguments: list[str], scratch: Path) -> dict:
+        """Create separate private dumper/report outputs from the same ETL.
+
+        Args:
+            arguments: Exact xperf export command.
+            scratch: External private staging directory.
+
+        Returns:
+            Original exporter outcome.
+        """
+        exports.append(arguments)
+        action = arguments[arguments.index("-a") + 1]
+        path = Path(arguments[arguments.index("-o") + 1])
+        if fault != "missing-file":
+            if action == "dumper":
+                path.write_text(
+                    "SECRET_NO_MARKERS"
+                    if fault == "csv"
+                    else (
+                        "BeginHeader\nCSwitch,TimeStamp,Thread Id\nEndHeader\n"
+                        "CSwitch,123,SECRET_PROCESS\n"
+                    )
+                )
+            else:
+                path.write_text("SECRET_THREAD_REPORT SECRET_COMMAND_LINE")
+        if fault == "oversize":
+            monkeypatch.setattr(diagnostic, "EXPORT_LIMIT_BYTES", 1)
+        return {"returncode": int(fault == action), "seconds": 0.1}
+
+    monkeypatch.setattr(diagnostic, "capability_command", command)
+    monkeypatch.setattr(diagnostic, "bounded_export", export)
+    # Both original outcomes, private-file hashes and uncertain cleanup remain reviewable.
+    output = tmp_path / "published"
+    assert diagnostic.wpr_capability(output, "candidate", scheduling=True) == int(fault != "none")
+    text = (output / "capability.json").read_text()
+    assert "SECRET" not in text and "PRIVATE_ETL" not in text
+    report = json.loads(text)
+    assert report["raw_scratch_removed"] == (fault != "cleanup")
+    assert set(path.name for path in output.iterdir()) == {"manifest.json", "capability.json"}
+    if fault not in {"help", "xperf-missing", "raw-limit"}:
+        query.assert_called_once()
+        assert len(exports) == 2 and exports[0][2] == exports[1][2]
+        assert exports[0][-2:] == ["-a", "dumper"]
+        assert exports[1][-3:] == ["-a", "cswitch", "-thread"]
+        assert report["schema_only"]
+        assert report["xperf_exports"]["dumper"]["etl_sha256"] == report["etl"]["sha256"]
+        assert report["xperf_exports"]["cswitch"]["etl_sha256"] == report["etl"]["sha256"]
     else:
-        assert not result["gaps"] and result["matched"] == 14
+        if fault == "raw-limit":
+            query.assert_called_once()
+        else:
+            query.assert_not_called()
+        assert not exports

@@ -1,5 +1,5 @@
 # Temporary diagnostic: remove this workflow and its harness/tests after diagnosis.
-name: Temporary Windows Scheduling Schema
+name: Temporary Windows Xperf Schema
 
 on:
   pull_request:
@@ -38,7 +38,7 @@ jobs:
         run: |
           python -c "import subprocess, sys; subprocess.run(['poetry', 'env', 'use', sys.executable], check=True)"
           python scripts/dev.py install
-      - name: Probe paired native schema exports only
+      - name: Probe installed xperf schemas only
         env:
           EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
         run: poetry run python scripts/windows_git_diagnostic.py --mode wpr-scheduling --expected-head "$EXPECTED_HEAD" --output "$RUNNER_TEMP/windows-git-diagnostic"

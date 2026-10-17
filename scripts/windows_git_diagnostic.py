@@ -4,6 +4,7 @@ These diagnostic artifacts never replace native acceptance or change production 
 """
 
 import argparse
+import csv
 import hashlib
 import importlib.metadata
 import json
@@ -18,11 +19,10 @@ import tempfile
 import threading
 import time
 import uuid
-import xml.etree.ElementTree as ET
 from collections import deque
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -971,11 +971,7 @@ LoggingMode="Memory" DetailLevel="Verbose"><Collectors>
 </SystemCollectorId></Collectors></Profile>
 </Profiles></WindowsPerformanceRecorder>"""
 RAW_LIMIT_BYTES = 256 * 1024 * 1024
-XML_LIMIT_BYTES = 128 * 1024 * 1024
-EVENT_LIMIT = 1000000
-SANITIZED_LIMIT = 4096
-PROCESS_GUID = "3d6fa8d0-fe05-11d0-9dda-00c04fd7ba7c"
-THREAD_GUID = "3d6fa8d1-fe05-11d0-9dda-00c04fd7ba7c"
+EXPORT_LIMIT_BYTES = 128 * 1024 * 1024
 
 
 def scheduling_query(repository: Path) -> dict[str, Any]:
@@ -1032,7 +1028,7 @@ def bounded_export(command: list[str], scratch: Path) -> dict[str, Any]:
     """Export privately with a ninety-second deadline and aggregate raw-disk bound.
 
     Args:
-        command: Explicit tracerpt XML export invocation.
+        command: Explicit native exporter invocation, without a shell.
         scratch: Owned raw directory, never an upload source.
 
     Returns:
@@ -1078,532 +1074,117 @@ def bounded_export(command: list[str], scratch: Path) -> dict[str, Any]:
     return result
 
 
-def event_structure(element: ET.Element) -> dict[str, Any]:
-    """Inventory bounded payload shapes without retaining payload or attribute values.
+# Counts are restricted to these literal event types; unknown row values are never retained.
+XPERF_EVENT_TYPES = frozenset(
+    {
+        "Process",
+        "Thread",
+        "P-Start",
+        "P-End",
+        "P-DCStart",
+        "P-DCEnd",
+        "T-Start",
+        "T-End",
+        "T-DCStart",
+        "T-DCEnd",
+        "CSwitch",
+        "ReadyThread",
+    }
+)
+HEADER_LIMIT = 64
+HEADER_FIELD_LIMIT = 64
+HEADER_NAME_LIMIT = 96
+CSV_LINE_LIMIT = 16384
+CSV_RECORD_LIMIT = 1000000
+
+
+def xperf_schema(path: Path) -> dict[str, Any]:
+    """Retain marker-delimited CSV schemas and literal event counts, never content rows.
 
     Args:
-        element: One private XML event; RenderingInfo and its values are excluded.
+        path: Private xperf dumper CSV; its native format remains unverified until observed.
 
     Returns:
-        Container/name/count/depth/binary-length metadata with explicit truncation counters.
+        Bounded validated headers, allowlisted event counts and fixed format/limit errors.
     """
-    # Select payload containers only; arbitrary display strings never enter the inventory.
-    payloads = [
-        child
-        for child in element
-        if child.tag.rsplit("}", 1)[-1] in {"EventData", "UserData", "Binary"}
-    ]
-    names: set[str] = set()
-    attributes: set[str] = set()
-    binary: list[dict[str, Any]] = []
-    nodes = 0
-    depth = 0
-    omitted_names = 0
-    binary_omitted = 0
-    stack = [(payload, 1) for payload in payloads]
-    while stack:
-        node, level = stack.pop()
-        nodes += 1
-        depth = max(depth, level)
-        # Bound names independently from XML size; count every truncated observation.
-        for collection, candidates in (
-            (names, [node.tag.rsplit("}", 1)[-1]]),
-            (attributes, [key.rsplit("}", 1)[-1] for key in node.attrib]),
-        ):
-            for name in candidates:
-                if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", name):
-                    if name in collection or len(collection) < 32:
-                        collection.add(name)
-                    else:
-                        omitted_names += 1
-        if node.tag.rsplit("}", 1)[-1] == "Binary":
-            # Inspect encoding shape/length only; never decode or publish binary bytes.
-            text = node.text or ""
-            length = sum(not char.isspace() for char in text)
-            shape, decoded = "other", None
-            if not length:
-                shape, decoded = "empty", 0
-            elif (
-                all(char in "0123456789abcdefABCDEF" or char.isspace() for char in text)
-                and length % 2 == 0
-            ):
-                shape, decoded = "hex", length // 2
-            elif re.fullmatch(r"[A-Za-z0-9+/\s]*={0,2}\s*", text) and length % 4 == 0:
-                shape = "base64"
-                decoded = length // 4 * 3 - len(text.rstrip()) + len(text.rstrip().rstrip("="))
-            if len(binary) < 8:
-                binary.append(
-                    {"encoding_shape": shape, "encoded_chars": length, "decoded_bytes": decoded}
-                )
-            else:
-                binary_omitted += 1
-        stack.extend((child, level + 1) for child in node)
-    return {
-        "containers": [child.tag.rsplit("}", 1)[-1] for child in payloads][:3] or ["absent"],
-        "container_omitted": max(0, len(payloads) - 3),
-        "elements": sorted(names),
-        "attributes": sorted(attributes),
-        "element_count": nodes,
-        "max_depth": depth,
-        "name_overflow_observations": omitted_names,
-        "binary_present": bool(binary) or binary_omitted > 0,
-        "binary": binary,
-        "binary_omitted": binary_omitted,
+    # Reject oversized files and detect only explicit Unicode byte-order marks.
+    report: dict[str, Any] = {
+        "headers": [],
+        "event_counts": dict.fromkeys(XPERF_EVENT_TYPES, 0),
+        "errors": [],
+        "header_sections": 0,
+        "unknown_rows": 0,
+        "purpose": "Schema discovery only; not scheduling evidence",
     }
-
-
-def compare_exports(normal: Path, best_effort: Path) -> dict[str, Any]:
-    """Compare bounded class/time/occurrence keys without using best-effort data as proof.
-
-    Args:
-        normal: Private normal tracerpt XML.
-        best_effort: Separate private XML from the same ETL using tracerpt -lr.
-
-    Returns:
-        Bounded field-availability examples, aggregate matching counts and explicit overflow.
-
-    Raises:
-        ValueError: An export exceeds parsing bounds.
-        OSError: An export cannot be read.
-    """
-    # Match only explicit validated classes and numeric timestamps; never guess from payloads.
-    exports = []
-    overflow = []
-    invalid = []
-    for path in (normal, best_effort):
-        keys: dict[tuple[Any, ...], list[str]] = {}
-        occurrences: dict[tuple[Any, ...], int] = {}
-        omitted = missing = 0
-        for record in scheduling_events(path):
-            schema = record["schema"]
-            if schema.get("class_guid", "unknown") == "unknown" or "event_time_ns" not in record:
-                missing += 1
-                continue
-            if len(keys) >= SANITIZED_LIMIT:
-                omitted += 1
-                continue
-            base = (
-                schema["class_guid"],
-                schema["version"],
-                schema["opcode"],
-                record["event_time_ns"],
-            )
-            occurrence = occurrences.get(base, 0)
-            occurrences[base] = occurrence + 1
-            keys[(*base, occurrence)] = schema["fields"]
-        exports.append(keys)
-        overflow.append(omitted)
-        invalid.append(missing)
-    # Keep only class/time/schema differences; unrelated process/thread values never enter keys.
-    left, right = exports
-    shared = left.keys() & right.keys()
-    changed = [key for key in sorted(shared) if left[key] != right[key]]
-    gaps = []
-    if any(overflow):
-        gaps.append("comparison-key-limit")
-    if left.keys() != right.keys():
-        gaps.append("event-key-mismatch")
-    if changed:
-        gaps.append("field-availability-difference")
-    return {
-        "gaps": gaps,
-        "provenance": "normal-versus-best-effort-not-proof",
-        "key_limit": SANITIZED_LIMIT,
-        "normal_keys": len(left),
-        "best_effort_keys": len(right),
-        "matched": len(shared),
-        "normal_only": len(left.keys() - right.keys()),
-        "best_effort_only": len(right.keys() - left.keys()),
-        "field_differences": len(changed),
-        "overflow_events": overflow,
-        "missing_key_events": invalid,
-        "examples": [
-            {
-                "class_guid": key[0],
-                "version": key[1],
-                "opcode": key[2],
-                "time_ns": key[3],
-                "occurrence": key[4],
-                "normal_fields": left[key],
-                "best_effort_fields": right[key],
-            }
-            for key in changed[:32]
-        ],
-        "examples_omitted": max(0, len(changed) - 32),
-    }
-
-
-def scheduling_events(path: Path) -> Iterator[dict[str, Any]]:
-    """Stream private XML into strictly typed known schema fields or structural metadata.
-
-    Args:
-        path: Private tracerpt XML file with bounded size.
-
-    Yields:
-        Known numeric fields, structural schemas or fixed decode failure codes/field names.
-
-    Raises:
-        ValueError: XML size or event-count bounds are invalid.
-        OSError: Private export cannot be read.
-    """
-    # Reject oversized exports and entity declarations before parsing any event payload.
-    if path.stat().st_size > XML_LIMIT_BYTES:
-        raise ValueError("xml-size-limit")
-    with path.open("rb") as stream:
-        carry = b""
-        while chunk := stream.read(65536):
-            scan = (carry + chunk).replace(b"\0", b"")
-            if b"<!DOCTYPE" in scan.upper() or b"<!ENTITY" in scan.upper():
-                raise ValueError("xml-declaration-rejected")
-            carry = scan[-16:]
-    # Clear completed events from their root to keep memory independent of export length.
     try:
-        context = ET.iterparse(path, events=("start", "end"))
-        _, root = next(context)
-        count = 0
-        for action, element in context:
-            if action != "end" or element.tag.rsplit("}", 1)[-1] != "Event":
-                continue
-            count += 1
-            if count > EVENT_LIMIT:
-                raise ValueError("event-count-limit")
-            children = {child.tag.rsplit("}", 1)[-1]: child for child in element}
-            system = children.get("System")
-            data = children.get("EventData")
-            # Keep field names and payload shape, never arbitrary user/display values.
-            field_count = 0 if data is None else len(data)
-            fields = [] if data is None else list(data[:64])
-            names = [field.get("Name", "") for field in fields]
-            structural: dict[str, Any] = {
-                "fields": sorted(
-                    {name for name in names if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", name)}
-                )[:32],
-                "field_count": field_count,
-                "field_overflow": max(0, field_count - 32),
-                "shape": event_structure(element),
-            }
-            header = (
-                {} if system is None else {child.tag.rsplit("}", 1)[-1]: child for child in system}
-            )
-            provider = header.get("Provider")
-            provider_guid = "" if provider is None else provider.get("Guid", "").strip("{}").lower()
-            guid_pattern = r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}"
-            structural["provider"] = (
-                provider_guid if re.fullmatch(guid_pattern, provider_guid) else "unknown"
-            )
-            # Classic event class comes only from the namespaced ExtendedTracingInfo.EventGuid.
-            class_nodes = [
-                node
-                for child in element
-                if child.tag
-                in {
-                    "{http://schemas.microsoft.com/win/2004/08/events/trace}ExtendedTracingInfo",
-                    "{https://schemas.microsoft.com/win/2004/08/events/trace}ExtendedTracingInfo",
-                }
-                for node in child
-                if node.tag == child.tag.replace("ExtendedTracingInfo", "EventGuid")
-            ]
-            guid = (
-                (class_nodes[0].text or "").strip().strip("{}").lower()
-                if len(class_nodes) == 1
-                else ""
-            )
-            guid = guid if re.fullmatch(guid_pattern, guid) else "unknown"
-            structural["class_guid"] = guid
-            for name in ("EventID", "Task"):
-                node = header.get(name)
-                value = "" if node is None else node.text or ""
-                structural[name] = int(value) if re.fullmatch(r"\d{1,5}", value) else -1
-            version = header.get("Version")
-            opcode = header.get("Opcode")
-            ver = (
-                int(version.text)
-                if version is not None and re.fullmatch(r"\d{1,3}", version.text or "")
-                else -1
-            )
-            op = (
-                int(opcode.text)
-                if opcode is not None and re.fullmatch(r"\d{1,3}", opcode.text or "")
-                else -1
-            )
-            structural.update(version=ver, opcode=op)
-            allowed: tuple[str, ...] = ()
-            if ver in (2, 3, 4) and guid == PROCESS_GUID and op in (1, 2, 3, 4):
-                allowed = ("ProcessId", "ParentId", "ExitStatus")
-            elif guid == THREAD_GUID:
-                if ver in (2, 3) and op in (1, 2, 3, 4):
-                    allowed = ("ProcessId", "TThreadId")
-                elif ver in (2, 3, 4) and op == 36:
-                    allowed = (
-                        "NewThreadId",
-                        "OldThreadId",
-                        "OldThreadState",
-                        "OldThreadWaitReason",
-                        "OldThreadWaitMode",
-                    )
-                elif ver == 2 and op == 50:
-                    allowed = ("TThreadId", "AdjustReason", "AdjustIncrement", "Flag")
-            values = {field.get("Name"): field.text or "" for field in fields}
-            # A schema is supported only with every documented field and a unique payload mapping.
-            known = (
-                bool(allowed)
-                and field_count <= 64
-                and all(name in values for name in allowed)
-                and len(names) == len(set(names))
-            )
-            record: dict[str, Any] = {"schema": structural, "known": known}
-            timestamp = header.get("TimeCreated")
-            stamp = "" if timestamp is None else timestamp.get("SystemTime", "")
-            match = re.fullmatch(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d{1,9}))?Z", stamp)
-            if match is not None:
+        if path.stat().st_size > EXPORT_LIMIT_BYTES:
+            raise ValueError("export-size-limit")
+        with path.open("rb") as raw:
+            prefix = raw.read(3)
+        encoding = "utf-16" if prefix.startswith((b"\xff\xfe", b"\xfe\xff")) else "utf-8-sig"
+        # Require a complete first marker before treating any values as schema names.
+        inside = False
+        finished = False
+        seen = False
+        records = 0
+        pending_headers: list[list[str]] = []
+        with path.open(encoding=encoding, newline="") as stream:
+            while line := stream.readline(CSV_LINE_LIMIT + 1):
+                if len(line) > CSV_LINE_LIMIT:
+                    raise ValueError("csv-line-limit")
+                records += 1
+                if records > CSV_RECORD_LIMIT:
+                    raise ValueError("csv-record-limit")
                 try:
-                    seconds = int(
-                        datetime.fromisoformat(match[1]).replace(tzinfo=timezone.utc).timestamp()
-                    )
-                    record["event_time_ns"] = seconds * 1000000000 + int(
-                        (match[2] or "").ljust(9, "0")
-                    )
-                except ValueError:
-                    pass
-            if field_count > 64:
-                record["decode_error"] = {"code": "field-limit", "field": "XML"}
-            if known:
-                try:
-                    timestamp = header.get("TimeCreated")
-                    stamp = "" if timestamp is None else timestamp.get("SystemTime", "")
-                    match = re.fullmatch(
-                        r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d{1,9}))?Z", stamp
-                    )
-                    error_code, error_field = "timestamp-format", "SystemTime"
-                    if match is None:
-                        raise ValueError("unsupported-event-timestamp")
-                    error_code = "timestamp-value"
-                    seconds = int(
-                        datetime.fromisoformat(match[1]).replace(tzinfo=timezone.utc).timestamp()
-                    )
-                    record["time_ns"] = seconds * 1000000000 + int((match[2] or "").ljust(9, "0"))
-                    numeric = {}
-                    for name in allowed:
-                        error_code, error_field = "numeric-format", name
-                        value = values[name]
-                        if not re.fullmatch(r"(?:-?\d{1,10}|0[xX][0-9a-fA-F]{1,8})", value):
-                            raise ValueError("invalid-numeric-payload")
-                        number = int(value, 16 if value.lower().startswith("0x") else 10)
-                        minimum = (
-                            -(2**31)
-                            if name == "ExitStatus"
-                            else -128
-                            if name == "AdjustIncrement"
-                            else 0
-                        )
-                        maximum = 2**32 if name.endswith("Id") or name == "ExitStatus" else 256
-                        error_code = "numeric-range"
-                        if not minimum <= number < maximum:
-                            raise ValueError("numeric-payload-range")
-                        numeric[name] = number
-                    record["values"] = numeric
-                    processor = header.get("Execution")
-                    cpu = "" if processor is None else processor.get("ProcessorID", "")
-                    if cpu.isdecimal() and len(cpu) <= 5:
-                        record["cpu"] = int(cpu)
-                except ValueError:
-                    # Preserve only schema and an allowlisted failure location.
-                    record = {
-                        "schema": structural,
-                        "known": False,
-                        "decode_error": {"code": error_code, "field": error_field},
-                        **(
-                            {"event_time_ns": record["event_time_ns"]}
-                            if "event_time_ns" in record
-                            else {}
-                        ),
-                    }
-            yield record
-            root.clear()
-    except ET.ParseError:
-        # A later malformed element cannot erase schemas already yielded by this stream.
-        yield {
-            "schema": {"provider": "unknown", "version": -1, "opcode": -1, "fields": []},
-            "known": False,
-            "decode_error": {"code": "xml-parse", "field": "XML"},
-        }
-
-
-def decode_scheduling(path: Path, query: dict[str, Any]) -> dict[str, Any]:
-    """Establish target lifetimes, then retain only target numeric scheduling evidence.
-
-    Args:
-        path: Private bounded XML export, read twice without retaining unrelated events.
-        query: Actual Python/Git/native thread identities and query wall-clock window.
-
-    Returns:
-        Bounded sanitized records, structural schemas and explicit capability gaps.
-
-    Raises:
-        ValueError: Ambiguous/reused target identities or export bounds.
-        OSError: Export reading fails.
-    """
-    # First pass inventories schemas and discovers target process/thread lifetimes by payload IDs.
-    parent, git = query["python_pid"], query["git_pid"]
-    tids = {query["calling_tid"], *query["reader_tids"]}
-    process_events: dict[int, list[tuple[int, int]]] = {parent: [], git: []}
-    thread_events: dict[int, list[tuple[int, int, int]]] = {}
-    schemas: list[dict[str, Any]] = []
-    schema_counts: list[int] = []
-    schema_overflow_events = 0
-    schema_priority_evictions = 0
-    unknown = 0
-    decode_errors: list[dict[str, Any]] = []
-    error_count = 0
-    for record in scheduling_events(path):
-        schema = record["schema"]
-        if schema in schemas:
-            schema_counts[schemas.index(schema)] += 1
-        elif len(schemas) < 16:
-            schemas.append(schema)
-            schema_counts.append(1)
-        else:
-            # Prioritize explicit target classes but account for every omitted schema event.
-            replacement = next(
-                (
-                    index
-                    for index, old in enumerate(schemas)
-                    if old.get("class_guid") not in {PROCESS_GUID, THREAD_GUID}
-                ),
-                None,
-            )
-            if schema.get("class_guid") in {PROCESS_GUID, THREAD_GUID} and replacement is not None:
-                schema_overflow_events += schema_counts[replacement]
-                schemas[replacement], schema_counts[replacement] = schema, 1
-                schema_priority_evictions += 1
-            else:
-                schema_overflow_events += 1
-        if "decode_error" in record:
-            error_count += 1
-            if len(decode_errors) < 32:
-                decode_errors.append({"schema": schema, **record["decode_error"]})
-            continue
-        if not record["known"]:
-            unknown += 1
-            continue
-        values, op, stamp = record["values"], schema["opcode"], record["time_ns"]
-        if schema.get("class_guid") == PROCESS_GUID and values["ProcessId"] in process_events:
-            process_events[values["ProcessId"]].append((op, stamp))
-            if len(process_events[values["ProcessId"]]) > 8:
-                raise ValueError("target-process-lifetime-limit")
-        if schema.get("class_guid") == THREAD_GUID and op in (1, 2, 3, 4):
-            tid, pid = values["TThreadId"], values["ProcessId"]
-            if tid in tids or pid == git:
-                thread_events.setdefault(tid, []).append((op, stamp, pid))
-                if len(thread_events[tid]) > 8:
-                    raise ValueError("target-thread-lifetime-limit")
-                if len(thread_events) > 128:
-                    raise ValueError("target-thread-limit")
-    # Multiple births for a target PID/TID make reuse attribution ambiguous: fail closed.
-    for events in process_events.values():
-        if sum(op in (1, 3) for op, _ in events) > 1:
-            raise ValueError("ambiguous-process-lifetime")
-    for thread_life in thread_events.values():
-        if (
-            len({pid for _, _, pid in thread_life}) > 1
-            or sum(op in (1, 3) for op, _, _ in thread_life) > 1
-        ):
-            raise ValueError("ambiguous-thread-lifetime")
-    start, end = query["start_wall_ns"], query["end_wall_ns"]
-    git_life = process_events[git]
-    births = [stamp for op, stamp in git_life if op == 1]
-    deaths = [stamp for op, stamp in git_life if op == 2]
-    valid_git = len(births) == len(deaths) == 1 and start <= births[0] <= deaths[0] <= end
-    thread_windows = {}
-    for tid, life in thread_events.items():
-        born = [stamp for op, stamp, _ in life if op in (1, 3)]
-        dead = [stamp for op, stamp, _ in life if op in (2, 4)]
-        owner = life[0][2]
-        if len(dead) > 1:
-            raise ValueError("ambiguous-thread-lifetime")
-        if len(born) == len(dead) == 1 and born[0] <= dead[0] and owner in (parent, git):
-            thread_windows[tid] = (born[0], dead[0], owner)
-    mapping = all(tid in thread_windows and thread_windows[tid][2] == parent for tid in tids)
-    mapping = mapping and any(owner == git for _, _, owner in thread_windows.values())
-    # Second pass filters the time window and redacts unrelated CSwitch counterparty IDs.
-    retained: list[dict[str, Any]] = []
-    counts = {"process": 0, "thread": 0, "cswitch": 0, "ready": 0}
-    overflow = 0
-    cpu_missing = False
-    for record in scheduling_events(path):
-        if not record["known"] or not start <= record["time_ns"] <= end:
-            continue
-        schema, values = record["schema"], record["values"]
-        op, provider = schema["opcode"], schema.get("class_guid")
-        target_tids = {
-            tid
-            for tid, (born, dead, _) in thread_windows.items()
-            if born <= record["time_ns"] <= dead
-        }
-        selected = {}
-        kind = ""
-        if provider == PROCESS_GUID and values["ProcessId"] in (parent, git):
-            selected = {
-                name: value
-                for name, value in values.items()
-                if name != "ParentId" or value in (parent, git)
-            }
-            kind = "process"
-        elif provider == THREAD_GUID and op in (1, 2, 3, 4):
-            if values["TThreadId"] in target_tids and values["ProcessId"] in (parent, git):
-                selected, kind = values, "thread"
-        elif provider == THREAD_GUID and op == 36:
-            if values["NewThreadId"] in target_tids or values["OldThreadId"] in target_tids:
-                selected = {
-                    name: value
-                    for name, value in values.items()
-                    if name not in ("NewThreadId", "OldThreadId") or value in target_tids
-                }
-                kind = "cswitch"
-        elif provider == THREAD_GUID and op == 50 and values["TThreadId"] in target_tids:
-            selected, kind = values, "ready"
-        if kind:
-            if kind in ("cswitch", "ready") and "cpu" not in record:
-                cpu_missing = True
-            counts[kind] += 1
-            if len(retained) < SANITIZED_LIMIT:
-                retained.append(
-                    {
-                        "kind": kind,
-                        "opcode": op,
-                        "time_ns": record["time_ns"],
-                        "values": selected,
-                        **({"cpu": record["cpu"]} if "cpu" in record else {}),
-                    }
-                )
-            else:
-                overflow += 1
-    gaps = []
-    if error_count:
-        gaps.append("event-decode")
-    if not valid_git:
-        gaps.append("git-start-end-window")
-    if not mapping or len(query["reader_tids"]) != 2:
-        gaps.append("python-thread-mapping")
-    if not counts["cswitch"] or not counts["ready"]:
-        gaps.append("scheduling-events")
-    if cpu_missing:
-        gaps.append("scheduler-cpu")
-    if overflow:
-        gaps.append("sanitized-record-limit")
-    return {
-        "schemas": schemas,
-        "schema_counts": schema_counts,
-        "schema_overflow_events": schema_overflow_events,
-        "schema_priority_evictions": schema_priority_evictions,
-        "decode_errors": decode_errors,
-        "decode_error_count": error_count,
-        "unknown_events": unknown,
-        "counts": counts,
-        "events": retained,
-        "omitted": overflow,
-        "gaps": gaps,
-    }
+                    row = next(csv.reader([line], strict=True))
+                except csv.Error:
+                    raise ValueError("csv-record-format") from None
+                if not row or not any(field.strip() for field in row):
+                    continue
+                row = [field.strip() for field in row]
+                if row == ["BeginHeader"]:
+                    if inside or seen:
+                        raise ValueError("header-marker-order")
+                    inside, seen = True, True
+                    continue
+                if not seen:
+                    raise ValueError("header-marker-missing")
+                if row == ["EndHeader"]:
+                    if not inside or not pending_headers:
+                        raise ValueError("header-marker-order")
+                    # Publish schema strings only after the entire bounded section is complete.
+                    report["headers"] = pending_headers
+                    report["header_sections"] += 1
+                    inside, finished = False, True
+                    continue
+                if inside:
+                    # Header names require identifiers, not numeric data or arbitrary report text.
+                    if len(pending_headers) >= HEADER_LIMIT:
+                        raise ValueError("header-count-limit")
+                    if not 2 <= len(row) <= HEADER_FIELD_LIMIT:
+                        raise ValueError("header-field-limit")
+                    if any(len(name) > HEADER_NAME_LIMIT for name in row):
+                        raise ValueError("header-name-limit")
+                    if any(not re.fullmatch(r"[A-Za-z][A-Za-z0-9 _()/.-]*", name) for name in row):
+                        raise ValueError("header-name-format")
+                    pending_headers.append(row)
+                else:
+                    # Count only the first literal event type; discard every other row value.
+                    event_type = row[0]
+                    if event_type in XPERF_EVENT_TYPES:
+                        report["event_counts"][event_type] += 1
+                    else:
+                        report["unknown_rows"] += 1
+        if not finished:
+            raise ValueError("header-marker-incomplete")
+    except UnicodeError:
+        report["errors"].append("csv-read-failed")
+    except ValueError as error:
+        # All raised values are fixed local codes; never publish parser or file contents.
+        report["errors"].append(str(error))
+    except OSError:
+        report["errors"].append("csv-read-failed")
+    return report
 
 
 def wpr_capability(output: Path, expected_head: str, scheduling: bool = False) -> int:
@@ -1612,7 +1193,7 @@ def wpr_capability(output: Path, expected_head: str, scheduling: bool = False) -
     Args:
         output: New external directory receiving metadata only.
         expected_head: Exact clean checkout required by the triggering PR event.
-        scheduling: Use the narrow custom profile and private sanitized schema roundtrip.
+        scheduling: Use the narrow custom profile and installed xperf schema-only exports.
 
     Returns:
         Zero only when tool discovery, the owned recording and the query succeed.
@@ -1641,6 +1222,7 @@ def wpr_capability(output: Path, expected_head: str, scheduling: bool = False) -
     owned = False
     status = 1
     instance = f"nplet-capability-{uuid.uuid4()}"
+    xperf = ""
     manifest["instance"] = instance
     # The temporary tree owns ETL and sidecars, even when stop or hashing fails.
     scratch: Path | None = None
@@ -1682,6 +1264,17 @@ def wpr_capability(output: Path, expected_head: str, scheduling: bool = False) -
                             (str(path) for path in locations if path.is_file()), None
                         )
                     manifest["optional_tools"] = optional_tools
+                if scheduling:
+                    installed_xperf = optional_tools.get("xperf")
+                    if installed_xperf is None:
+                        raise ValueError("installed-xperf-unavailable")
+                    xperf = installed_xperf
+                    commands["xperf_help_dumper"] = capability_command(
+                        [xperf, "-help", "dumper"], 15
+                    )
+                    commands["xperf_help_cswitch"] = capability_command(
+                        [xperf, "-help", "cswitch"], 15
+                    )
                 # Query only executable versions and token elevation.
                 quoted_wpr = wpr.replace("'", "''")
                 quoted_tracerpt = tracerpt.replace("'", "''")
@@ -1785,65 +1378,37 @@ def wpr_capability(output: Path, expected_head: str, scheduling: bool = False) -
                         "sha256": hashlib.file_digest(stream, "sha256").hexdigest(),
                     }
                 if scheduling:
-                    # Export privately; raw text never enters command metadata.
-                    xml = scratch / "events.xml"
-                    manifest["export"] = bounded_export(
-                        [tracerpt, str(etl), "-o", str(xml), "-of", "XML", "-y"], scratch
-                    )
-                    report: dict[str, Any] = {"gaps": []}
-                    manifest["scheduling"] = report
-                    try:
-                        if (
-                            manifest["export"].get("returncode") != 0
-                            or "error" in manifest["export"]
-                        ):
-                            raise ValueError("private-export-failed")
-                        with xml.open("rb") as stream:
-                            manifest["xml"] = {
-                                "bytes": xml.stat().st_size,
-                                "sha256": hashlib.file_digest(stream, "sha256").hexdigest(),
-                            }
-                        report.update(decode_scheduling(xml, commands["query"]))
-                    except (OSError, ValueError, KeyError, ET.ParseError) as error:
-                        # Export payload values and parser exception text are never published.
-                        report["decoder_error"] = type(error).__name__
-                        report["gaps"].append("private-xml-decode")
-                    manifest["export_provenance"] = {
-                        "mode": "normal",
-                        "etl_sha256": manifest["etl"]["sha256"],
-                    }
-                    lr_xml = scratch / "events-best-effort.xml"
-                    best: dict[str, Any] = {
-                        "provenance": "tracerpt-lr-best-effort-not-proof",
-                        "etl_sha256": manifest["etl"]["sha256"],
-                        "report": {"gaps": []},
-                    }
-                    manifest["best_effort"] = best
-                    best["export"] = bounded_export(
-                        [tracerpt, str(etl), "-o", str(lr_xml), "-of", "XML", "-lr", "-y"], scratch
-                    )
-                    try:
-                        if best["export"].get("returncode") != 0 or "error" in best["export"]:
-                            raise ValueError("private-best-effort-export-failed")
-                        with lr_xml.open("rb") as stream:
-                            best["xml"] = {
-                                "bytes": lr_xml.stat().st_size,
-                                "sha256": hashlib.file_digest(stream, "sha256").hexdigest(),
-                            }
-                        best["report"].update(decode_scheduling(lr_xml, commands["query"]))
-                    except (OSError, ValueError, KeyError) as error:
-                        best["report"].update(decoder_error=type(error).__name__)
-                        best["report"]["gaps"].append("private-best-effort-decode")
-                    # Compare independent exports only after retaining each original outcome.
-                    try:
-                        if "xml" not in manifest or "xml" not in best:
-                            raise ValueError("comparison-unavailable")
-                        manifest["comparison"] = compare_exports(xml, lr_xml)
-                    except (OSError, ValueError) as error:
-                        manifest["comparison"] = {
-                            "gaps": ["comparison-unavailable"],
-                            "error_type": type(error).__name__,
+                    # Export one private ETL twice; retain no content rows or report text.
+                    csv_path, threads_path = scratch / "events.csv", scratch / "threads.txt"
+                    manifest["xperf_exports"] = {}
+                    for name, path, action in (
+                        ("dumper", csv_path, ["dumper"]),
+                        ("cswitch", threads_path, ["cswitch", "-thread"]),
+                    ):
+                        result = bounded_export(
+                            [xperf, "-i", str(etl), "-o", str(path), "-a", *action], scratch
+                        )
+                        evidence: dict[str, Any] = {
+                            "etl_sha256": manifest["etl"]["sha256"],
+                            "outcome": result,
+                            "errors": [],
                         }
+                        manifest["xperf_exports"][name] = evidence
+                        if result.get("returncode") != 0 or "error" in result:
+                            evidence["errors"].append("xperf-export-failed")
+                        try:
+                            if path.stat().st_size > EXPORT_LIMIT_BYTES:
+                                evidence["errors"].append("export-size-limit")
+                            with path.open("rb") as stream:
+                                evidence["bytes"] = path.stat().st_size
+                                evidence["sha256"] = hashlib.file_digest(
+                                    stream, "sha256"
+                                ).hexdigest()
+                        except OSError:
+                            evidence["errors"].append("export-file-unavailable")
+                    report = xperf_schema(csv_path)
+                    manifest["scheduling"] = report
+                    manifest["schema_only"] = True
                     # Confirm actual collector settings and both recorder loss counters.
                     collector = commands["collectors"].get("stdout", "")
                     profile_text = commands["cpu_profile"].get("stdout", "")
@@ -1886,14 +1451,15 @@ def wpr_capability(output: Path, expected_head: str, scheduling: bool = False) -
                         or not loss
                         or keywords != {"ProcessThread", "CSwitch", "ReadyThread"}
                     ):
-                        report["gaps"].append("collector-configuration-or-loss")
+                        report["errors"].append("collector-configuration-or-loss")
                 after = checkout_identity()
                 manifest["checkout_unchanged"] = before == after
                 status = int(
                     before != after
-                    or bool(manifest.get("scheduling", {}).get("gaps"))
-                    or bool(manifest.get("best_effort", {}).get("report", {}).get("gaps"))
-                    or bool(manifest.get("comparison", {}).get("gaps"))
+                    or bool(manifest.get("scheduling", {}).get("errors"))
+                    or any(
+                        result["errors"] for result in manifest.get("xperf_exports", {}).values()
+                    )
                     or any(
                         result.get("returncode") != 0
                         for name, result in commands.items()
