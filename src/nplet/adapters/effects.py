@@ -125,13 +125,26 @@ _GOVERNING_PATHS = {
 }
 _INSTRUCTIONS = {"agents.md", "claude.md", "skill.md", "context.md", "gemini.md"}
 _GUIDANCE = (
-    "Use a supported structured read/search (shell: rg --no-config; "
+    "Use a supported structured read/search. Bounded shell inspection supports pwd, cat, "
+    "head, tail, wc, ls, sed -n '<N>[,<M>]p', rg --no-config, and "
     "git --no-pager --no-optional-locks -c core.fsmonitor=false; "
-    "diff/log/show additionally need --no-ext-diff --no-textconv), "
+    "diff/log/show additionally need --no-ext-diff --no-textconv. Only supported argument "
+    "forms qualify; cd, redirects, substitutions, unquoted globs, git -N/--format and "
+    "unknown options require the task route. Every pipeline/list component must qualify. "
+    "See docs/runtime/task-workspace.md#task-free-work-and-implementation-effects. Use "
     "an exact registered provider read/admin "
     "operation, or a structured edit with every target. For execution or implementation "
     "changes, enter the existing Task ticket/readiness procedure and obtain roadmap approval."
 )
+
+
+def guidance() -> str:
+    """Return the shared recovery grammar without constructing a synthetic operation.
+
+    Returns:
+        Supported task-free routes, their limits and the canonical effect-boundary guide.
+    """
+    return _GUIDANCE
 
 
 def _decision(effect: Effect, code: str) -> Decision:
@@ -144,7 +157,7 @@ def _decision(effect: Effect, code: str) -> Decision:
     Returns:
         Immutable decision with an appropriate supported route.
     """
-    return Decision(effect, code, _GUIDANCE if effect in {"unknown", "protected"} else "")
+    return Decision(effect, code, guidance() if effect in {"unknown", "protected"} else "")
 
 
 def target_effect(target: object, cwd: Path, policy: Policy) -> Effect:
@@ -153,7 +166,8 @@ def target_effect(target: object, cwd: Path, policy: Policy) -> Effect:
     Args:
         target: Native path string; invalid paths are unknown.
         cwd: Absolute native working directory.
-        policy: Trusted target registry.
+        policy: Trusted target registry. Ordinary roles are checkout-relative for internal
+            targets and absolute for external targets; dot-control roles remain global.
 
     Returns:
         note for an ordinary prose destination, protected for implementation/control
@@ -174,6 +188,7 @@ def target_effect(target: object, cwd: Path, policy: Policy) -> Effect:
     path = path if path.is_absolute() else cwd / path
     try:
         candidates = (path.absolute(), path.resolve())
+        roots = (policy.root.absolute(), policy.root.resolve())
         protected = tuple(p.resolve() for p in policy.protected_paths) + tuple(
             (policy.root / name).resolve() for name in _GOVERNING_PATHS
         )
@@ -186,11 +201,17 @@ def target_effect(target: object, cwd: Path, policy: Policy) -> Effect:
             return "protected"
     except (OSError, RuntimeError, ValueError):
         return "unknown"
-    # Directory roles and loader names remain protected anywhere, including outside root.
-    for candidate in candidates:
-        parts = {part.casefold() for part in candidate.parts}
+    # Checkout ancestors do not confer ordinary roles on its contents. Resolved escapes
+    # retain full external roles; dot-control ancestors and instruction names stay global.
+    for candidate, root in zip(candidates, roots, strict=True):
+        try:
+            role_path = candidate.relative_to(root)
+        except ValueError:
+            role_path = candidate
+        parts = {part.casefold() for part in role_path.parts}
+        control_parts = {part.casefold() for part in candidate.parts if part.startswith(".")}
         name = candidate.name.casefold()
-        if parts & _PROTECTED_PARTS or name in _INSTRUCTIONS:
+        if (parts | control_parts) & _PROTECTED_PARTS or name in _INSTRUCTIONS:
             return "protected"
         # Conventional dependency/build inputs remain protected despite prose suffixes.
         if name == "cmakelists.txt" or re.fullmatch(r"(?:requirements|constraints).*\.txt", name):

@@ -879,11 +879,18 @@ def test_native_config_quotes_checkout_and_reports_missing_environment(
         command = config["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
     # Cursor additionally requires fail-closed configuration at the permission boundary.
     else:
-        # Cursor reads its native hook registration from hooks.json.
+        # Require both blocking boundaries: generic identity and server-specific provenance.
         config = json.loads((ROOT / ".cursor/hooks.json").read_text())
-        entry = config["hooks"]["preToolUse"][0]
-        command = entry["command"]
-        assert entry["failClosed"] is True
+        command = (
+            "git -c alias.task-workspace-hook=!./src/nplet/adapters/launch.sh "
+            "task-workspace-hook cursor"
+        )
+        for event_name in ("preToolUse", "beforeMCPExecution"):
+            # Both registrations must invoke the reviewed adapter and fail closed.
+            entries = config["hooks"][event_name]
+            assert entries
+            assert all(entry["command"] == command for entry in entries)
+            assert all(entry.get("failClosed") is True for entry in entries)
     # Make a quoted checkout containing only the real entry script and local interpreter link.
     root = tmp_path / "checkout with 'quotes'"
     root.mkdir()

@@ -492,3 +492,74 @@ def test_registered_case_alias_before_creation() -> None:
     policy = Policy(ROOT, protected_paths=(ROOT / "notes" / "runtime.md",))
     assert target_effect("NOTES/RUNTIME.MD", ROOT, policy) == "protected"
     assert target_effect("notes/ordinary.md", ROOT, policy) == "note"
+
+
+@pytest.mark.parametrize(
+    "ancestor",
+    [
+        "src",
+        "tests",
+        "scripts",
+        "build",
+        "dist",
+        "skills",
+        "hooks",
+        "requirements",
+        "constraints",
+        "node_modules",
+    ],
+)
+def test_checkout_ancestor_roles(ancestor: str) -> None:
+    """An ordinary ancestor name must not turn the entire checkout into implementation.
+
+    Args:
+        ancestor: Implementation-like directory name above the checkout boundary.
+    """
+    # Internal notes stay free, but actual protected subtrees and external sources retain roles.
+    root = ROOT / ancestor / "checkout"
+    policy = Policy(root)
+    assert target_effect("notes/plan.md", root, policy) == "note"
+    assert target_effect("src/plan.md", root, policy) == "protected"
+    assert target_effect("docs/runtime/development.md", root, policy) == "protected"
+    assert target_effect(str(ROOT / "outside" / "src" / "plan.md"), root, policy) == "protected"
+    assert target_effect("AGENTS.md", root, policy) == "protected"
+    assert target_effect("notes/command.py", root, policy) == "protected"
+
+
+@pytest.mark.parametrize("ancestor", [".codex", ".claude", ".cursor", ".git", ".task"])
+def test_control_ancestors_remain_protected(ancestor: str) -> None:
+    """Loader/control destinations remain protected above a nested checkout boundary.
+
+    Args:
+        ancestor: Globally protected dot-control directory above the checkout.
+    """
+    root = ROOT / ancestor / "checkout"
+    assert target_effect("notes/plan.md", root, Policy(root)) == "protected"
+
+
+def test_recovery_guidance_contract() -> None:
+    """The public recovery helper exposes supported grammar and its canonical guide."""
+    # Consumers need recovery text directly, without a fake normalized operation.
+    from nplet.adapters.effects import guidance
+
+    message = guidance()
+    for fragment in (
+        "pwd",
+        "cat",
+        "head",
+        "tail",
+        "wc",
+        "ls",
+        "sed -n",
+        "rg --no-config",
+        "git --no-pager",
+        "cd",
+        "redirects",
+        "substitutions",
+        "unquoted globs",
+        "git -N/--format",
+        "docs/runtime/task-workspace.md#",
+        "Task",
+    ):
+        assert fragment in message
+    assert shell_effect("unknown-command").guidance == message

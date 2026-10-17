@@ -250,6 +250,14 @@ def test_ready_parent_agent_child_joins_works_and_stops(case: Fixture) -> None:
     state = case.state()
     assert state["participants"][key(CHILD)]["pending"] == {}
     assert "child-read" not in state["participants"][case.base["coordinator"]]["pending"]
+    # Task-free prose mutations do not inherit this child's managed-note ownership.
+    before = case.state()
+    note = edit_call(case, "PreToolUse", "child-note")
+    note["tool_input"] = {"file_path": str(case.root / "outside.md"), "content": "note"}
+    response = claude.handle(note)
+    assert denied(response)
+    assert "HOST_UNSUPPORTED_TOOL" in str(response)
+    assert case.state() == before
     # Protected child work still needs its own pending identity and correlated completion.
     assert not denied(claude.handle(edit_call(case, "PreToolUse", "child-edit")))
     state = case.state()

@@ -535,7 +535,7 @@ def test_recovery_message_preserves_exact_diagnostic_without_task_content() -> N
         (
             "HOST_UNSUPPORTED_PROVIDER",
             "claude-code",
-            ["exact selected-ticket get_issue", "save_issue and save_comment"],
+            ["exact selected-ticket get_issue", "exact registered read/admin operations"],
         ),
         ("HOST_UNSUPPORTED_PROVIDER", "cursor", ["exact selected-ticket get_issue"]),
         (

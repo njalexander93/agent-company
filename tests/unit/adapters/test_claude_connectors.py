@@ -61,7 +61,12 @@ def test_connector_binding_requires_matching_host_provenance(
     assert common._linear_tool(named, "claude-code") == ("native-call", {"id": "TEST-1"})
 
 
-@pytest.mark.parametrize("operation", sorted(common.LINEAR_PROVIDER_OPERATIONS))
+@pytest.mark.parametrize(
+    "operation",
+    sorted(
+        operation for provider, operation in common.provider_contracts() if provider == "linear"
+    ),
+)
 def test_provider_admission_accepts_only_allowlisted_configured_operations(
     monkeypatch: pytest.MonkeyPatch, operation: str
 ) -> None:
@@ -86,6 +91,14 @@ def test_provider_admission_accepts_only_allowlisted_configured_operations(
         "mcp_server": {"name": "linear", "source": "project"},
     }
     assert common._linear_provider_tool(named, "claude-code") == operation
+    # Shared parent admission does not enlarge the existing child provider route.
+    child = {**event, "child": True}
+    if operation in common.LINEAR_CHILD_OPERATIONS:
+        assert common.native_tool(child, "claude-code") == child["tool_name"]
+    else:
+        with pytest.raises(core.WorkspaceError) as failure:
+            common.native_tool(child, "claude-code")
+        assert failure.value.code == "HOST_UNSUPPORTED_PROVIDER"
     # Another host, provenance, server or mismatched name never qualifies.
     for changed, host in [
         (event, "cursor"),
@@ -98,13 +111,11 @@ def test_provider_admission_accepts_only_allowlisted_configured_operations(
         assert common._linear_provider_tool(changed, host) is None
 
 
-@pytest.mark.parametrize(
-    "operation", ["save_document", "get_document", "delete_comment", "list_issues", "get_issue_x"]
-)
+@pytest.mark.parametrize("operation", ["execute_code", "get_issue_x", "unknown_operation"])
 def test_provider_admission_rejects_other_operations(
     monkeypatch: pytest.MonkeyPatch, operation: str
 ) -> None:
-    """Keep document, archive and unlisted operations outside the native route.
+    """Keep operations without verified contracts outside the native route.
 
     Args:
         monkeypatch: Scoped configuration for the verified Linear connector.

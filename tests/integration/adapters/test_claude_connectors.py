@@ -339,10 +339,21 @@ def test_ready_session_keeps_configured_provider_administration_taskfree(
         )
         assert claude.handle(failure) == {}
         assert pending() == {}
-        # Unconfigured servers, other operations and wrong provenance stay denied.
+        # Shared document research and administration use the same configured provenance.
+        before = case.state()
+        for operation in ("get_document", "save_document"):
+            assert claude.handle(provider("PreToolUse", operation, operation)) == {}
+            assert (
+                claude.handle(
+                    provider("PostToolUse", operation, operation, tool_response={"ok": True})
+                )
+                == {}
+            )
+            assert case.state() == before
+        # Unconfigured servers, unknown operations and wrong provenance stay denied.
         before = case.state()
         for event in (
-            {**provider("PreToolUse", "save_document", "doc"), "tool_input": {}},
+            {**provider("PreToolUse", "execute_code", "opaque"), "tool_input": {}},
             {**provider("PreToolUse", "get_issue", "other"), "tool_name": "mcp__other__get_issue"},
             {
                 **provider("PreToolUse", "get_issue", "local"),

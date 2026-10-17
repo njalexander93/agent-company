@@ -759,3 +759,121 @@ def test_package_and_mixed_shell_changes_require_task(
     assert not (root / "planning.md").exists()
     assert not (root / "requirements.txt").exists()
     assert not (root / ".task").exists()
+
+
+@pytest.mark.parametrize("bound", [False, True])
+@pytest.mark.parametrize("host", ["codex", "claude-code", "cursor"])
+def test_task_free_admission_cannot_become_completion_authority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, host: Host, bound: bool
+) -> None:
+    """Ignore an unrecorded completion after its target changes implementation role.
+
+    Args:
+        tmp_path: Fresh checkout for the unbound case.
+        monkeypatch: Native environment restoration fixture.
+        host: Native adapter identity.
+        bound: Whether an existing task also has unrelated protected work.
+    """
+    # Keep a real pending operation in bound cases to detect accidental foreign settlement.
+    monkeypatch.delenv("CURSOR_VERSION", raising=False)
+    case = Fixture()
+    case.setUp()
+    try:
+        root = case.root if bound else tmp_path
+        if bound:
+            case.base.update(
+                host=host,
+                coordinator=core.participant_key({"host": host, "session_id": "coordinator"}),
+            )
+            case.create()
+            case.ready()
+            protected = event(host, root, "Write", {"file_path": "source.py"})
+            protected["tool_use_id"] = "unrelated-protected-call"
+            assert not denied(dispatch(host, protected))
+        else:
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+        # The original admission records no work for this ordinary note.
+        pre = event(host, root, "Write", {"file_path": "ordinary.md", "content": "note"})
+        before = case.state() if bound else None
+        assert not denied(dispatch(host, pre))
+        # A changed native target envelope must not create a synthetic completed operation.
+        post = {
+            **pre,
+            "hook_event_name": "postToolUse" if host == "cursor" else "PostToolUse",
+            "tool_input": {"file_path": "source.py", "content": "code"},
+            "tool_response": {"result": "done", "isError": False},
+            "tool_output": "{}",
+        }
+        assert dispatch(host, post) == {}
+        if bound:
+            assert case.state() == before
+        else:
+            assert not (root / ".task").exists()
+    finally:
+        # Close the disposable lifecycle store regardless of native callback outcome.
+        case.doCleanups()
+
+
+@pytest.mark.parametrize(
+    "operation", ["get_document", "list_issues", "save_document", "delete_comment"]
+)
+def test_claude_shared_linear_contract_has_no_task_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+    """Admit verified parent contracts while retaining configured server provenance.
+
+    Args:
+        tmp_path: Unbound Git checkout.
+        monkeypatch: Native configuration restoration fixture.
+        operation: Verified read or administrative Linear contract.
+    """
+    # Configure the exact connector identity independently of its operation names.
+    monkeypatch.delenv("CURSOR_VERSION", raising=False)
+    monkeypatch.setenv("NPLET_CLAUDE_LINEAR_CONNECTOR_ID", "linear_0123456789abcdef")
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    pre = event("claude-code", tmp_path, f"mcp__linear-server__{operation}", {})
+    pre["mcp_server"] = {"name": "linear-server", "source": "user"}
+    assert not denied(dispatch("claude-code", pre))
+    assert (
+        dispatch(
+            "claude-code",
+            {
+                **pre,
+                "hook_event_name": "PostToolUse",
+                "tool_response": {"ok": True},
+            },
+        )
+        == {}
+    )
+    # A foreign native server cannot inherit these contracts by matching the tool suffix.
+    assert denied(
+        dispatch(
+            "claude-code",
+            {
+                **pre,
+                "mcp_server": {"name": "foreign", "source": "sdk"},
+            },
+        )
+    )
+    assert not (tmp_path / ".task").exists()
+
+
+@pytest.mark.parametrize(
+    "operation", ["get_pr_info", "fetch_pr", "fetch_pr_patch", "get_pr_diff", "fetch_pr_comments"]
+)
+def test_codex_verified_pr_reads_need_no_task(tmp_path: Path, operation: str) -> None:
+    """Keep exact PR inspection contracts free without exempting repository mutations.
+
+    Args:
+        tmp_path: Unbound Git checkout.
+        operation: Verified GitHub PR read contract.
+    """
+    # The qualified native tool identity selects a bounded provider contract.
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    pre = event("codex", tmp_path, f"mcp__codex_apps__github_{operation}", {"pr_number": 16})
+    assert dispatch("codex", pre) == {}
+    assert dispatch("codex", {**pre, "hook_event_name": "PostToolUse"}) == {}
+    # Another provider with the same operation name does not inherit GitHub authority.
+    foreign = {**pre, "tool_name": f"mcp__codex_apps__foreign_{operation}"}
+    assert denied(dispatch("codex", foreign))
+    assert not (tmp_path / ".task").exists()

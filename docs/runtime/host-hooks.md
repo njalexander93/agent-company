@@ -99,11 +99,11 @@ canonical store, including from linked checkouts. Acknowledgment requires the
 child's own correlated final source bytes to match its current packet. Truncated,
 foreign and obsolete deliveries do not count. Children can use only their own
 `read`, `acknowledge`, `ready`, `diagnose` and ready, owned `update` transactions.
-Known task-free inspection and structured ordinary-note writes remain available
-to verified joined children. Implementation writes remain gated; this child route
-permits scoped managed updates rather than arbitrary repository implementation
-commands. Generic child providers and nested delegation remain denied. Actual
-child identity, source-delivery and ownership checks still apply. Normal host
+Known task-free inspection remains available to verified joined children. Generic
+file mutations, including ordinary-note writes, remain denied for children. This
+child route permits only ready, scoped managed updates rather than arbitrary
+repository implementation commands. Generic child providers and nested delegation
+remain denied. Actual child identity, source-delivery and ownership checks still apply. Normal host
 permissions remain in force.
 
 The adapter records admitted source reads in the shared lifecycle pending map
@@ -167,7 +167,12 @@ Steps 3–5 apply when entering or resuming task-scoped implementation.
    Git alias. See [Git shell-alias behavior](https://git-scm.com/docs/git-config#Documentation/git-config.txt-alias).
 2. Review and activate project hooks using the host's own controls. This change does not alter
    global settings or grant trust. Keep existing permission prompts and restrictions enabled.
-   Record loading/activation evidence separately from observed callbacks. An enabled
+   For Cursor, validate that both `preToolUse` and `beforeMCPExecution` are present,
+   point to the reviewed Cursor adapter launcher and set `failClosed: true`. Generic
+   MCP events lack server provenance; only the second blocking hook verifies it.
+   A configuration missing either hook is unsafe for provider admission and must
+   not be activated. Record loading/activation evidence separately from observed
+   callbacks. An enabled
    definition alone is insufficient evidence of trusted execution. If trust or callback
    delivery is unverified, retain that limit; a successful manual lifecycle call does
    not demonstrate a native callback or identify a runtime defect.
@@ -504,8 +509,9 @@ The first table compares Claude Code and Cursor; the second records Codex bounda
 | Boundary | Claude Code | Cursor Agent |
 | --- | --- | --- |
 | Identity | Exact native session ID. A hook carrying `agent_id` with a valid `session_id` is a subagent keyed `<session_id>/agent/<agent_id>`; `subagent_id`, `parent_conversation_id`, background markers and `agent_id` without `session_id` are rejected | Exact conversation ID; require any session ID to match; one workspace root |
-| Ordinary tools | Read, Write, Edit, Glob, Grep, NotebookEdit; foreground Bash under the setting above. Recognized reads, schema/skill loading, clarification and ordinary structured notes are task-free. `ToolSearch`, `Skill`, `SendMessage` and `AskUserQuestion` have no pending entry; a tool they surface is evaluated on its own call. A subagent's `SubagentHandback` is task-free only under its verified joined child identity | Read, Write, Edit, Grep, Delete; Shell with supported foreground arguments |
-| Linear provider contracts | Configured connector only (same server name and `mcp_server.source` checks as the ticket read): `get_issue` (any ID), `get_user`, `list_users`, `list_issue_statuses`, `list_comments`, `save_issue`, `save_comment` (a subagent child gets the read operations only). These known reads/admin operations are task-free, with no task pending record. Native server provenance and child restrictions still apply | Known Linear reads/admin operations from the exact registry in `common.py`; generic `MCP:` preToolUse and mandatory blocking `beforeMCPExecution` must both validate the call. The server must be `linear` or `linear-server` at the official HTTPS MCP endpoint with structured JSON arguments. Other providers remain unsupported |
+| Ordinary tools | Read, Write, Edit, Glob, Grep, NotebookEdit; foreground Bash under the setting above. Recognized reads, schema/skill loading, clarification and ordinary structured notes are task-free. `ToolSearch`, `Skill`, `SendMessage` and `AskUserQuestion` have no pending entry; a tool they surface is evaluated on its own call. A subagent's `SubagentHandback` is task-free only under its verified joined child identity. Generic prose-note mutations are denied for children; existing protected `Write`/`Edit` support still requires the child's own readiness and correlated pending work. Owned lifecycle updates retain their scope checks | Read, Write, Edit, Grep, Delete; Shell with supported foreground arguments |
+| Linear provider contracts | Configured connector only (same server name and `mcp_server.source` checks as the ticket read), using the shared exact Linear read/admin registry in `common.py`. A subagent child retains only `get_issue`, `get_user`, `list_users`, `list_issue_statuses` and `list_comments`. These known reads/admin operations are task-free, with no task pending record. Native server provenance and child restrictions still apply | Known Linear reads/admin operations from the exact registry in `common.py`; generic `MCP:` preToolUse and mandatory blocking `beforeMCPExecution` must both validate the call. The server must be `linear` or `linear-server` at the official HTTPS MCP endpoint with structured JSON arguments. Other providers remain unsupported |
+| GitHub inspection/admin gap | Claude GitHub MCP provenance has not been verified or registered. Its MCP tools and browser MCP wrappers remain unsupported here. `gh`, including `gh pr view`, is outside the bounded task-free shell grammar and requires the task route; readiness still does not admit unsupported MCP tools. Use supported local inspection or a host with a verified exact GitHub contract. | No registered GitHub provider contract; the two-hook provider route supports the explicit Linear registry only |
 | Desktop PR monitor contracts | The desktop app's built-in `ccd_pr` server only: `get_status` and `set_monitor`, for a parent session (a subagent child gets neither). The tool name must be exactly `mcp__ccd_pr__get_status` or `mcp__ccd_pr__set_monitor`; the hook's `mcp_server` object must be present with `name` `ccd_pr` and `source` `sdk`, the provenance the desktop app reports for its built-in server; a call without that object, or with any other name or source, is denied. `set_auto_merge`, `bind_pr`, `unbind_pr` and unregistered app servers stay denied; the exact turn-UI contract below is separate. `get_status` is task-free. `set_monitor` requires readiness because it can enable automatic fixes; it is pending work settled by `PostToolUse` or `PostToolUseFailure`. Live capture (2026-10-11, macOS Desktop, hooks enabled): a ready parent session called `get_status` and then `set_monitor` (`auto_fix` on the open PR); both were admitted under that earlier revision, recorded as pending work and settled by their completion events, and the app returned the PR state and confirmed the monitor. The server identity was captured separately the same day with a throwaway project whose `PreToolUse` hook appended the raw event: `tool_name` `mcp__ccd_pr__get_status`, `mcp_server` `{"name": "ccd_pr", "source": "sdk"}`, `agent_id` null, alongside `session_id`, `tool_use_id`, `cwd`, `permission_mode` and `transcript_path`. The check is pinned to that name and source | No native provider admission |
 | Desktop turn UI contracts | Parent-only `mcp__ccd_turn__update_plan` and `mcp__ccd_turn__wrap_up` are task-free administrative operations. Native `mcp_server` must be present with `name: "ccd_turn"` and `source: "sdk"`. Missing or foreign provenance, unknown operations and child calls are denied. These helpers create no issue workspace or pending-tool record. On macOS Claude Desktop 2.42304.0 (2026-10-16), native callbacks captured these names and provenance; inspected app `Qt` declarations and `Zt` handler (module SHA-256 `cb065151a7b8ffbe377bea003362301b6c93bffe659ba91b03fdeabeb12157ba`) show in-memory plan updates and UI next-action offers. Displaying an offer does not execute its action or authorize implementation. The original candidate denied these calls; repaired installed-host success remains unverified until a new native run. | Unsupported; no Claude app-server admission |
 | Ticket-first startup | Exact configured Linear issue read before readiness; matching native completion runs shared startup | Exact Linear issue read with generic call-ID and MCP server checks before shared startup |
@@ -521,14 +527,18 @@ The first table compares Claude Code and Cursor; the second records Codex bounda
 | Codex boundary | Implemented admission and limit |
 | --- | --- |
 | Shell inspection | Task-free bounded inspection through `exec_command` requires explicit `login: false` and `shell: "/bin/sh"`. Omitted defaults or another shell remain unknown and task-gated. Native command-only `Bash` uses its observed command contract; this does not verify hidden startup arguments or confinement. See the [effect boundary](task-workspace.md#task-free-work-and-implementation-effects) for command forms. |
-| Parent providers | Exact qualified Linear and Codex app read/admin contracts in `common.py` are task-free. Unknown `mcp__` operations require readiness and remain pending work when the generic route admits them. A matching native MCP completion with validated content blocks settles only that pending call; other responses require typed completion evidence. |
+| Parent providers | Exact qualified Linear, GitHub and Codex app read/admin contracts in `common.py` are task-free. GitHub inspection includes registered PR information, patches, diffs and comments; remote code mutation is not an administrative contract. Unknown `mcp__` operations require readiness and remain pending work when the generic route admits them. A matching native MCP completion with validated content blocks settles only that pending call; other responses require typed completion evidence. |
 | Archive provider gate | Exact coordinator-bound document save/read requests retain their separate archive gate, ownership and receipt checks. Generic provider admission does not verify an archive or authorize cleanup. Earlier archive-specific failures remain failures. |
 | Ticket-first startup | The exact selected-ticket read retains its reserved native call ID and provider validation before shared startup. Unrelated known task-free work remains available during lookup. |
-| Child tools and providers | A verified joined child has its own binding and scope. Known task-free work bypasses readiness; task-scoped mutations retain the canonical lifecycle/source-delivery route. Generic child providers remain denied. |
+| Child tools and providers | A verified joined child has its own binding and scope. Known task-free inspection bypasses readiness; generic note mutations remain denied, and managed updates retain the canonical lifecycle/source-delivery and ownership route. Generic child providers remain denied. |
 | Native child control | Exact supported spawn/control tools use parent-bound receipts and correlated completion. Unsupported delegation names remain denied. See the [restricted Codex child route](#codex-native-child-route-restricted) for supported shapes and evidence limits. |
 
-Codex's ready generic provider route remains broader than Claude Code's fixed allowlist.
-Task-free provider effects require exact contracts on each host.
+Codex's ready generic provider route remains broader than Claude Code's verified connector routes.
+Task-free provider effects require exact contracts on each host. The shared Linear
+read/admin registry deliberately includes external metadata and prose administration,
+including registered delete operations, on supported parent routes. Effect classification
+removes only the task prerequisite: it supplies no user authorization for an external
+write or deletion. Existing permission and explicit-authorization rules still apply.
 Provider success is not lifecycle authority, and this table does not establish
 installed-host delivery for every provider or operating system.
 
@@ -709,7 +719,11 @@ Before claiming actual-host acceptance, use a disposable registered repository a
 2. An observed native session/tool ID pair, task-free work without setup and an implementation denial before acknowledgment.
 3. A supported foreground call and its matching completion, with no remaining pending entry.
 4. A malformed/unsupported call denial and retained state after ambiguous completion.
-5. For Cursor with third-party imports enabled, one native mutation and no Claude-host binding.
+5. For Cursor, verify both `preToolUse` and `beforeMCPExecution` registrations, the
+   reviewed launcher and `failClosed: true` on each. Observe both blocking callbacks
+   for a supported provider call, then verify a same-named operation from a foreign
+   server is denied. Missing either callback leaves provider admission unverified.
+   With third-party imports enabled, verify one native mutation and no Claude-host binding.
 6. For Claude, inherited background-disable configuration and preserved permission prompting.
 
 Protocol tests do not establish trusted host loading or actual provider interaction.

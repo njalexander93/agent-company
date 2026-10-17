@@ -125,6 +125,11 @@ def test_patch_contract_enumerates_all_targets(value: object, expected: list[str
         ("linear__", "save_issue", "admin"),
         ("linear__", "execute_code", "unknown"),
         ("github_", "fetch_file", "read"),
+        ("github_", "get_pr_info", "read"),
+        ("github_", "fetch_pr", "read"),
+        ("github_", "fetch_pr_patch", "read"),
+        ("github_", "get_pr_diff", "read"),
+        ("github_", "fetch_pr_comments", "read"),
         ("github__", "create_issue", "admin"),
         ("github_", "update_issue", "admin"),
         ("github_", "create_file", "unknown"),
@@ -544,21 +549,26 @@ def test_native_pre_unknown_execution_preserves_corruption(
     assert failure.value.code == expected
 
 
+@pytest.mark.parametrize("target", ["notes.md", "source.py"])
 def test_task_free_native_post_does_not_fabricate_completion(
-    native: JsonObject, monkeypatch: pytest.MonkeyPatch
+    native: JsonObject, monkeypatch: pytest.MonkeyPatch, target: str
 ) -> None:
-    """Return from an unrecorded read callback without settling any lifecycle call.
+    """Return from an unrecorded callback without settling any lifecycle call.
 
     Args:
         native: Complete native identity fixture.
         monkeypatch: Isolate existing admission and completion boundaries.
+        target: Current note or implementation destination after an unrecorded admission.
     """
-    # Native transport is validated, but no completion is emitted for an untracked read.
+    # Current classification cannot give an unrecorded callback settlement authority.
     monkeypatch.setattr(common, "native_bootstrap", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(common, "pending_tool", lambda *_args: False)
-    monkeypatch.setattr(common, "native_tool", lambda *_args: "Read")
     monkeypatch.setattr(core, "execute", lambda _request: pytest.fail("fabricated completion"))
-    common.native_post(native, "claude-code", failed=False)
+    common.native_post(
+        {**native, "tool_name": "Write", "tool_input": {"file_path": target}},
+        "claude-code",
+        failed=False,
+    )
 
 
 @pytest.mark.parametrize(
@@ -1056,3 +1066,44 @@ def test_recorded_native_admission_precedes_preparation_read_classification(
     assert observed[0]["operation"] == "tool-complete"
     assert observed[0]["tool_id"] == "native-call"
     assert observed[0]["completed"] is True
+
+
+@pytest.mark.parametrize("field", ["session_id", "tool_use_id"])
+@pytest.mark.parametrize("value", [None, 7, ""])
+def test_pending_lookup_validates_identity_before_absence(
+    native: JsonObject, monkeypatch: pytest.MonkeyPatch, field: str, value: object
+) -> None:
+    """Reject malformed callback identity even when task registration would be absent.
+
+    Args:
+        native: Complete native callback fixture.
+        monkeypatch: Isolate the registration boundary.
+        field: Native correlation field under test.
+        value: Missing, nontext or empty native identifier.
+    """
+    # Missing setup cannot authorize a malformed native callback to bypass validation.
+    monkeypatch.setattr(common, "request_for", lambda *_args: pytest.fail("identity not checked"))
+    with pytest.raises(core.WorkspaceError) as failure:
+        common.pending_tool({**native, field: value}, "codex")
+    assert failure.value.code == "INVALID_REQUEST"
+
+
+@pytest.mark.parametrize("tool", ["Write", "Edit"])
+def test_child_task_free_note_does_not_acquire_scope(
+    native: JsonObject, monkeypatch: pytest.MonkeyPatch, tool: str
+) -> None:
+    """Reject generic child notes before native execution or lifecycle mutation.
+
+    Args:
+        native: Complete native callback fixture.
+        monkeypatch: Isolate lifecycle and execution boundaries.
+        tool: Native prose mutation spelling.
+    """
+    # Use the real note classifier; scoped lifecycle updates have their separate route.
+    monkeypatch.setattr(common, "native_bootstrap", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(common, "native_tool", lambda *_args: pytest.fail("unscoped child edit"))
+    monkeypatch.setattr(common, "request_for", lambda *_args: pytest.fail("unexpected lifecycle"))
+    value = {**native, "child": True, "tool_name": tool, "tool_input": {"file_path": "outside.md"}}
+    with pytest.raises(core.WorkspaceError) as failure:
+        common.native_pre(value, "claude-code")
+    assert failure.value.code == "HOST_UNSUPPORTED_TOOL"

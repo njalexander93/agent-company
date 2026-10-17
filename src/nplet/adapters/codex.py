@@ -635,7 +635,7 @@ def handle(event: core.JSONObject) -> core.JSONObject:
         try:
             # Malformed polling metadata is advisory after execution and settles no work.
             pending = common.pending_tool(event, "codex")
-            if not pending and not common.effect_decision(event, "codex").requires_task:
+            if not pending:
                 return {}
         except core.WorkspaceError as error:
             # Preserve native post-hook diagnostics instead of leaking an adapter exception.

@@ -376,9 +376,9 @@ def child_pre(event: core.JSONObject) -> None:
     core.require(
         not str(event.get("tool_name", "")).startswith(("mcp__", "MCP:")), "HOST_UNSUPPORTED_TOOL"
     )
-    # Task-free native reads and ordinary notes retain this child's verified cohort identity.
+    # Task-free native reads retain this child's verified cohort identity.
     decision = common.effect_decision(event, "codex")
-    if event.get("tool_name") != "Bash" and not decision.requires_task:
+    if event.get("tool_name") != "Bash" and decision.effect == "read":
         return
     # Limit protected child execution to canonical lifecycle operations under its own scope.
     core.require(event.get("tool_name") == "Bash", "HOST_UNSUPPORTED_TOOL")
@@ -397,7 +397,7 @@ def child_pre(event: core.JSONObject) -> None:
     child = common.request_for(event, "read", "codex")
     packet = core.execute(child)
     # Stale packet bytes cannot prove delivery, but they cannot block ordinary inspection.
-    if not packet["ok"] and not decision.requires_task:
+    if not packet["ok"] and decision.effect == "read":
         core.require(packet["code"] in {"SOURCE_STALE", "NOT_READY"}, packet["code"])
         return
     core.require(packet["ok"], packet["code"])
@@ -458,8 +458,8 @@ def child_pre(event: core.JSONObject) -> None:
                 )
                 bindings.put(name, state)
             return
-    # Other understood inspection and prose-note calls create no lifecycle pending work.
-    if not decision.requires_task:
+    # Other understood inspection calls create no lifecycle pending work.
+    if decision.effect == "read":
         return
     # Every protected mutation is a canonical core transaction under this child's identity.
     core.require(common.canonical_bootstrap(event, command, "codex", True), "HOST_UNSUPPORTED_TOOL")

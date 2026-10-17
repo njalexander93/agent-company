@@ -383,19 +383,10 @@ def _linear_tool(event: core.JSONObject, host: str) -> tuple[str, core.JSONObjec
     return token, arguments
 
 
-LINEAR_PROVIDER_OPERATIONS = frozenset(
-    {
-        "get_issue",
-        "get_user",
-        "list_users",
-        "list_issue_statuses",
-        "list_comments",
-        "save_issue",
-        "save_comment",
-    }
+# Native child provider support stays explicitly narrower than the parent's registry.
+LINEAR_CHILD_OPERATIONS = frozenset(
+    {"get_issue", "get_user", "list_users", "list_issue_statuses", "list_comments"}
 )
-# A child subagent receives only the read operations; writes stay with its parent.
-LINEAR_CHILD_OPERATIONS = LINEAR_PROVIDER_OPERATIONS - {"save_issue", "save_comment"}
 PREPARATION_FILES = ("docs/runtime/contributor-workflow.md", "AGENTS.md")
 # The Claude desktop app's built-in PR-monitor server: a parent may read a PR's state
 # and turn on the app's monitor. Auto-merge, PR binding and every other app server
@@ -415,7 +406,7 @@ APP_TURN_OPERATIONS = frozenset({"update_plan", "wrap_up"})
 
 
 def _linear_provider_tool(event: core.JSONObject, host: str) -> str | None:
-    """Identify one post-readiness Linear operation on a configured Claude connector.
+    """Identify one registered Linear operation on a configured Claude connector.
 
     Field-level checks, such as the assignee or state named by ``save_issue``,
     stay in the contributor procedure's read-back rule; this check covers only
@@ -447,7 +438,7 @@ def _linear_provider_tool(event: core.JSONObject, host: str) -> str | None:
     # Admit only the explicit operation allowlist on that exact server.
     prefix = "mcp__" + server["name"] + "__"
     operation = name[len(prefix) :] if name.startswith(prefix) else None
-    return operation if operation in LINEAR_PROVIDER_OPERATIONS else None
+    return operation if ("linear", operation) in provider_contracts() else None
 
 
 def _app_pr_monitor_tool(event: core.JSONObject, host: str) -> str | None:
@@ -1306,9 +1297,7 @@ def native_tool(event: core.JSONObject, host: str) -> str:
     # Require a structured native tool input for supported synchronous work.
     if not isinstance(args, dict):
         raise core.WorkspaceError("INVALID_REQUEST")
-    # Only the configured Claude Linear connector's allowlisted operations and the
-    # desktop app's two PR-monitor operations become ordinary pending work; every
-    # other provider route stays unsupported.
+    # Exact configured provider contracts retain their native server provenance.
     if tool.startswith(("mcp__", "MCP:")) or event.get("mcp_server") is not None:
         # Cursor's generic gate is provisional; its blocking MCP-specific hook verifies
         # the server independently before execution. Protected provider routes stay denied.
@@ -1470,6 +1459,11 @@ _CODEX_APP_READS = {
     "get_handoff_status",
 }
 _GITHUB_READS = {
+    "get_pr_info",
+    "fetch_pr",
+    "fetch_pr_patch",
+    "get_pr_diff",
+    "fetch_pr_comments",
     "fetch_file",
     "fetch_issue",
     "fetch_issue_comments",
@@ -1714,7 +1708,7 @@ def effect_decision(event: core.JSONObject, host: str) -> effects.Decision:
 
 
 def pending_tool(event: core.JSONObject, host: str) -> bool:
-    """Check an existing native operation before reclassifying its completion.
+    """Check recorded native admission using the participant-local call or handle.
 
     Args:
         event: Native callback carrying the actual session and call identifier.
@@ -1727,6 +1721,9 @@ def pending_tool(event: core.JSONObject, host: str) -> bool:
         core.WorkspaceError: For corrupt, foreign or otherwise invalid existing state.
         OSError: If existing state cannot be safely read.
     """
+    # Validate native correlation even when no repository binding exists.
+    native_token(event.get("session_id"))
+    native_token(event.get("tool_use_id"))
     # Missing task setup is normal for task-free operations; other failures stay visible.
     try:
         request = request_for(event, "ready", host)
@@ -1882,6 +1879,11 @@ def native_pre(event: core.JSONObject, host: str) -> None:
     # Admit understood inspection, administration and notes without task storage.
     decision = effect_decision(event, host)
     if not decision.requires_task:
+        # Generic prose edits do not acquire a child's scoped managed-note authority.
+        core.require(
+            event.get("child") is not True or decision.effect != "note",
+            "HOST_UNSUPPORTED_TOOL",
+        )
         native_tool(event, host)
         # A native Claude child still needs its own previously joined participant.
         if event.get("child") is True:
@@ -1937,9 +1939,8 @@ def native_post(event: core.JSONObject, host: str, failed: bool) -> None:
     # Lifecycle calls own their transaction and are never admitted as external work.
     if native_bootstrap(event, host, ready=True):
         return
-    # A recorded admission outranks current path classification at completion.
-    if not pending_tool(event, host) and not effect_decision(event, host).requires_task:
-        native_tool(event, host)
+    # Only a recorded admission authorizes settlement; mutable paths cannot create one.
+    if not pending_tool(event, host):
         return
     tool = native_tool(event, host)
     # Require the documented success/failure payload before treating an event as completion.
@@ -2303,9 +2304,7 @@ def _recovery_route(code: str, host: str) -> str:
     command = "the exact lifecycle command from adapters.common.bootstrap_command"
     # Opaque effect diagnostics name supported task-free alternatives and the task route.
     if code.startswith("UNKNOWN_"):
-        guidance = effects.classify(
-            effects.Operation("unknown", {}, str(ROOT)), effects.Policy(ROOT)
-        ).guidance
+        guidance = effects.guidance()
         # Legacy exec exposes login/shell options; omitted options use native defaults.
         if host == "codex":
             guidance += ' For exec_command inspection, pass login:false and shell:"/bin/sh".'
@@ -2443,9 +2442,9 @@ def _recovery_route(code: str, host: str) -> str:
     # Unsupported provider identity/operations cannot acquire authority through readiness.
     if code == "HOST_UNSUPPORTED_PROVIDER":
         admitted = (
-            " The configured Linear connector's get_issue, get_user, list_users, "
-            "list_issue_statuses, list_comments, save_issue and save_comment have task-free "
-            "contracts. Parent-only built-in ccd_turn update_plan/wrap_up and ccd_pr get_status "
+            " The configured Linear connector's exact registered read/admin operations "
+            "have task-free contracts. Parent-only built-in ccd_turn update_plan/wrap_up "
+            "and ccd_pr get_status "
             "also have task-free contracts; ccd_pr set_monitor requires readiness."
             if host == "claude-code"
             else " Known registered read/admin contracts retain their native provenance checks."
