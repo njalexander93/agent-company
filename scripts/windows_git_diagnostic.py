@@ -10,6 +10,7 @@ import json
 import os
 import platform
 import random
+import re
 import shutil
 import subprocess
 import sys
@@ -17,10 +18,11 @@ import tempfile
 import threading
 import time
 import uuid
+import xml.etree.ElementTree as ET
 from collections import deque
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -954,12 +956,434 @@ def capability_command(command: list[str], timeout: int) -> dict[str, Any]:
     return result
 
 
-def wpr_capability(output: Path, expected_head: str) -> int:
+# This exact profile excludes stacks, other providers, inheritance and file mode.
+SCHEDULING_PROFILE = """<?xml version="1.0" encoding="utf-8"?>
+<WindowsPerformanceRecorder Version="1.0" Author="Nplet">
+<Profiles>
+<SystemCollector Id="SchedulingCollector" Name="Nplet scheduling">
+<BufferSize Value="1024"/><Buffers Value="64"/></SystemCollector>
+<SystemProvider Id="SchedulingProvider"><Keywords>
+<Keyword Value="ProcessThread"/><Keyword Value="CSwitch"/><Keyword Value="ReadyThread"/>
+</Keywords></SystemProvider>
+<Profile Id="Scheduling.Verbose.Memory" Name="Scheduling" Description="Bounded schema probe"
+LoggingMode="Memory" DetailLevel="Verbose"><Collectors>
+<SystemCollectorId Value="SchedulingCollector"><SystemProviderId Value="SchedulingProvider"/>
+</SystemCollectorId></Collectors></Profile>
+</Profiles></WindowsPerformanceRecorder>"""
+RAW_LIMIT_BYTES = 256 * 1024 * 1024
+XML_LIMIT_BYTES = 128 * 1024 * 1024
+EVENT_LIMIT = 1000000
+SANITIZED_LIMIT = 4096
+PROCESS_GUID = "3d6fa8d0-fe05-11d0-9dda-00c04fd7ba7c"
+THREAD_GUID = "3d6fa8d1-fe05-11d0-9dda-00c04fd7ba7c"
+
+
+def scheduling_query(repository: Path) -> dict[str, Any]:
+    """Observe native identities around one original two-second Git communication.
+
+    Args:
+        repository: Disposable initialized repository, with setup outside recording.
+
+    Returns:
+        Numeric process/thread identities, original outcome and wall/performance endpoints.
+    """
+    # Disable every Trace2 target and capture the calling thread before process construction.
+    result: dict[str, Any] = {"python_pid": os.getpid(), "calling_tid": threading.get_native_id()}
+    environment = {**os.environ, **dict.fromkeys(TRACE_TARGETS, "0")}
+    command = ["git", "-C", str(repository), "worktree", "list", "--porcelain", "-z"]
+    result.update(start_wall_ns=time.time_ns(), start_perf_ns=time.perf_counter_ns())
+    try:
+        with subprocess.Popen(
+            command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment
+        ) as process:
+            result["git_pid"] = process.pid
+            try:
+                stdout, stderr = process.communicate(timeout=2)
+                ended = (time.time_ns(), time.perf_counter_ns())
+                result.update(
+                    returncode=process.returncode,
+                    stdout_bytes=len(stdout),
+                    stderr_bytes=len(stderr),
+                )
+            except subprocess.TimeoutExpired:
+                # Observe the original endpoint before diagnostic work; preserve kill and reap.
+                ended = (time.time_ns(), time.perf_counter_ns())
+                result["timeout"] = True
+                process.kill()
+                process.communicate()
+            except (OSError, subprocess.SubprocessError):
+                ended = (time.time_ns(), time.perf_counter_ns())
+                raise
+            finally:
+                # Windows Popen owns these reader threads; never substitute unrelated identities.
+                result["reader_tids"] = [
+                    thread.native_id
+                    for name in ("stdout_thread", "stderr_thread")
+                    if (thread := getattr(process, name, None)) is not None
+                    and thread.native_id is not None
+                ]
+                result.update(end_wall_ns=ended[0], end_perf_ns=ended[1])
+    except (OSError, subprocess.SubprocessError) as error:
+        result["error"] = failure(error)
+    return result
+
+
+def bounded_export(command: list[str], scratch: Path) -> dict[str, Any]:
+    """Export privately with a ninety-second deadline and aggregate raw-disk bound.
+
+    Args:
+        command: Explicit tracerpt XML export invocation.
+        scratch: Owned raw directory, never an upload source.
+
+    Returns:
+        Numeric exit/timing/size metadata and fixed failure categories only.
+    """
+    # Export command output stays private; no arbitrary ETL-derived text is published.
+    result: dict[str, Any] = {}
+    started = time.monotonic()
+    try:
+        with (
+            tempfile.TemporaryFile() as stream,
+            subprocess.Popen(command, cwd=scratch, stdout=stream, stderr=stream) as process,
+        ):
+            try:
+                # Poll file sizes, not process IDs or output contents; abort without retry.
+                while True:
+                    size = sum(path.stat().st_size for path in scratch.rglob("*") if path.is_file())
+                    result["raw_bytes"] = size
+                    if size > RAW_LIMIT_BYTES:
+                        result["error"] = "raw-disk-limit"
+                        break
+                    if time.monotonic() - started >= 90:
+                        result["error"] = "export-deadline"
+                        break
+                    try:
+                        result["returncode"] = process.wait(timeout=0.05)
+                        break
+                    except subprocess.TimeoutExpired:
+                        continue
+            finally:
+                # Only terminate the export process owned by this helper, then reap it.
+                if "returncode" not in result:
+                    process.kill()
+                    process.wait()
+            result["raw_bytes"] = sum(
+                path.stat().st_size for path in scratch.rglob("*") if path.is_file()
+            )
+            if result["raw_bytes"] > RAW_LIMIT_BYTES:
+                result["error"] = "raw-disk-limit"
+    except (OSError, subprocess.SubprocessError) as error:
+        result["error"] = type(error).__name__
+    result["seconds"] = time.monotonic() - started
+    return result
+
+
+def scheduling_events(path: Path) -> Iterator[dict[str, Any]]:
+    """Stream private XML into strictly typed known schema fields or structural metadata.
+
+    Args:
+        path: Private tracerpt XML file with bounded size.
+
+    Yields:
+        Known numeric fields, structural schemas or fixed decode failure codes/field names.
+
+    Raises:
+        ValueError: XML size or event/field bounds are invalid.
+        OSError: Private export cannot be read.
+    """
+    # Reject oversized exports and entity declarations before parsing any event payload.
+    if path.stat().st_size > XML_LIMIT_BYTES:
+        raise ValueError("xml-size-limit")
+    with path.open("rb") as stream:
+        carry = b""
+        while chunk := stream.read(65536):
+            scan = (carry + chunk).replace(b"\0", b"")
+            if b"<!DOCTYPE" in scan.upper() or b"<!ENTITY" in scan.upper():
+                raise ValueError("xml-declaration-rejected")
+            carry = scan[-16:]
+    # Clear completed events from their root to keep memory independent of export length.
+    try:
+        context = ET.iterparse(path, events=("start", "end"))
+        _, root = next(context)
+        count = 0
+        for action, element in context:
+            if action != "end" or element.tag.rsplit("}", 1)[-1] != "Event":
+                continue
+            count += 1
+            if count > EVENT_LIMIT:
+                raise ValueError("event-count-limit")
+            children = {child.tag.rsplit("}", 1)[-1]: child for child in element}
+            system = children.get("System")
+            data = children.get("EventData")
+            # UserData is a different export layout; inventory names but never infer its values.
+            fields = [] if data is None else list(data)
+            if len(fields) > 64:
+                raise ValueError("event-field-limit")
+            names = [field.get("Name", "") for field in fields]
+            structural: dict[str, Any] = {
+                "fields": sorted(
+                    {name for name in names if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", name)}
+                )[:32]
+            }
+            header = (
+                {} if system is None else {child.tag.rsplit("}", 1)[-1]: child for child in system}
+            )
+            provider = header.get("Provider")
+            guid = "" if provider is None else provider.get("Guid", "").strip("{}").lower()
+            structural["provider"] = guid if re.fullmatch(r"[0-9a-f-]{36}", guid) else "unknown"
+            version = header.get("Version")
+            opcode = header.get("Opcode")
+            ver = (
+                int(version.text)
+                if version is not None and re.fullmatch(r"\d{1,3}", version.text or "")
+                else -1
+            )
+            op = (
+                int(opcode.text)
+                if opcode is not None and re.fullmatch(r"\d{1,3}", opcode.text or "")
+                else -1
+            )
+            structural.update(version=ver, opcode=op)
+            allowed: tuple[str, ...] = ()
+            if ver in (2, 3, 4) and guid == PROCESS_GUID and op in (1, 2, 3, 4):
+                allowed = ("ProcessId", "ParentId", "ExitStatus")
+            elif guid == THREAD_GUID:
+                if ver in (2, 3) and op in (1, 2, 3, 4):
+                    allowed = ("ProcessId", "TThreadId")
+                elif ver in (2, 3, 4) and op == 36:
+                    allowed = (
+                        "NewThreadId",
+                        "OldThreadId",
+                        "OldThreadState",
+                        "OldThreadWaitReason",
+                        "OldThreadWaitMode",
+                    )
+                elif ver == 2 and op == 50:
+                    allowed = ("TThreadId", "AdjustReason", "AdjustIncrement", "Flag")
+            values = {field.get("Name"): field.text or "" for field in fields}
+            # A schema is supported only with every documented field and a unique payload mapping.
+            known = (
+                bool(allowed)
+                and all(name in values for name in allowed)
+                and len(names) == len(set(names))
+            )
+            record: dict[str, Any] = {"schema": structural, "known": known}
+            if known:
+                try:
+                    timestamp = header.get("TimeCreated")
+                    stamp = "" if timestamp is None else timestamp.get("SystemTime", "")
+                    match = re.fullmatch(
+                        r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d{1,9}))?Z", stamp
+                    )
+                    error_code, error_field = "timestamp-format", "SystemTime"
+                    if match is None:
+                        raise ValueError("unsupported-event-timestamp")
+                    error_code = "timestamp-value"
+                    seconds = int(
+                        datetime.fromisoformat(match[1]).replace(tzinfo=timezone.utc).timestamp()
+                    )
+                    record["time_ns"] = seconds * 1000000000 + int((match[2] or "").ljust(9, "0"))
+                    numeric = {}
+                    for name in allowed:
+                        error_code, error_field = "numeric-format", name
+                        value = values[name]
+                        if not re.fullmatch(r"(?:-?\d{1,10}|0[xX][0-9a-fA-F]{1,8})", value):
+                            raise ValueError("invalid-numeric-payload")
+                        number = int(value, 16 if value.lower().startswith("0x") else 10)
+                        minimum = (
+                            -(2**31)
+                            if name == "ExitStatus"
+                            else -128
+                            if name == "AdjustIncrement"
+                            else 0
+                        )
+                        maximum = 2**32 if name.endswith("Id") or name == "ExitStatus" else 256
+                        error_code = "numeric-range"
+                        if not minimum <= number < maximum:
+                            raise ValueError("numeric-payload-range")
+                        numeric[name] = number
+                    record["values"] = numeric
+                    processor = header.get("Execution")
+                    cpu = "" if processor is None else processor.get("ProcessorID", "")
+                    if cpu.isdecimal() and len(cpu) <= 5:
+                        record["cpu"] = int(cpu)
+                except ValueError:
+                    # Preserve only schema and an allowlisted failure location.
+                    record = {
+                        "schema": structural,
+                        "known": False,
+                        "decode_error": {"code": error_code, "field": error_field},
+                    }
+            yield record
+            root.clear()
+    except ET.ParseError:
+        # A later malformed element cannot erase schemas already yielded by this stream.
+        yield {
+            "schema": {"provider": "unknown", "version": -1, "opcode": -1, "fields": []},
+            "known": False,
+            "decode_error": {"code": "xml-parse", "field": "XML"},
+        }
+
+
+def decode_scheduling(path: Path, query: dict[str, Any]) -> dict[str, Any]:
+    """Establish target lifetimes, then retain only target numeric scheduling evidence.
+
+    Args:
+        path: Private bounded XML export, read twice without retaining unrelated events.
+        query: Actual Python/Git/native thread identities and query wall-clock window.
+
+    Returns:
+        Bounded sanitized records, structural schemas and explicit capability gaps.
+
+    Raises:
+        ValueError: Ambiguous/reused target identities or export bounds.
+        OSError: Export reading fails.
+    """
+    # First pass inventories schemas and discovers target process/thread lifetimes by payload IDs.
+    parent, git = query["python_pid"], query["git_pid"]
+    tids = {query["calling_tid"], *query["reader_tids"]}
+    process_events: dict[int, list[tuple[int, int]]] = {parent: [], git: []}
+    thread_events: dict[int, list[tuple[int, int, int]]] = {}
+    schemas: list[dict[str, Any]] = []
+    unknown = 0
+    decode_errors: list[dict[str, Any]] = []
+    error_count = 0
+    for record in scheduling_events(path):
+        schema = record["schema"]
+        if schema not in schemas and len(schemas) < 16:
+            schemas.append(schema)
+        if "decode_error" in record:
+            error_count += 1
+            if len(decode_errors) < 32:
+                decode_errors.append({"schema": schema, **record["decode_error"]})
+            continue
+        if not record["known"]:
+            unknown += 1
+            continue
+        values, op, stamp = record["values"], schema["opcode"], record["time_ns"]
+        if schema["provider"] == PROCESS_GUID and values["ProcessId"] in process_events:
+            process_events[values["ProcessId"]].append((op, stamp))
+            if len(process_events[values["ProcessId"]]) > 8:
+                raise ValueError("target-process-lifetime-limit")
+        if schema["provider"] == THREAD_GUID and op in (1, 2, 3, 4):
+            tid, pid = values["TThreadId"], values["ProcessId"]
+            if tid in tids or pid == git:
+                thread_events.setdefault(tid, []).append((op, stamp, pid))
+                if len(thread_events[tid]) > 8:
+                    raise ValueError("target-thread-lifetime-limit")
+                if len(thread_events) > 128:
+                    raise ValueError("target-thread-limit")
+    # Multiple births for a target PID/TID make reuse attribution ambiguous: fail closed.
+    for events in process_events.values():
+        if sum(op in (1, 3) for op, _ in events) > 1:
+            raise ValueError("ambiguous-process-lifetime")
+    for thread_life in thread_events.values():
+        if (
+            len({pid for _, _, pid in thread_life}) > 1
+            or sum(op in (1, 3) for op, _, _ in thread_life) > 1
+        ):
+            raise ValueError("ambiguous-thread-lifetime")
+    start, end = query["start_wall_ns"], query["end_wall_ns"]
+    git_life = process_events[git]
+    births = [stamp for op, stamp in git_life if op == 1]
+    deaths = [stamp for op, stamp in git_life if op == 2]
+    valid_git = len(births) == len(deaths) == 1 and start <= births[0] <= deaths[0] <= end
+    thread_windows = {}
+    for tid, life in thread_events.items():
+        born = [stamp for op, stamp, _ in life if op in (1, 3)]
+        dead = [stamp for op, stamp, _ in life if op in (2, 4)]
+        owner = life[0][2]
+        if len(dead) > 1:
+            raise ValueError("ambiguous-thread-lifetime")
+        if len(born) == len(dead) == 1 and born[0] <= dead[0] and owner in (parent, git):
+            thread_windows[tid] = (born[0], dead[0], owner)
+    mapping = all(tid in thread_windows and thread_windows[tid][2] == parent for tid in tids)
+    mapping = mapping and any(owner == git for _, _, owner in thread_windows.values())
+    # Second pass filters the time window and redacts unrelated CSwitch counterparty IDs.
+    retained: list[dict[str, Any]] = []
+    counts = {"process": 0, "thread": 0, "cswitch": 0, "ready": 0}
+    overflow = 0
+    cpu_missing = False
+    for record in scheduling_events(path):
+        if not record["known"] or not start <= record["time_ns"] <= end:
+            continue
+        schema, values = record["schema"], record["values"]
+        op, provider = schema["opcode"], schema["provider"]
+        target_tids = {
+            tid
+            for tid, (born, dead, _) in thread_windows.items()
+            if born <= record["time_ns"] <= dead
+        }
+        selected = {}
+        kind = ""
+        if provider == PROCESS_GUID and values["ProcessId"] in (parent, git):
+            selected = {
+                name: value
+                for name, value in values.items()
+                if name != "ParentId" or value in (parent, git)
+            }
+            kind = "process"
+        elif provider == THREAD_GUID and op in (1, 2, 3, 4):
+            if values["TThreadId"] in target_tids and values["ProcessId"] in (parent, git):
+                selected, kind = values, "thread"
+        elif provider == THREAD_GUID and op == 36:
+            if values["NewThreadId"] in target_tids or values["OldThreadId"] in target_tids:
+                selected = {
+                    name: value
+                    for name, value in values.items()
+                    if name not in ("NewThreadId", "OldThreadId") or value in target_tids
+                }
+                kind = "cswitch"
+        elif provider == THREAD_GUID and op == 50 and values["TThreadId"] in target_tids:
+            selected, kind = values, "ready"
+        if kind:
+            if kind in ("cswitch", "ready") and "cpu" not in record:
+                cpu_missing = True
+            counts[kind] += 1
+            if len(retained) < SANITIZED_LIMIT:
+                retained.append(
+                    {
+                        "kind": kind,
+                        "opcode": op,
+                        "time_ns": record["time_ns"],
+                        "values": selected,
+                        **({"cpu": record["cpu"]} if "cpu" in record else {}),
+                    }
+                )
+            else:
+                overflow += 1
+    gaps = []
+    if error_count:
+        gaps.append("event-decode")
+    if not valid_git:
+        gaps.append("git-start-end-window")
+    if not mapping or len(query["reader_tids"]) != 2:
+        gaps.append("python-thread-mapping")
+    if not counts["cswitch"] or not counts["ready"]:
+        gaps.append("scheduling-events")
+    if cpu_missing:
+        gaps.append("scheduler-cpu")
+    if overflow:
+        gaps.append("sanitized-record-limit")
+    return {
+        "schemas": schemas,
+        "decode_errors": decode_errors,
+        "decode_error_count": error_count,
+        "unknown_events": unknown,
+        "counts": counts,
+        "events": retained,
+        "omitted": overflow,
+        "gaps": gaps,
+    }
+
+
+def wpr_capability(output: Path, expected_head: str, scheduling: bool = False) -> int:
     """Probe native recording capability once, without running integration tests.
 
     Args:
         output: New external directory receiving metadata only.
         expected_head: Exact clean checkout required by the triggering PR event.
+        scheduling: Use the narrow custom profile and private sanitized schema roundtrip.
 
     Returns:
         Zero only when tool discovery, the owned recording and the query succeed.
@@ -974,7 +1398,7 @@ def wpr_capability(output: Path, expected_head: str) -> int:
         raise ValueError("Diagnostic output must be outside the candidate checkout")
     output.mkdir(parents=True, exist_ok=False)
     manifest: dict[str, Any] = {
-        "mode": "wpr-capability",
+        "mode": "wpr-scheduling" if scheduling else "wpr-capability",
         "expected_head": expected_head,
         "purpose": "Capability only; not root-cause reproduction or acceptance",
         "commands": {},
@@ -1024,8 +1448,17 @@ def wpr_capability(output: Path, expected_head: str) -> int:
                 commands["versions_admin"] = capability_command(
                     [powershell, "-NoProfile", "-NonInteractive", "-Command", version_script], 15
                 )
+                profile = "CPU"
+                if scheduling:
+                    # Generate only the reviewed collector configuration in owned scratch.
+                    profile_path = scratch / "scheduling.wprp"
+                    profile_path.write_text(SCHEDULING_PROFILE, encoding="utf-8")
+                    profile = f"{profile_path}!Scheduling"
+                    manifest["profile_sha256"] = hashlib.sha256(
+                        SCHEDULING_PROFILE.encode()
+                    ).hexdigest()
                 commands["profiles"] = capability_command([wpr, "-profiles"], 15)
-                commands["cpu_profile"] = capability_command([wpr, "-profiledetails", "CPU"], 15)
+                commands["cpu_profile"] = capability_command([wpr, "-profiledetails", profile], 15)
                 commands["global_status"] = capability_command([wpr, "-status"], 15)
                 # Ambiguous/localized/preexisting state blocks mutation conservatively.
                 global_status = commands["global_status"]
@@ -1054,15 +1487,19 @@ def wpr_capability(output: Path, expected_head: str) -> int:
                 if commands["git_init"].get("returncode") != 0:
                     raise ValueError("Disposable repository initialization failed")
                 commands["start"] = capability_command(
-                    [wpr, "-start", "CPU", "-instancename", instance], 30
+                    [wpr, "-start", profile, "-instancename", instance], 30
                 )
                 if commands["start"].get("returncode") != 0:
                     manifest["cleanup_uncertain"] = "error" in commands["start"]
                     raise ValueError("Recording start did not establish ownership")
                 owned = True
                 manifest["recording_started"] = True
-                commands["query"] = capability_command(
-                    ["git", "-C", str(repository), "worktree", "list", "--porcelain", "-z"], 2
+                commands["query"] = (
+                    scheduling_query(repository)
+                    if scheduling
+                    else capability_command(
+                        ["git", "-C", str(repository), "worktree", "list", "--porcelain", "-z"], 2
+                    )
                 )
                 commands["collectors"] = capability_command(
                     [wpr, "-status", "collectors", "-details", "-instancename", instance], 15
@@ -1075,16 +1512,91 @@ def wpr_capability(output: Path, expected_head: str) -> int:
                 if commands["stop"].get("returncode") != 0:
                     raise ValueError("Owned recording did not stop successfully")
                 owned = False
+                # Bound completed recorder output before hashing or starting an export.
+                if (
+                    scheduling
+                    and sum(path.stat().st_size for path in scratch.rglob("*") if path.is_file())
+                    > RAW_LIMIT_BYTES
+                ):
+                    raise ValueError("raw-disk-limit")
                 # Stream large ETL hashes; the raw trace never enters the upload allowlist.
                 with etl.open("rb") as stream:
                     manifest["etl"] = {
                         "bytes": etl.stat().st_size,
                         "sha256": hashlib.file_digest(stream, "sha256").hexdigest(),
                     }
+                if scheduling:
+                    # Export privately; raw text never enters command metadata.
+                    xml = scratch / "events.xml"
+                    manifest["export"] = bounded_export(
+                        [tracerpt, str(etl), "-o", str(xml), "-of", "XML", "-y"], scratch
+                    )
+                    report: dict[str, Any] = {"gaps": []}
+                    manifest["scheduling"] = report
+                    try:
+                        if (
+                            manifest["export"].get("returncode") != 0
+                            or "error" in manifest["export"]
+                        ):
+                            raise ValueError("private-export-failed")
+                        with xml.open("rb") as stream:
+                            manifest["xml"] = {
+                                "bytes": xml.stat().st_size,
+                                "sha256": hashlib.file_digest(stream, "sha256").hexdigest(),
+                            }
+                        report.update(decode_scheduling(xml, commands["query"]))
+                    except (OSError, ValueError, KeyError, ET.ParseError) as error:
+                        # Export payload values and parser exception text are never published.
+                        report["decoder_error"] = type(error).__name__
+                        report["gaps"].append("private-xml-decode")
+                    # Confirm actual collector settings and both recorder loss counters.
+                    collector = commands["collectors"].get("stdout", "")
+                    profile_text = commands["cpu_profile"].get("stdout", "")
+                    configuration = all(
+                        re.search(pattern, collector)
+                        for pattern in (
+                            r"Logging mode\s*:\s*Memory",
+                            r"Buffer Size \(KB\)\s*:\s*1024\b",
+                            r"Number of Buffers\s*:\s*64\b",
+                        )
+                    )
+                    loss = all(
+                        re.search(pattern, collector)
+                        for pattern in (r"Events Lost\s*:\s*0\b", r"Dropped event\s*:\s*0\b")
+                    )
+                    keyword_section = re.search(
+                        r"System Keywords\r?\n((?:[ \t]+[^\r\n]*\r?\n)+)", collector
+                    )
+                    keywords = (
+                        set()
+                        if keyword_section is None
+                        else {
+                            line.strip() for line in keyword_section[1].splitlines() if line.strip()
+                        }
+                    )
+                    configuration = configuration and (
+                        collector.count("Collector Name") == 1
+                        and "System Stacks" not in collector
+                        and "CaptureState Providers" not in collector
+                        and "Event Collector" not in collector
+                        and "Scheduling.Verbose.Memory" in profile_text
+                    )
+                    report.update(
+                        configuration_verified=bool(configuration),
+                        loss_verified=bool(loss),
+                        keywords_verified=keywords == {"ProcessThread", "CSwitch", "ReadyThread"},
+                    )
+                    if (
+                        not configuration
+                        or not loss
+                        or keywords != {"ProcessThread", "CSwitch", "ReadyThread"}
+                    ):
+                        report["gaps"].append("collector-configuration-or-loss")
                 after = checkout_identity()
                 manifest["checkout_unchanged"] = before == after
                 status = int(
                     before != after
+                    or bool(manifest.get("scheduling", {}).get("gaps"))
                     or any(
                         result.get("returncode") != 0
                         for name, result in commands.items()
@@ -1113,7 +1625,7 @@ def wpr_capability(output: Path, expected_head: str) -> int:
     (output / "manifest.json").write_text(
         json.dumps(
             {
-                "mode": "wpr-capability",
+                "mode": manifest["mode"],
                 "exit_code": status,
                 "artifacts": {"capability.json": hashlib.sha256(payload).hexdigest()},
             },
@@ -1134,9 +1646,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--expected-head", required=True)
-    parser.add_argument("--mode", choices=("integration", "wpr-capability"), default="integration")
+    parser.add_argument(
+        "--mode", choices=("integration", "wpr-capability", "wpr-scheduling"), default="integration"
+    )
     args = parser.parse_args()
     # Preserve the experiment's nonzero status rather than treating retained artifacts as success.
+    if args.mode == "wpr-scheduling":
+        return wpr_capability(args.output, args.expected_head, scheduling=True)
     if args.mode == "wpr-capability":
         return wpr_capability(args.output, args.expected_head)
     return run(args.output, args.expected_head)
