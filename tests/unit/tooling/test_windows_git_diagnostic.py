@@ -885,3 +885,232 @@ def test_timeout_snapshot_unavailable_metadata_does_not_replace_original_error(
     observer.checkpoint()
     assert (observer.output / "progress.json").exists()
     assert not (observer.output / "checkpoint.json").exists()
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "none",
+        "query",
+        "collectors",
+        "stop",
+        "cancel",
+        "start",
+        "start-timeout",
+        "etl",
+        "active",
+        "ambiguous",
+        "status-error",
+        "admin",
+        "versions",
+        "profiles",
+        "init",
+        "wrong-head",
+        "missing",
+        "foreign",
+        "raw-cleanup",
+    ],
+)
+def test_wpr_capability_owns_only_its_recording(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fault: str, request: pytest.FixtureRequest
+) -> None:
+    """Keep probe mutations scoped, preserve failures and publish only bounded metadata.
+
+    Args:
+        monkeypatch: Native platform and deterministic command boundary replacement.
+        tmp_path: External disposable artifact directory.
+        fault: One recorder/discovery/query failure or successful capture.
+        request: Cleanup registration that also runs if a survival assertion fails.
+    """
+    # Simulate native tool availability and a clean exact candidate without launching a suite.
+    monkeypatch.setattr(
+        diagnostic.platform, "system", lambda: "Linux" if fault == "foreign" else "Windows"
+    )
+    monkeypatch.setattr(
+        diagnostic.shutil, "which", lambda name: None if fault == "missing" else name
+    )
+    identity = {"head": "other" if fault == "wrong-head" else "candidate", "status": ""}
+    monkeypatch.setattr(diagnostic, "checkout_identity", lambda: identity)
+    # Preserve command evidence even if the operating system leaves a locked raw sidecar.
+    if fault == "raw-cleanup":
+        original_cleanup = diagnostic.tempfile.TemporaryDirectory._rmtree
+
+        def failed_cleanup(*args: object, **kwargs: object) -> None:
+            """Model deletion denial while evidence publication is under test.
+
+            Args:
+                *args: Original temporary-tree deletion arguments.
+                **kwargs: Original deletion policy options.
+
+            Raises:
+                OSError: A simulated locked recorder sidecar.
+            """
+            request.addfinalizer(
+                lambda: original_cleanup(*args, **kwargs) if Path(str(args[0])).exists() else None
+            )
+            raise OSError("locked recorder sidecar")
+
+        monkeypatch.setattr(diagnostic.tempfile.TemporaryDirectory, "_rmtree", failed_cleanup)
+    calls: dict[str, list[str]] = {}
+
+    def command(arguments: list[str], timeout: int) -> dict:
+        """Model bounded native results and create only disposable raw trace data.
+
+        Args:
+            arguments: Explicit native invocation.
+            timeout: Required command communication bound.
+
+        Returns:
+            Synthetic completed command metadata.
+        """
+        # Classify invocations using their actual native command option.
+        name = {
+            "-Command": "versions",
+            "-profiles": "profiles",
+            "-profiledetails": "profile",
+            "init": "init",
+            "-start": "start",
+            "worktree": "query",
+            "-stop": "stop",
+            "-cancel": "cancel",
+        }
+        phase = next(
+            (value for option, value in name.items() if option in arguments),
+            "collectors" if "collectors" in arguments else "status",
+        )
+        calls[phase] = arguments
+        result = {"returncode": 0, "stdout": "", "stderr": ""}
+        if phase == "versions":
+            result["stdout"] = (
+                "invalid"
+                if fault == "versions"
+                else json.dumps({"admin": fault != "admin", "wpr": "10", "tracerpt": "10"})
+            )
+        if phase == "status":
+            result["stdout"] = (
+                "WPR recording is in progress"
+                if fault == "active"
+                else "unknown"
+                if fault == "ambiguous"
+                else "WPR is not recording"
+            )
+            if fault == "status-error":
+                result["error"] = {"type": "TimeoutExpired"}
+        if phase == fault or (fault == "cancel" and phase == "stop"):
+            result["returncode"] = 1
+        if phase == "start" and fault == "start-timeout":
+            result.pop("returncode")
+            result["error"] = {"type": "TimeoutExpired"}
+        if phase == "stop" and fault != "etl":
+            Path(arguments[2]).write_bytes(b"raw system trace")
+            Path(arguments[2]).with_suffix(".sidecar").write_bytes(b"raw sidecar")
+        if phase in ("init", "query"):
+            assert timeout == 2
+        return result
+
+    monkeypatch.setattr(diagnostic, "capability_command", command)
+    suite = mock.Mock(side_effect=AssertionError("Capability probe must not run pytest"))
+    monkeypatch.setattr(diagnostic.pytest, "main", suite)
+    # Inspect exact ownership, artifact allowlist and unconditional raw evidence cleanup.
+    output = tmp_path / "published"
+    assert diagnostic.wpr_capability(output, "candidate") == int(fault != "none")
+    result = json.loads((output / "capability.json").read_text())
+    assert result["raw_scratch_removed"] == (fault != "raw-cleanup")
+    assert set(path.name for path in output.iterdir()) == {"capability.json", "manifest.json"}
+    assert not result["raw_trace_uploaded"]
+    suite.assert_not_called()
+    for phase in ("start", "query", "collectors", "stop", "cancel"):
+        if phase in calls and phase != "query":
+            assert calls[phase][-2:] == ["-instancename", result["instance"]]
+    assert ("cancel" in calls) == (fault in {"stop", "cancel"})
+    assert result["cleanup_uncertain"] == (fault in {"cancel", "start-timeout", "raw-cleanup"})
+    if fault == "none":
+        assert result["etl"] == {
+            "bytes": 16,
+            "sha256": hashlib.sha256(b"raw system trace").hexdigest(),
+        }
+    if "stop" in calls:
+        raw_tree = Path(calls["stop"][2]).parent
+        if fault == "raw-cleanup":
+            assert raw_tree.exists()
+            assert result["errors"][-1]["phase"] == "raw-scratch-cleanup"
+            original_cleanup(str(raw_tree))
+        assert not raw_tree.exists()
+        assert "-skipPdbGen" in calls["stop"] and "-compress" in calls["stop"]
+    if "start" in calls:
+        assert "-filemode" not in calls["start"]
+
+
+@pytest.mark.parametrize("fault", ["none", "oserror", "timeout"])
+def test_capability_command_bounds_streams_and_preserves_faults(
+    monkeypatch: pytest.MonkeyPatch, fault: str
+) -> None:
+    """Bound retained recorder text while keeping command errors and communication limits.
+
+    Args:
+        monkeypatch: Real subprocess runner boundary replacement.
+        fault: Successful process, unavailable executable or timeout.
+    """
+
+    # Write beyond retained prefixes without creating an unbounded in-memory capture.
+    def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+        """Write synthetic native output or raise the selected process fault.
+
+        Args:
+            command: Explicit executable vector.
+            **kwargs: Native runner stream and timeout options.
+
+        Returns:
+            Original native exit status.
+
+        Raises:
+            OSError: The fake executable is missing.
+            subprocess.TimeoutExpired: The fake command exceeds its bound.
+        """
+        assert kwargs["timeout"] == 2
+        kwargs["stdout"].write(b"a" * 20000)
+        kwargs["stderr"].write(b"b" * 19000)
+        if fault == "oserror":
+            raise OSError("missing")
+        if fault == "timeout":
+            raise subprocess.TimeoutExpired(command, 2)
+        return subprocess.CompletedProcess(command, 7)
+
+    monkeypatch.setattr(diagnostic.subprocess, "run", run)
+    # Faults retain bounded partial streams and never become successful results.
+    result = diagnostic.capability_command(["native", "-status"], 2)
+    assert len(result["stdout"]) == len(result["stderr"]) == 16384
+    assert result["stdout_bytes"] == 20000 and result["stderr_bytes"] == 19000
+    assert result["seconds"] >= 0
+    if fault == "none":
+        assert result["returncode"] == 7
+    else:
+        assert "returncode" not in result and "error" in result
+
+
+def test_capability_cli_and_output_guard(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Select only capability mode and reject candidate-contained artifacts.
+
+    Args:
+        monkeypatch: Scoped CLI and capability dispatch replacement.
+    """
+    # Reject writes inside the checkout before creating evidence or discovering tools.
+    with pytest.raises(ValueError, match="outside the candidate checkout"):
+        diagnostic.wpr_capability(diagnostic.ROOT / "forbidden-probe", "candidate")
+    probe = mock.Mock(return_value=1)
+    monkeypatch.setattr(diagnostic, "wpr_capability", probe)
+    monkeypatch.setattr(
+        diagnostic.sys,
+        "argv",
+        [
+            "probe",
+            "--mode",
+            "wpr-capability",
+            "--output",
+            "/tmp/probe",
+            "--expected-head",
+            "candidate",
+        ],
+    )
+    assert diagnostic.main() == 1
+    probe.assert_called_once_with(Path("/tmp/probe"), "candidate")

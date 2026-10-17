@@ -10,11 +10,13 @@ import json
 import os
 import platform
 import random
+import shutil
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+import uuid
 from collections import deque
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
@@ -921,6 +923,207 @@ def run(output: Path, expected_head: str) -> int:
     return status
 
 
+def capability_command(command: list[str], timeout: int) -> dict[str, Any]:
+    """Run one bounded capability command without retaining unbounded output in memory.
+
+    Args:
+        command: Explicit native executable and arguments; never a shell expression.
+        timeout: Maximum communication duration in seconds, without retries.
+
+    Returns:
+        Exit/error metadata and at most 16 KiB from each command stream.
+
+    Raises:
+        OSError: Temporary stream creation, reading or cleanup fails.
+    """
+    # Keep raw streams outside the artifact directory and delete them on every path.
+    result: dict[str, Any] = {"command": command, "timeout": timeout}
+    with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
+        started = time.perf_counter()
+        try:
+            completed = subprocess.run(command, stdout=stdout, stderr=stderr, timeout=timeout)
+            result["returncode"] = completed.returncode
+        except (OSError, subprocess.SubprocessError) as error:
+            result["error"] = failure(error)
+        result["seconds"] = time.perf_counter() - started
+        # Retain prefixes and original lengths, never raw recorder output files.
+        for name, stream in (("stdout", stdout), ("stderr", stderr)):
+            result[f"{name}_bytes"] = stream.tell()
+            stream.seek(0)
+            result[name] = stream.read(16384).decode("utf-8", errors="replace")
+    return result
+
+
+def wpr_capability(output: Path, expected_head: str) -> int:
+    """Probe native recording capability once, without running integration tests.
+
+    Args:
+        output: New external directory receiving metadata only.
+        expected_head: Exact clean checkout required by the triggering PR event.
+
+    Returns:
+        Zero only when tool discovery, the owned recording and the query succeed.
+
+    Raises:
+        ValueError: The destination is inside the candidate checkout.
+        OSError: The external artifact directory cannot be created or written.
+    """
+    # Validate the exact candidate before creating disposable system-wide trace evidence.
+    output = output.resolve()
+    if output.is_relative_to(ROOT):
+        raise ValueError("Diagnostic output must be outside the candidate checkout")
+    output.mkdir(parents=True, exist_ok=False)
+    manifest: dict[str, Any] = {
+        "mode": "wpr-capability",
+        "expected_head": expected_head,
+        "purpose": "Capability only; not root-cause reproduction or acceptance",
+        "commands": {},
+        "errors": [],
+        "recording_started": False,
+        "cleanup_uncertain": False,
+        "raw_trace_uploaded": False,
+        "stream_limit_bytes": 16384,
+    }
+    commands = manifest["commands"]
+    owned = False
+    status = 1
+    instance = f"nplet-capability-{uuid.uuid4()}"
+    manifest["instance"] = instance
+    # The temporary tree owns ETL and sidecars, even when stop or hashing fails.
+    scratch: Path | None = None
+    try:
+        with tempfile.TemporaryDirectory(prefix="nplet-wpr-capability-") as directory:
+            scratch = Path(directory)
+            wpr = shutil.which("wpr.exe")
+            tracerpt = shutil.which("tracerpt.exe")
+            powershell = shutil.which("powershell.exe")
+            manifest["tools"] = {"wpr": wpr, "tracerpt": tracerpt, "powershell": powershell}
+            try:
+                before = checkout_identity()
+                manifest["before"] = before
+                if before["head"] != expected_head or before["status"]:
+                    raise ValueError("Candidate is not the exact clean event head")
+                if (
+                    platform.system() != "Windows"
+                    or wpr is None
+                    or tracerpt is None
+                    or powershell is None
+                ):
+                    raise ValueError("Native Windows WPR/tracerpt/version tools unavailable")
+                # Query only executable versions and token elevation.
+                quoted_wpr = wpr.replace("'", "''")
+                quoted_tracerpt = tracerpt.replace("'", "''")
+                version_script = (
+                    "[pscustomobject]@{admin=([Security.Principal.WindowsPrincipal]"
+                    "[Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole("
+                    "[Security.Principal.WindowsBuiltInRole]::Administrator);"
+                    f"wpr=(Get-Item -LiteralPath '{quoted_wpr}').VersionInfo.FileVersion;"
+                    f"tracerpt=(Get-Item -LiteralPath '{quoted_tracerpt}').VersionInfo.FileVersion"
+                    "}|ConvertTo-Json -Compress"
+                )
+                commands["versions_admin"] = capability_command(
+                    [powershell, "-NoProfile", "-NonInteractive", "-Command", version_script], 15
+                )
+                commands["profiles"] = capability_command([wpr, "-profiles"], 15)
+                commands["cpu_profile"] = capability_command([wpr, "-profiledetails", "CPU"], 15)
+                commands["global_status"] = capability_command([wpr, "-status"], 15)
+                # Ambiguous/localized/preexisting state blocks mutation conservatively.
+                global_status = commands["global_status"]
+                idle = (
+                    "wpr is not recording"
+                    in (global_status["stdout"] + global_status["stderr"]).lower()
+                )
+                manifest["global_idle_confirmed"] = idle
+                if "error" in global_status or not idle:
+                    raise ValueError("Existing or ambiguous WPR recording state; recording skipped")
+                versions = json.loads(commands["versions_admin"]["stdout"])
+                manifest["versions_admin"] = versions
+                if not versions["admin"]:
+                    raise ValueError("Administrative recording capability unavailable")
+                if any(
+                    result.get("returncode") != 0
+                    for name, result in commands.items()
+                    if name != "global_status"
+                ):
+                    raise ValueError("Native recorder discovery command failed")
+                # Initialize before recording, then execute exactly one unchanged two-second query.
+                repository = scratch / "repository"
+                commands["git_init"] = capability_command(
+                    ["git", "init", "--quiet", str(repository)], 2
+                )
+                if commands["git_init"].get("returncode") != 0:
+                    raise ValueError("Disposable repository initialization failed")
+                commands["start"] = capability_command(
+                    [wpr, "-start", "CPU", "-instancename", instance], 30
+                )
+                if commands["start"].get("returncode") != 0:
+                    manifest["cleanup_uncertain"] = "error" in commands["start"]
+                    raise ValueError("Recording start did not establish ownership")
+                owned = True
+                manifest["recording_started"] = True
+                commands["query"] = capability_command(
+                    ["git", "-C", str(repository), "worktree", "list", "--porcelain", "-z"], 2
+                )
+                commands["collectors"] = capability_command(
+                    [wpr, "-status", "collectors", "-details", "-instancename", instance], 15
+                )
+                etl = scratch / "capability.etl"
+                commands["stop"] = capability_command(
+                    [wpr, "-stop", str(etl), "-skipPdbGen", "-compress", "-instancename", instance],
+                    90,
+                )
+                if commands["stop"].get("returncode") != 0:
+                    raise ValueError("Owned recording did not stop successfully")
+                owned = False
+                # Stream large ETL hashes; the raw trace never enters the upload allowlist.
+                with etl.open("rb") as stream:
+                    manifest["etl"] = {
+                        "bytes": etl.stat().st_size,
+                        "sha256": hashlib.file_digest(stream, "sha256").hexdigest(),
+                    }
+                after = checkout_identity()
+                manifest["checkout_unchanged"] = before == after
+                status = int(
+                    before != after
+                    or any(
+                        result.get("returncode") != 0
+                        for name, result in commands.items()
+                        if name != "global_status"
+                    )
+                )
+            except Exception as error:
+                manifest["errors"].append(failure(error))
+            finally:
+                # Cancel only the successfully started, uniquely named instance.
+                if owned:
+                    commands["cancel"] = capability_command(
+                        [str(wpr), "-cancel", "-instancename", instance], 30
+                    )
+                    manifest["cleanup_uncertain"] = commands["cancel"].get("returncode") != 0
+    except OSError as error:
+        # A locked raw sidecar must not erase already collected recorder/cleanup evidence.
+        manifest["errors"].append({"phase": "raw-scratch-cleanup", **failure(error)})
+        manifest["cleanup_uncertain"] = True
+        status = 1
+    # Publish metadata only and report whether raw evidence cleanup completed.
+    manifest["raw_scratch_removed"] = scratch is None or not scratch.exists()
+    manifest["exit_code"] = status
+    payload = json.dumps(manifest, indent=2).encode()
+    (output / "capability.json").write_bytes(payload)
+    (output / "manifest.json").write_text(
+        json.dumps(
+            {
+                "mode": "wpr-capability",
+                "exit_code": status,
+                "artifacts": {"capability.json": hashlib.sha256(payload).hexdigest()},
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return status
+
+
 def main() -> int:
     """Parse the explicit candidate and artifact destination for this temporary experiment.
 
@@ -931,8 +1134,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--expected-head", required=True)
+    parser.add_argument("--mode", choices=("integration", "wpr-capability"), default="integration")
     args = parser.parse_args()
     # Preserve the experiment's nonzero status rather than treating retained artifacts as success.
+    if args.mode == "wpr-capability":
+        return wpr_capability(args.output, args.expected_head)
     return run(args.output, args.expected_head)
 
 
