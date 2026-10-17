@@ -9,6 +9,7 @@ import importlib.metadata
 import json
 import os
 import platform
+import random
 import subprocess
 import sys
 import tempfile
@@ -29,6 +30,14 @@ from nplet.lifecycle import task_workspace as workspace
 
 ROOT = Path(__file__).resolve().parents[1]
 INTEGRATION_TARGET = "tests/integration"
+TRACE_SEED = 20261017
+TRACE_TARGETS = ("GIT_TRACE2", "GIT_TRACE2_PERF", "GIT_TRACE2_EVENT")
+QUERY_TYPES = {
+    ("rev-parse", "--show-toplevel"): "toplevel",
+    ("rev-parse", "--is-bare-repository"): "bare",
+    ("rev-parse", "--path-format=absolute", "--git-common-dir"): "common",
+    ("worktree", "list", "--porcelain", "-z"): "worktrees",
+}
 LATEST_LIMIT = 128
 SLOW_LIMIT = 32
 ERROR_LIMIT = 64
@@ -67,6 +76,51 @@ def failure(error: Exception) -> dict[str, Any]:
     }
 
 
+def timeout_snapshot(process: Any) -> dict[str, Any]:
+    """Observe bounded process/thread state without polling or changing returncode.
+
+    Args:
+        process: Original Popen object immediately after TimeoutExpired.
+
+    Returns:
+        PID, zero-time Windows handle wait result and reader-thread alive states.
+        Unsupported or inaccessible handle facts remain explicitly unavailable.
+    """
+    # Observe the handle before thread metadata and record that these observations take time.
+    started = time.perf_counter()
+    pid = getattr(process, "pid", None)
+    result: dict[str, Any] = {
+        "pid": pid if isinstance(pid, int) else None,
+        "handle_wait": None,
+        "handle_wait_status": "unavailable",
+        "readers": {},
+    }
+    # The Windows subprocess module already imports _winapi; avoid import/disk work here.
+    api = getattr(subprocess, "_winapi", None)
+    handle = getattr(process, "_handle", None)
+    if api is not None and handle is not None:
+        try:
+            wait_result = api.WaitForSingleObject(handle, 0)
+            result["handle_wait_perf"] = time.perf_counter()
+            result["handle_wait_wall"] = time.time()
+            result["handle_wait"] = int(wait_result)
+            result["handle_wait_status"] = "observed"
+        except (OSError, ValueError) as error:
+            result["handle_wait_status"] = "failed"
+            result["handle_wait_error"] = failure(error)
+    # Inspect alive states only, never reader buffers, process output or frame locals.
+    for name in ("stdout", "stderr"):
+        reader = getattr(process, name + "_thread", None)
+        try:
+            result["readers"][name] = None if reader is None else bool(reader.is_alive())
+        except RuntimeError as error:
+            result["readers"][name] = failure(error)
+    result["snapshot_end_perf"] = time.perf_counter()
+    result["snapshot_end_wall"] = time.time()
+    result["snapshot_seconds"] = result["snapshot_end_perf"] - started
+    return result
+
+
 class GitObserver:
     """Aggregate every parent Git call while retaining bounded detailed evidence."""
 
@@ -87,6 +141,37 @@ class GitObserver:
         self.error_latch = False
         self.telemetry_errors: list[dict[str, Any]] = []
         self.context = {"nodeid": "", "phase": "initialization"}
+        # Shuffle independent query-specific on/off pairs without adding any Git calls.
+        self.assignment_random = {
+            query: random.Random(f"{TRACE_SEED}:{query}") for query in QUERY_TYPES.values()
+        }
+        self.assignment_pairs: dict[str, deque[bool]] = {
+            query: deque() for query in QUERY_TYPES.values()
+        }
+        self.groups = {
+            query: {
+                group: dict.fromkeys(
+                    (
+                        "started",
+                        "finished",
+                        "failed",
+                        "timeouts",
+                        "nonzero",
+                        "creation_errors",
+                        "communication_errors",
+                        "cleanup_errors",
+                        "trace_omitted",
+                        "popen_total",
+                        "popen_max",
+                        "communicate_total",
+                        "communicate_max",
+                    ),
+                    0,
+                )
+                for group in (("other",) if query == "other" else ("on", "off"))
+            }
+            for query in (*QUERY_TYPES.values(), "other")
+        }
         self.active: dict[int, dict[str, Any]] = {}
         self.saved_traces: set[int] = set()
         self.counts = dict.fromkeys(
@@ -158,10 +243,29 @@ class GitObserver:
             identifier = self.counts["started"]
             self.counts["started"] += 1
             self.counts["active"] += 1
+            # Only the four exact production repository queries participate in randomized pairs.
+            query = (
+                QUERY_TYPES.get(tuple(command[3:]), "other")
+                if len(command) > 3 and str(command[1]) == "-C"
+                else "other"
+            )
+            group = "other"
+            if query != "other":
+                pending = self.assignment_pairs[query]
+                if not pending:
+                    pair = [True, False]
+                    self.assignment_random[query].shuffle(pair)
+                    pending.extend(pair)
+                group = "on" if pending.popleft() else "off"
+            query_index = sum(row["started"] for row in self.groups[query].values())
+            self.groups[query][group]["started"] += 1
             record = {
                 "id": identifier,
                 **self.context,
                 "thread": threading.get_ident(),
+                "query": query,
+                "query_index": query_index,
+                "trace_group": group,
                 "command": [str(word)[:512] for word in command[:32]],
                 "command_omitted_words": max(0, len(command) - 32),
                 "observed_start_wall": time.time(),
@@ -170,13 +274,14 @@ class GitObserver:
                 "communicate_attempts": 0,
             }
             # Bound raw active traces without stopping timing or error observation.
-            if len(self.active) < ACTIVE_TRACE_LIMIT:
+            if group == "on" and len(self.active) < ACTIVE_TRACE_LIMIT:
                 record["trace"] = f"git-{identifier:08d}.trace2.jsonl"
                 self.active[identifier] = record
             else:
                 record["trace"] = None
-                self.counts["trace_omitted"] += 1
-            self.checkpoint(record)
+                if group == "on":
+                    self.counts["trace_omitted"] += 1
+                    self.groups[query][group]["trace_omitted"] += 1
             return record
 
     def copy_trace(self, record: dict[str, Any]) -> None:
@@ -221,6 +326,8 @@ class GitObserver:
                 progress = {
                     "counts": self.counts,
                     "timings": self.timings,
+                    "groups": self.groups,
+                    "trace_seed": TRACE_SEED,
                     "context": self.context,
                     "error_latch": self.error_latch,
                     "current": current,
@@ -276,6 +383,19 @@ class GitObserver:
             self.timings["communicate_max"] = max(
                 self.timings["communicate_max"], record["communicate_seconds"]
             )
+            # Preserve group/query totals even after every detailed record has been evicted.
+            group = self.groups[record["query"]][record["trace_group"]]
+            group["finished"] += 1
+            group["failed"] += int(bool(record.get("failed")))
+            group["timeouts"] += int(bool(record.get("timed_out")))
+            group["nonzero"] += int(returncode not in (None, 0))
+            group["creation_errors"] += int("creation_error" in record)
+            group["communication_errors"] += record.get("communication_errors", 0)
+            group["cleanup_errors"] += int("cleanup_error" in record)
+            group["popen_total"] += record.get("popen_seconds", 0.0)
+            group["popen_max"] = max(group["popen_max"], record.get("popen_seconds", 0.0))
+            group["communicate_total"] += record["communicate_seconds"]
+            group["communicate_max"] = max(group["communicate_max"], record["communicate_seconds"])
             # Rings may evict details, but never the totals or permanent failure latch.
             self.counts["latest_evicted"] += int(len(self.latest) == LATEST_LIMIT)
             self.latest.append(record)
@@ -304,7 +424,8 @@ class GitObserver:
                 self.counts["telemetry_errors"] += 1
                 if len(self.telemetry_errors) < 8:
                     self.telemetry_errors.append(failure(error))
-            self.checkpoint(record, force=bool(record.get("failed")))
+            if record.get("failed") or self.counts["finished"] % 32 == 0:
+                self.checkpoint(record, force=True)
 
     def set_context(self, nodeid: str, phase: str) -> None:
         """Checkpoint the currently active pytest test and phase.
@@ -345,14 +466,15 @@ class TimedProcess:
         # Allocate bounded call metadata before starting the original construction clocks.
         self.observer = observer
         self.record = observer.begin(command)
-        # Add Trace2 only when a bounded active slot was allocated.
+        # Override all Trace2 targets equally; only an assigned on-group event file is enabled.
+        environment = kwargs.get("env")
+        kwargs["env"] = {
+            **(os.environ if environment is None else environment),
+            **dict.fromkeys(TRACE_TARGETS, "0"),
+        }
         if self.record["trace"]:
-            environment = kwargs.get("env")
-            kwargs["env"] = {
-                **(os.environ if environment is None else environment),
-                "GIT_TRACE2_EVENT": str(observer.staging / self.record["trace"]),
-            }
-        # Start both construction clocks after the observer's own pre-launch checkpoint I/O.
+            kwargs["env"]["GIT_TRACE2_EVENT"] = str(observer.staging / self.record["trace"])
+        # Start both construction clocks after bounded assignment and environment preparation.
         self.record["popen_start_wall"] = time.time()
         started = time.perf_counter()
         ended = None
@@ -392,9 +514,15 @@ class TimedProcess:
             return self.process.communicate(*args, **kwargs)
         except Exception as error:
             ended = (time.perf_counter(), time.time())
-            attempt["error"] = failure(error)
+            # Capture observation endpoints first, then inspect bounded state in memory only.
             if isinstance(error, subprocess.TimeoutExpired):
                 attempt["timed_out"] = True
+                attempt["timeout_observation"] = {
+                    "perf": ended[0],
+                    "wall": ended[1],
+                    **timeout_snapshot(self.process),
+                }
+            attempt["error"] = failure(error)
             raise
         finally:
             end_perf, end_wall = (time.perf_counter(), time.time()) if ended is None else ended
@@ -403,6 +531,7 @@ class TimedProcess:
                 attempt.update(seconds=elapsed, end_wall=end_wall)
                 if attempt.get("timed_out"):
                     self.record["timed_out"] = True
+                    self.record["timeout_observation"] = attempt["timeout_observation"]
                 self.record["communicate_seconds"] += attempt["seconds"]
                 self.record["communicate_attempts"] += 1
                 self.record["communicate"].append(attempt)
@@ -657,6 +786,17 @@ def retain_artifacts(output: Path, records: list[dict[str, Any]], manifest: dict
                         }
                     )
         record["git_events"] = events
+        record["trace_status"] = (
+            "disabled"
+            if record.get("trace_group") in {"off", "other"}
+            else "retained"
+            if trace.exists()
+            else "not-created"
+            if record.get("creation_error")
+            else "omitted"
+            if not record.get("trace")
+            else "missing"
+        )
         record["attribution"] = timing_attribution(record, events)
     (output / "processes.json").write_text(json.dumps(records, indent=2), encoding="utf-8")
     # Hash every retained artifact independently from the manifest that describes it.
@@ -705,6 +845,12 @@ def run(output: Path, expected_head: str) -> int:
             "segments exclude observer checkpoint I/O; their sum is not total parent elapsed."
         ),
         "retention_limits": RETENTION_LIMITS,
+        "trace_assignment": {
+            "seed": TRACE_SEED,
+            "method": "independent shuffled on/off pairs per query",
+            "queries": {name: list(args) for args, name in QUERY_TYPES.items()},
+            "other": "all Trace2 targets disabled",
+        },
         "errors": [],
     }
     collector = coverage.Coverage(
@@ -767,6 +913,7 @@ def run(output: Path, expected_head: str) -> int:
             status = int(status != 0 or observer.error_latch)
             manifest["counts"] = observer.counts
             manifest["timings"] = observer.timings
+            manifest["groups"] = observer.groups
             manifest["error_latch"] = observer.error_latch
             manifest["telemetry_errors"] = observer.telemetry_errors
         manifest["exit_code"] = status

@@ -3,6 +3,7 @@
 import hashlib
 import json
 import subprocess
+from collections import deque
 from pathlib import Path
 from unittest import mock
 
@@ -11,6 +12,17 @@ import pytest
 from scripts import windows_git_diagnostic as diagnostic
 
 pytestmark = pytest.mark.unit
+QUERY_COMMAND = ["git", "-C", "fixture", "worktree", "list", "--porcelain", "-z"]
+
+
+def force_trace_slots(observer: diagnostic.GitObserver, count: int) -> None:
+    """Force on assignments only in tests of trace storage pressure.
+
+    Args:
+        observer: Collector whose rare trace pressure path is under test.
+        count: Number of controlled assignments; no Git calls are added.
+    """
+    observer.assignment_pairs["worktrees"] = deque([True] * count)
 
 
 def test_attribution_keeps_clock_boundaries_separate() -> None:
@@ -169,7 +181,7 @@ def observer(tmp_path: Path) -> diagnostic.GitObserver:
     return diagnostic.GitObserver(output, staging)
 
 
-def test_late_timeout_after_2048_keeps_command_trace_phase_and_latch(
+def test_late_off_timeout_after_2048_keeps_command_snapshot_phase_and_latch(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """Observe late calls and retain the first timeout after all ordinary/error ring evictions.
@@ -179,10 +191,10 @@ def test_late_timeout_after_2048_keeps_command_trace_phase_and_latch(
         tmp_path: Disposable uploaded trace directory.
     """
     # Inject one late timeout after the former observation cutoff.
-    error = subprocess.TimeoutExpired(["git", "worktree", "list", "--porcelain", "-z"], 2)
+    error = subprocess.TimeoutExpired(QUERY_COMMAND, 2)
 
     def constructor(command: list[str], **kwargs: object) -> mock.MagicMock:
-        """Supply real Trace2 bytes only for the injected late timeout.
+        """Supply the late control-group timeout without enabling any Trace2 target.
 
         Args:
             command: Original command forwarded by the observer.
@@ -196,15 +208,22 @@ def test_late_timeout_after_2048_keeps_command_trace_phase_and_latch(
         process.__exit__.return_value = None
         process.communicate.return_value = ("original", "output")
         if "worktree" in command:
-            trace = Path(kwargs["env"]["GIT_TRACE2_EVENT"])
-            trace.write_text('{"event":"start","time":"1970-01-01T00:01:41Z"}\n')
+            assert kwargs["env"]["GIT_TRACE2_EVENT"] == "0"
+            process.pid = 4242
+            process._handle = 99
+            process.stdout_thread.is_alive.return_value = True
+            process.stderr_thread.is_alive.return_value = False
             process.communicate.side_effect = error
         return process
 
     monkeypatch.setattr(subprocess, "Popen", constructor)
+    api = mock.Mock()
+    api.WaitForSingleObject.return_value = 258
+    monkeypatch.setattr(subprocess, "_winapi", api, raising=False)
     with diagnostic.observe_git(tmp_path) as observed:
         monkeypatch.setattr(observed, "checkpoint", mock.Mock())
         observed.set_context("test_late_timeout", "call")
+        observed.assignment_pairs["worktrees"] = deque([False])
         # Complete more calls than the old cutoff before injecting a real TimeoutExpired instance.
         for index in range(2050):
             with subprocess.Popen(["git", "rev-parse", str(index)]) as process:
@@ -217,7 +236,12 @@ def test_late_timeout_after_2048_keeps_command_trace_phase_and_latch(
         assert first["id"] == 2050
         assert first["command"] == error.cmd
         assert first["nodeid"] == "test_late_timeout" and first["phase"] == "call"
-        assert (tmp_path / first["trace"]).read_text().startswith('{"event":"start"')
+        assert first["trace"] is None and first["trace_group"] == "off"
+        assert first["timeout_observation"]["pid"] == 4242
+        assert first["timeout_observation"]["handle_wait"] == 258
+        assert first["timeout_observation"]["readers"] == {"stdout": True, "stderr": False}
+        api.WaitForSingleObject.assert_called_once_with(99, 0)
+        assert observed.groups["worktrees"]["off"]["timeouts"] == 1
         # Evict both ordinary/error ring copies while retaining the first-failure anchor.
         for index in range(diagnostic.ERROR_LIMIT + diagnostic.LATEST_LIMIT + 2):
             with subprocess.Popen(["git", "nonzero", str(index)]) as process:
@@ -233,7 +257,7 @@ def test_late_timeout_after_2048_keeps_command_trace_phase_and_latch(
             len(observed.retained())
             <= diagnostic.LATEST_LIMIT + diagnostic.SLOW_LIMIT + diagnostic.ERROR_LIMIT + 1
         )
-        assert (tmp_path / first["trace"]).exists()
+        assert not list(tmp_path.glob("*.trace2.jsonl"))
         staging = observed.staging
     assert subprocess.Popen is constructor
     assert not staging.exists()
@@ -285,17 +309,17 @@ def test_creation_and_communication_clocks_exclude_observer_io_and_lock_delay(
         advance(0.25)
         return process
 
-    # A hundred seconds of checkpoint delay must not become attributed process creation time.
+    # Construction and communication end before checkpoint or lock bookkeeping.
     with diagnostic.TimedProcess(constructor, observer, ["git", "status"]) as timed:
         assert timed.record["popen_seconds"] == 0.25
-        assert checkpoint.call_count == 1
-        assert timed.record["popen_start_wall"] > timed.record["observed_start_wall"] + 99
+        assert checkpoint.call_count == 0
+        assert timed.record["popen_start_wall"] == timed.record["observed_start_wall"]
         before = clock["wall"]
         assert timed.communicate(timeout=2) == (None, "original-output")
         assert timed.record["communicate"][-1]["end_wall"] == before + 2
         timed.kill()
-        assert checkpoint.call_count == 1
-    assert checkpoint.call_count == 2
+        assert checkpoint.call_count == 0
+    assert checkpoint.call_count == 0
     assert observer.timings["popen_total"] == 0.25
     assert observer.timings["communicate_total"] == 2
     process.kill.assert_called_once_with()
@@ -330,8 +354,9 @@ def test_trace_slots_rings_and_checkpoint_files_stay_bounded(
         observer: Real collector and actual disposable evidence files.
     """
     monkeypatch.setattr(diagnostic, "ACTIVE_TRACE_LIMIT", 1)
-    first = observer.begin(["git", "status"])
-    second = observer.begin(["git", "status"])
+    force_trace_slots(observer, 3)
+    first = observer.begin(QUERY_COMMAND)
+    second = observer.begin(QUERY_COMMAND)
     assert first["trace"] and second["trace"] is None
     assert observer.counts["started"] == 2 and observer.counts["trace_omitted"] == 1
     # Bound uploaded copies while preserving raw active writers outside the artifact directory.
@@ -350,7 +375,7 @@ def test_trace_slots_rings_and_checkpoint_files_stay_bounded(
     assert (observer.output / "progress.json").exists()
     # Completed trace retention can also hit its bound without stopping timing/error observation.
     monkeypatch.setattr(diagnostic, "MAX_RETAINED_TRACES", 1)
-    third = observer.begin(["git", "worktree", "list"])
+    third = observer.begin(QUERY_COMMAND)
     (observer.staging / third["trace"]).write_text("bounded trace")
     third["popen_seconds"] = 0.1
     observer.finish(third, 0)
@@ -370,7 +395,7 @@ def test_process_errors_cleanup_and_bounded_communication_history(
     """
     monkeypatch.setattr(observer, "checkpoint", mock.Mock())
     error = OSError(5, "creation failed")
-    with pytest.raises(OSError) as caught:
+    with pytest.raises(OSError, match="creation failed") as caught:
         diagnostic.TimedProcess(mock.Mock(side_effect=error), observer, ["git", "status"])
     assert caught.value is error
     assert observer.counts["creation_errors"] == 1
@@ -378,19 +403,22 @@ def test_process_errors_cleanup_and_bounded_communication_history(
     timeout = subprocess.TimeoutExpired("git", 2)
     process.communicate.side_effect = [timeout] + [("out", "err")] * 5
     process.__exit__.side_effect = OSError("cleanup failed")
+    # Exercise communication before isolating the original cleanup error itself.
+    timed = diagnostic.TimedProcess(mock.Mock(return_value=process), observer, ["git", "status"])
+    timed.__enter__()
+    try:
+        with pytest.raises(subprocess.TimeoutExpired) as caught:
+            timed.communicate(timeout=2)
+        assert caught.value is timeout
+        timed.kill()
+        for _ in range(5):
+            assert timed.communicate() == ("out", "err")
+        assert len(timed.record["communicate"]) == 4
+        assert not any("error" in attempt for attempt in timed.record["communicate"])
     # The caller keeps ownership of kill and original cleanup errors.
-    with pytest.raises(OSError, match="cleanup failed"):
-        with diagnostic.TimedProcess(
-            mock.Mock(return_value=process), observer, ["git", "status"]
-        ) as timed:
-            with pytest.raises(subprocess.TimeoutExpired) as caught:
-                timed.communicate(timeout=2)
-            assert caught.value is timeout
-            timed.kill()
-            for _ in range(5):
-                assert timed.communicate() == ("out", "err")
-            assert len(timed.record["communicate"]) == 4
-            assert not any("error" in attempt for attempt in timed.record["communicate"])
+    finally:
+        with pytest.raises(OSError, match="cleanup failed"):
+            timed.__exit__(None, None, None)
     assert observer.error_latch and observer.counts["timeouts"] == 1
     assert observer.counts["communication_errors"] == 1 and observer.counts["cleanup_errors"] == 1
     assert observer.counts["active"] == 0
@@ -410,14 +438,19 @@ def test_non_git_options_and_original_constructor_restored(
     constructor.return_value.returncode = 0
     constructor.return_value.__exit__.return_value = None
     monkeypatch.setattr(subprocess, "Popen", constructor)
-    with pytest.raises(RuntimeError, match="body failed"):
-        with diagnostic.observe_git(tmp_path) as observed:
-            with subprocess.Popen(["git", "status"], env={}):
-                assert set(constructor.call_args.kwargs["env"]) == {"GIT_TRACE2_EVENT"}
-            assert subprocess.Popen(["python", "--version"]) is constructor.return_value
-            assert constructor.call_args.kwargs == {}
-            staging = observed.staging
-            raise RuntimeError("body failed")
+    scope = diagnostic.observe_git(tmp_path)
+    observed = scope.__enter__()
+    try:
+        with subprocess.Popen(["git", "status"], env={}):
+            assert constructor.call_args.kwargs["env"] == dict.fromkeys(
+                diagnostic.TRACE_TARGETS, "0"
+            )
+        assert subprocess.Popen(["python", "--version"]) is constructor.return_value
+        assert constructor.call_args.kwargs == {}
+        staging = observed.staging
+    # Inject the body error at context exit and require that it remains unsuppressed.
+    finally:
+        assert scope.__exit__(RuntimeError, RuntimeError("body failed"), None) is False
     assert subprocess.Popen is constructor
     assert not staging.exists()
 
@@ -561,7 +594,8 @@ def test_checkpoint_io_errors_stay_bounded_and_do_not_replace_process_outcomes(
     assert observer.error_latch and observer.counts["telemetry_errors"] == 10
     assert len(observer.telemetry_errors) == 8
     # Trace-copy failure still removes the completed raw writer and active ownership.
-    record = observer.begin(["git", "status"])
+    force_trace_slots(observer, 1)
+    record = observer.begin(QUERY_COMMAND)
     (observer.staging / record["trace"]).write_bytes(b"trace")
     record["popen_seconds"] = 0.1
     monkeypatch.setattr(observer, "copy_trace", mock.Mock(side_effect=OSError("trace denied")))
@@ -585,8 +619,9 @@ def test_slow_ring_eviction_deletes_unselected_trace_files(
     # Complete enough slow calls to evict early records from every non-error retention ring.
     monkeypatch.setattr(observer, "checkpoint", mock.Mock())
     first_name = None
+    force_trace_slots(observer, diagnostic.LATEST_LIMIT + 2)
     for index in range(diagnostic.LATEST_LIMIT + 2):
-        record = observer.begin(["git", "status", str(index)])
+        record = observer.begin(QUERY_COMMAND)
         if first_name is None:
             first_name = record["trace"]
         (observer.staging / record["trace"]).write_text("trace")
@@ -614,18 +649,22 @@ def test_active_trace_overflow_still_times_process_and_preserves_other_errors(
     monkeypatch.setattr(diagnostic, "ACTIVE_TRACE_LIMIT", 1)
     checkpoint = mock.Mock()
     monkeypatch.setattr(observer, "checkpoint", checkpoint)
-    active = observer.begin(["git", "status"])
+    force_trace_slots(observer, 2)
+    active = observer.begin(QUERY_COMMAND)
     process = mock.MagicMock(returncode=0)
     process.__exit__.return_value = None
     error = OSError("communication failed")
     process.communicate.side_effect = error
     constructor = mock.Mock(return_value=process)
     with diagnostic.TimedProcess(
-        constructor, observer, ["git", "status"], env={"KEEP": "value"}
+        constructor, observer, QUERY_COMMAND, env={"KEEP": "value"}
     ) as timed:
-        assert constructor.call_args.kwargs["env"] == {"KEEP": "value"}
+        assert constructor.call_args.kwargs["env"] == {
+            "KEEP": "value",
+            **dict.fromkeys(diagnostic.TRACE_TARGETS, "0"),
+        }
         before = checkpoint.call_count
-        with pytest.raises(OSError) as caught:
+        with pytest.raises(OSError, match="communication failed") as caught:
             timed.communicate(timeout=2)
         assert caught.value is error
         assert checkpoint.call_count == before
@@ -635,3 +674,214 @@ def test_active_trace_overflow_still_times_process_and_preserves_other_errors(
     assert observer.counts["communication_errors"] == 1
     assert observer.counts["timeouts"] == 0
     assert observer.error_latch
+
+
+def test_query_assignments_are_balanced_reproducible_and_independent(tmp_path: Path) -> None:
+    """Balance each query prefix without duplicates and reproduce it across interleavings.
+
+    Args:
+        tmp_path: Unused paths for observers with checkpoint writes disabled.
+    """
+    # Two collectors see different cross-query order but the same per-query sequence.
+    observers = [diagnostic.GitObserver(tmp_path / str(i), tmp_path / f"raw-{i}") for i in range(2)]
+    sequences = []
+    for index, observer in enumerate(observers):
+        observer.checkpoint = mock.Mock()
+        choices = {query: [] for query in diagnostic.QUERY_TYPES.values()}
+        queries = list(diagnostic.QUERY_TYPES.items())
+        for ordinal in range(20):
+            for arguments, query in queries if index == 0 else reversed(queries):
+                record = observer.begin(["git", "-C", "fixture", *arguments])
+                choices[query].append(record["trace_group"])
+                assert abs(choices[query].count("on") - choices[query].count("off")) <= 1
+                record["popen_seconds"] = 0.1
+                observer.finish(record, 0)
+        assert observer.counts["started"] == observer.counts["finished"] == 80
+        for query in choices:
+            assert choices[query].count("on") == choices[query].count("off") == 10
+            assert observer.groups[query]["on"]["finished"] == 10
+            assert observer.groups[query]["off"]["finished"] == 10
+            assert observer.groups[query]["on"]["popen_total"] == pytest.approx(1)
+        sequences.append(choices)
+    assert sequences[0] == sequences[1]
+    assert len({tuple(values) for values in sequences[0].values()}) > 1
+
+
+@pytest.mark.parametrize("group", ["on", "off", "other"])
+def test_trace_targets_and_expected_absence(
+    monkeypatch: pytest.MonkeyPatch, observer: diagnostic.GitObserver, group: str
+) -> None:
+    """Override inherited Trace2 targets, enabling only the assigned event destination.
+
+    Args:
+        monkeypatch: Scoped process construction replacement.
+        observer: Real bounded collector and trace paths.
+        group: Assigned metadata group or unrelated Git command.
+    """
+    # Explicit inherited targets must never leak into control or unrelated Git calls.
+    inherited = {"KEEP": "value", **dict.fromkeys(diagnostic.TRACE_TARGETS, "inherited-target")}
+    observer.assignment_pairs["worktrees"] = deque([group == "on"])
+    command = ["git", "status"] if group == "other" else QUERY_COMMAND
+    process = mock.MagicMock(returncode=0)
+    process.__exit__.return_value = None
+    process.communicate.return_value = ("stdout", "stderr")
+    constructor = mock.Mock(return_value=process)
+    with diagnostic.TimedProcess(constructor, observer, command, env=inherited) as timed:
+        environment = constructor.call_args.kwargs["env"]
+        assert constructor.call_args.args[0] is command
+        assert environment["KEEP"] == "value"
+        assert environment["GIT_TRACE2"] == environment["GIT_TRACE2_PERF"] == "0"
+        if group == "on":
+            path = observer.staging / timed.record["trace"]
+            assert environment["GIT_TRACE2_EVENT"] == str(path)
+            path.write_text('{"event":"start","time":"1970-01-01T00:01:41Z"}\n')
+        else:
+            assert environment["GIT_TRACE2_EVENT"] == "0" and timed.record["trace"] is None
+        assert timed.communicate(timeout=2) == ("stdout", "stderr")
+    assert all(inherited[target] == "inherited-target" for target in diagnostic.TRACE_TARGETS)
+    records = observer.retained()
+    diagnostic.retain_artifacts(observer.output, records, {})
+    assert records[0]["trace_group"] == group
+    assert records[0]["trace_status"] == ("retained" if group == "on" else "disabled")
+    assert observer.counts["trace_omitted"] == 0 and not observer.error_latch
+
+
+def test_checkpoint_cadence_is_uniform_and_never_per_call(
+    monkeypatch: pytest.MonkeyPatch, observer: diagnostic.GitObserver
+) -> None:
+    """Checkpoint every thirty-two completions, errors and phases equally across groups.
+
+    Args:
+        monkeypatch: Scoped checkpoint boundary replacement.
+        observer: Real aggregate and grouping implementation.
+    """
+    # Successful on/off assignment alone must never trigger a disk checkpoint.
+    checkpoint = mock.Mock()
+    monkeypatch.setattr(observer, "checkpoint", checkpoint)
+    for index in range(64):
+        record = observer.begin(QUERY_COMMAND)
+        assert checkpoint.call_count == index // 32
+        record["popen_seconds"] = 0.1
+        observer.finish(record, 0)
+        assert checkpoint.call_count == (index + 1) // 32
+    observer.set_context("module::test", "call")
+    assert checkpoint.call_count == 3
+    # Error observation remains in memory until original process cleanup has completed.
+    record = observer.begin(QUERY_COMMAND)
+    record["popen_seconds"] = 0.1
+    observer.note_error(record)
+    assert checkpoint.call_count == 3
+    observer.finish(record, 0)
+    assert checkpoint.call_count == 4
+    assert observer.groups["worktrees"]["on"]["started"] - observer.groups["worktrees"]["off"][
+        "started"
+    ] in {-1, 1}
+
+
+def test_timeout_endpoint_precedes_handle_and_thread_snapshot_without_poll(
+    monkeypatch: pytest.MonkeyPatch, observer: diagnostic.GitObserver
+) -> None:
+    """Preserve the original timeout clock while separately timing bounded state observations.
+
+    Args:
+        monkeypatch: Scoped deterministic clock and Windows handle API doubles.
+        observer: Real bounded collector with disk writes replaced.
+    """
+    # Simulated expensive metadata must not inflate the original communicate duration.
+    clock = {"perf": 10.0, "wall": 100.0}
+    order = []
+
+    def advance(label: str, seconds: float, result: object) -> object:
+        """Advance the fake clock and record operation order.
+
+        Args:
+            label: Observed operation name.
+            seconds: Simulated operation duration.
+            result: Original operation return value.
+
+        Returns:
+            The supplied operation result.
+        """
+        order.append(label)
+        clock["perf"] += seconds
+        clock["wall"] += seconds
+        return result
+
+    monkeypatch.setattr(diagnostic.time, "perf_counter", lambda: clock["perf"])
+    monkeypatch.setattr(diagnostic.time, "time", lambda: clock["wall"])
+    checkpoint = mock.Mock()
+    monkeypatch.setattr(observer, "checkpoint", checkpoint)
+    api = mock.Mock()
+    api.WaitForSingleObject.side_effect = lambda *args: advance("handle", 50, 258)
+    monkeypatch.setattr(subprocess, "_winapi", api, raising=False)
+    observer.assignment_pairs["worktrees"] = deque([False])
+    process = mock.MagicMock(pid=123, returncode=None)
+    process._handle = 77
+    process.__exit__.return_value = None
+    process.stdout_thread.is_alive.side_effect = lambda: advance("stdout", 50, True)
+    process.stderr_thread.is_alive.side_effect = lambda: advance("stderr", 50, False)
+    error = subprocess.TimeoutExpired(QUERY_COMMAND, 2)
+
+    def communicate(**kwargs: object) -> None:
+        """Raise the original timeout after two simulated seconds.
+
+        Args:
+            **kwargs: Original timeout options.
+
+        Raises:
+            subprocess.TimeoutExpired: The exact injected original timeout.
+        """
+        advance("communicate", 2, None)
+        raise error
+
+    process.communicate.side_effect = communicate
+    with diagnostic.TimedProcess(mock.Mock(return_value=process), observer, QUERY_COMMAND) as timed:
+        with pytest.raises(subprocess.TimeoutExpired) as caught:
+            timed.communicate(timeout=2)
+        assert caught.value is error
+        snapshot = timed.record["timeout_observation"]
+        assert snapshot["perf"] == 12 and snapshot["wall"] == 102
+        assert snapshot["handle_wait_perf"] == 62
+        assert snapshot["snapshot_end_perf"] == 162 and snapshot["snapshot_seconds"] == 150
+        assert snapshot["pid"] == 123 and snapshot["handle_wait"] == 258
+        assert snapshot["readers"] == {"stdout": True, "stderr": False}
+        assert timed.record["communicate_seconds"] == 2
+        assert checkpoint.call_count == 0
+        assert process.returncode is None
+        process.poll.assert_not_called()
+        process.kill()
+    assert order == ["communicate", "handle", "stdout", "stderr"]
+    api.WaitForSingleObject.assert_called_once_with(77, 0)
+    process.kill.assert_called_once_with()
+    assert observer.groups["worktrees"]["off"]["timeouts"] == 1
+
+
+def test_timeout_snapshot_unavailable_metadata_does_not_replace_original_error(
+    monkeypatch: pytest.MonkeyPatch, observer: diagnostic.GitObserver
+) -> None:
+    """Bound failed handle/thread observations while keeping missing state explicit.
+
+    Args:
+        monkeypatch: Scoped failed Windows handle observation.
+        observer: Real collector used to verify progress-only checkpoint behavior.
+    """
+    # Snapshot failures are metadata, never process polling or replacement exceptions.
+    api = mock.Mock()
+    api.WaitForSingleObject.side_effect = OSError("handle inaccessible")
+    monkeypatch.setattr(subprocess, "_winapi", api, raising=False)
+    process = mock.Mock(pid="unavailable", returncode=None)
+    process._handle = 1
+    process.stdout_thread.is_alive.side_effect = RuntimeError("thread unavailable")
+    process.stderr_thread = None
+    snapshot = diagnostic.timeout_snapshot(process)
+    assert snapshot["pid"] is None
+    assert snapshot["handle_wait_status"] == "failed"
+    assert snapshot["handle_wait_error"]["type"] == "OSError"
+    assert snapshot["readers"]["stdout"]["type"] == "RuntimeError"
+    assert snapshot["readers"]["stderr"] is None
+    assert process.returncode is None
+    process.poll.assert_not_called()
+    # The low-level checkpoint can retain progress without forcing detailed ring output.
+    observer.checkpoint()
+    assert (observer.output / "progress.json").exists()
+    assert not (observer.output / "checkpoint.json").exists()
