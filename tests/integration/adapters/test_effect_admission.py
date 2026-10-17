@@ -206,29 +206,79 @@ def test_unknown_execution_names_actionable_alternative(fresh: tuple[Host, Path]
     assert not (root / ".task").exists()
 
 
-def test_pending_ticket_does_not_block_or_settle_research(fresh: tuple[Host, Path]) -> None:
-    """Keep unrelated research available while an explicit ticket lookup remains pending.
+@pytest.mark.parametrize("kind", ["read", "search", "note", "admin"])
+def test_pending_ticket_does_not_block_or_settle_task_free_work(
+    fresh: tuple[Host, Path], kind: str
+) -> None:
+    """Keep pending lookup guidance and real admission aligned for every native host.
 
     Args:
         fresh: Host and unregistered checkout.
+        kind: Task-free operation with an independently known native contract.
     """
-    # Establish only the explicit Task marker, then retain its exact bytes across research.
+    # Establish only the explicit Task marker and inspect the host's real prompt output.
     host, root = fresh
     prompt = event(host, root, "Read", {})
     prompt.update(
         hook_event_name="beforeSubmitPrompt" if host == "cursor" else "UserPromptSubmit",
         prompt="Task: TEST-1",
     )
-    assert not denied(dispatch(host, prompt))
+    response = dispatch(host, prompt)
+    assert not denied(response)
+    if host == "cursor":
+        # Cursor's prompt contract carries only continue; shared text has unit coverage.
+        assert response == {"continue": True}
+    else:
+        context = response["hookSpecificOutput"]["additionalContext"]
+        assert "remain available while this ticket lookup is pending" in context
+        assert "Before implementation changes, read the exact requested Linear ticket" in context
+        assert "existing approval requirements" in context
     markers = {p.name: p.read_bytes() for p in (root / ".task/.bindings").glob("*.json")}
-    research = event(host, root, "Read", {"file_path": "src/main.py"})
-    assert not denied(dispatch(host, research))
-    research.update(
+    # Exercise inspection, search, ordinary notes and unrelated provider administration.
+    tool, args = {
+        "read": ("Read", {"file_path": "src/main.py"}),
+        "search": ("Grep", {"pattern": "class", "path": "src"}),
+        "note": ("Write", {"file_path": "planning.md", "content": "research notes"}),
+        "admin": (
+            {
+                "codex": "mcp__codex_apps__linear__save_issue",
+                "claude-code": "mcp__linear-server__save_issue",
+                "cursor": "MCP:save_issue",
+            }[host],
+            {"id": "OTHER-2", "priority": 2},
+        ),
+    }[kind]
+    work = event(host, root, tool, args)
+    if kind == "admin" and host == "claude-code":
+        work["mcp_server"] = {"name": "linear-server", "source": "user"}
+    assert not denied(dispatch(host, work))
+    if kind == "admin" and host == "cursor":
+        # Cursor still needs its independent blocking provider-provenance gate.
+        assert not denied(
+            dispatch(
+                host,
+                {
+                    **work,
+                    "hook_event_name": "beforeMCPExecution",
+                    "tool_name": "save_issue",
+                    "tool_input": json.dumps(args),
+                    "mcp_server_name": "linear-server",
+                    "mcp_server_url": "https://mcp.linear.app/mcp",
+                },
+            )
+        )
+    work.update(
         hook_event_name="postToolUse" if host == "cursor" else "PostToolUse",
-        tool_response={"result": "source"},
+        tool_response={"result": "done"},
         tool_output="{}",
     )
-    assert dispatch(host, research) == {}
+    assert dispatch(host, work) == {}
+    assert markers == {p.name: p.read_bytes() for p in (root / ".task/.bindings").glob("*.json")}
+    # Implementation still requires the selected ticket, leaving its marker unchanged.
+    protected = event(host, root, "Write", {"file_path": "src/main.py", "content": "code"})
+    response = dispatch(host, protected)
+    assert denied(response)
+    assert "TICKET_READ_REQUIRED" in json.dumps(response)
     assert markers == {p.name: p.read_bytes() for p in (root / ".task/.bindings").glob("*.json")}
 
 
@@ -877,3 +927,42 @@ def test_codex_verified_pr_reads_need_no_task(tmp_path: Path, operation: str) ->
     foreign = {**pre, "tool_name": f"mcp__codex_apps__foreign_{operation}"}
     assert denied(dispatch("codex", foreign))
     assert not (tmp_path / ".task").exists()
+
+
+@pytest.mark.parametrize("host", ["codex", "claude-code", "cursor"])
+def test_ready_startup_guidance_scopes_packet_retrieval_to_implementation(
+    monkeypatch: pytest.MonkeyPatch, host: Host
+) -> None:
+    """Keep advisory ready context from turning packet retrieval into a task-free gate.
+
+    Args:
+        monkeypatch: Native environment restoration fixture.
+        host: Native adapter identity.
+    """
+    # A real ready binding makes the successful startup wording observable on each host.
+    monkeypatch.delenv("CURSOR_VERSION", raising=False)
+    case = Fixture()
+    case.setUp()
+    try:
+        case.base.update(
+            host=host,
+            coordinator=core.participant_key({"host": host, "session_id": "coordinator"}),
+        )
+        case.create()
+        case.ready()
+        before = case.state()
+        response = dispatch(host, event(host, case.root, "Read", {}, "SessionStart"))
+        context = (
+            response["additional_context"]
+            if host == "cursor"
+            else response["hookSpecificOutput"]["additionalContext"]
+        )
+        assert "For implementation work, retrieve" in context
+        assert (
+            "Research, inspection, search, administration and ordinary notes remain available"
+            in context
+        )
+        assert case.state() == before
+    finally:
+        # Close each native host's isolated store even when its context differs.
+        case.doCleanups()

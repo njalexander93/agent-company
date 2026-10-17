@@ -145,7 +145,9 @@ def test_native_context_reports_readiness_or_bounded_recovery(
         return {"ok": True, "code": "READY"}
 
     monkeypatch.setattr(common.core, "execute", execute)
-    assert "Read the assigned packet" in common.native_context(event(), "cursor")
+    context = common.native_context(event(), "cursor")
+    assert "For implementation work, retrieve the assigned packet" in context
+    assert "ordinary notes remain available" in context
     assert calls == [{"operation": "ready"}]
     monkeypatch.setattr(
         common,

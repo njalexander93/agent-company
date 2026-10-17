@@ -784,8 +784,9 @@ def handle(event: core.JSONObject) -> core.JSONObject:
                 "hookSpecificOutput": {
                     "hookEventName": name,
                     "additionalContext": (
-                        "Task binding checked. Retrieve the permitted packet through the "
-                        "lifecycle read operation."
+                        "Task binding checked. For implementation work, retrieve the permitted "
+                        "packet through the lifecycle read operation. Research, inspection, "
+                        "search, administration and ordinary notes remain available."
                     ),
                 }
             }

@@ -261,8 +261,11 @@ def prompt(event: core.JSONObject, host: str) -> core.JSONObject:
         "hookSpecificOutput": {
             "hookEventName": "UserPromptSubmit",
             "additionalContext": (
-                "Task identity recorded. Read the requested Linear ticket first. "
-                "Then complete scoped workspace setup and verify readiness."
+                "Task identity recorded. Research, inspection, search, administration and "
+                "ordinary notes remain available while this ticket lookup is pending. "
+                "Before implementation changes, read the exact requested Linear ticket, "
+                "then complete scoped workspace setup and verify readiness. Follow the "
+                "contributor procedure's existing approval requirements."
                 + (
                     f" The verified read rebinds this session from {moving}, which stays "
                     f"preserved; a new Task: {moving} line returns to it."
@@ -2287,7 +2290,11 @@ def native_context(event: core.JSONObject, host: str) -> str:
             "Implementation changes require the Task ticket/readiness procedure. "
             + recovery(error.code, host)
         )
-    return "Task binding checked. Read the assigned packet through the lifecycle read operation."
+    return (
+        "Task binding checked. For implementation work, retrieve the assigned packet through "
+        "the lifecycle read operation. Research, inspection, search, administration and "
+        "ordinary notes remain available."
+    )
 
 
 def _recovery_route(code: str, host: str) -> str:
