@@ -23,7 +23,7 @@ jobs:
       github.event.label.name == 'diagnose-windows-git' &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: windows-2025
-    timeout-minutes: 15
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -38,7 +38,7 @@ jobs:
         run: |
           python -c "import subprocess, sys; subprocess.run(['poetry', 'env', 'use', sys.executable], check=True)"
           python scripts/dev.py install
-      - name: Measure Git and run rollover once
+      - name: Measure Git across integration once
         env:
           EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
         run: poetry run python scripts/windows_git_diagnostic.py --expected-head "$EXPECTED_HEAD" --output "$RUNNER_TEMP/windows-git-diagnostic"

@@ -11,7 +11,10 @@ import os
 import platform
 import subprocess
 import sys
+import tempfile
+import threading
 import time
+from collections import deque
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from datetime import datetime
@@ -25,14 +28,27 @@ import pytest
 from nplet.lifecycle import task_workspace as workspace
 
 ROOT = Path(__file__).resolve().parents[1]
-ROLLOVER = (
-    "tests/integration/lifecycle/test_independent_rollover.py::IndependentRolloverTests::"
-    "test_crash_retry_all_publication_boundaries_and_global_chain"
-)
-MAX_RECORDS = 2048
-SAMPLE_COUNT = 400
+INTEGRATION_TARGET = "tests/integration"
+LATEST_LIMIT = 128
+SLOW_LIMIT = 32
+ERROR_LIMIT = 64
+ACTIVE_TRACE_LIMIT = 32
+MAX_RETAINED_TRACES = LATEST_LIMIT + SLOW_LIMIT + ERROR_LIMIT + 1 + ACTIVE_TRACE_LIMIT
+SLOW_SECONDS = 0.5
 MAX_TRACE_BYTES = 65536
 MAX_OUTPUT_BYTES = 1048576
+RETENTION_LIMITS = {
+    "latest": LATEST_LIMIT,
+    "slow": SLOW_LIMIT,
+    "slow_measured_seconds": SLOW_SECONDS,
+    "errors": ERROR_LIMIT,
+    "first_failure": 1,
+    "active_traces": ACTIVE_TRACE_LIMIT,
+    "retained_trace_files": MAX_RETAINED_TRACES,
+    "trace_bytes": MAX_TRACE_BYTES,
+    "communicate_attempts_per_record": 4,
+    "pytest_output_bytes": MAX_OUTPUT_BYTES,
+}
 
 
 def failure(error: Exception) -> dict[str, Any]:
@@ -51,152 +67,475 @@ def failure(error: Exception) -> dict[str, Any]:
     }
 
 
+class GitObserver:
+    """Aggregate every parent Git call while retaining bounded detailed evidence."""
+
+    def __init__(self, output: Path, staging: Path) -> None:
+        """Initialize independent counters, retained rings and the current pytest context.
+
+        Args:
+            output: Uploaded artifact directory.
+            staging: Disposable raw trace directory outside uploaded artifacts.
+        """
+        # Keep permanent totals separate from detail that is intentionally evicted.
+        self.output, self.staging = output, staging
+        self.lock = threading.RLock()
+        self.latest: deque[dict[str, Any]] = deque(maxlen=LATEST_LIMIT)
+        self.slow: deque[dict[str, Any]] = deque(maxlen=SLOW_LIMIT)
+        self.errors: deque[dict[str, Any]] = deque(maxlen=ERROR_LIMIT)
+        self.first_failure: dict[str, Any] | None = None
+        self.error_latch = False
+        self.telemetry_errors: list[dict[str, Any]] = []
+        self.context = {"nodeid": "", "phase": "initialization"}
+        self.active: dict[int, dict[str, Any]] = {}
+        self.saved_traces: set[int] = set()
+        self.counts = dict.fromkeys(
+            (
+                "started",
+                "finished",
+                "active",
+                "failed",
+                "timeouts",
+                "nonzero",
+                "creation_errors",
+                "communication_errors",
+                "cleanup_errors",
+                "latest_evicted",
+                "slow_seen",
+                "slow_evicted",
+                "errors_evicted",
+                "trace_omitted",
+                "trace_retention_omitted",
+                "trace_deleted",
+                "trace_truncated",
+                "telemetry_errors",
+            ),
+            0,
+        )
+        self.timings = dict.fromkeys(
+            ("popen_total", "popen_max", "communicate_total", "communicate_max"), 0.0
+        )
+
+    def retained(self) -> list[dict[str, Any]]:
+        """Return deduplicated bounded details, including the permanent first failure.
+
+        Returns:
+            At most latest + slow + error + first-failure records, ordered by call ID.
+        """
+        # Deduplicate records appearing in several retention categories.
+        records = {
+            record["id"]: record
+            for ring in (self.latest, self.slow, self.errors)
+            for record in ring
+        }
+        if self.first_failure is not None:
+            records[self.first_failure["id"]] = self.first_failure
+        return [records[key] for key in sorted(records)]
+
+    def note_error(self, record: dict[str, Any]) -> None:
+        """Latch a process failure permanently before any later cleanup can succeed.
+
+        Args:
+            record: Call containing the original failure metadata.
+        """
+        # Retain the first error independently of both bounded error and latest rings.
+        self.error_latch = True
+        record["failed"] = True
+        if self.first_failure is None:
+            self.first_failure = record
+
+    def begin(self, command: Any) -> dict[str, Any]:
+        """Count every Git call and allocate a bounded active trace slot when available.
+
+        Args:
+            command: Original Git argument vector.
+
+        Returns:
+            This call's own bounded metadata; timing continues even without a trace slot.
+        """
+        # Capture the active pytest context before the original process constructor runs.
+        with self.lock:
+            identifier = self.counts["started"]
+            self.counts["started"] += 1
+            self.counts["active"] += 1
+            record = {
+                "id": identifier,
+                **self.context,
+                "thread": threading.get_ident(),
+                "command": [str(word)[:512] for word in command[:32]],
+                "command_omitted_words": max(0, len(command) - 32),
+                "observed_start_wall": time.time(),
+                "communicate": [],
+                "communicate_seconds": 0.0,
+                "communicate_attempts": 0,
+            }
+            # Bound raw active traces without stopping timing or error observation.
+            if len(self.active) < ACTIVE_TRACE_LIMIT:
+                record["trace"] = f"git-{identifier:08d}.trace2.jsonl"
+                self.active[identifier] = record
+            else:
+                record["trace"] = None
+                self.counts["trace_omitted"] += 1
+            self.checkpoint(record)
+            return record
+
+    def copy_trace(self, record: dict[str, Any]) -> None:
+        """Copy at most the approved trace prefix into uploaded evidence.
+
+        Args:
+            record: Selected completed or active Git call.
+
+        Raises:
+            OSError: Trace evidence cannot be read or retained.
+        """
+        # A process may not yet have created its trace, or may have failed before exec.
+        name = record.get("trace")
+        if not name:
+            return
+        source = self.staging / name
+        if not source.exists():
+            return
+        # A deletion failure must not permit unbounded creation of uploaded trace files.
+        if record["id"] not in self.saved_traces and len(self.saved_traces) >= MAX_RETAINED_TRACES:
+            self.counts["trace_retention_omitted"] += 1
+            return
+        # Keep raw writers outside uploaded artifacts; uploaded prefixes are always bounded.
+        with source.open("rb") as stream:
+            content = stream.read(MAX_TRACE_BYTES + 1)
+        (self.output / name).write_bytes(content[:MAX_TRACE_BYTES])
+        self.saved_traces.add(record["id"])
+        if len(content) > MAX_TRACE_BYTES and not record.get("trace_truncated"):
+            record["trace_truncated"] = True
+            self.counts["trace_truncated"] += 1
+
+    def checkpoint(self, current: dict[str, Any] | None = None, *, force: bool = False) -> None:
+        """Persist small progress continuously and bounded rings periodically or on error.
+
+        Args:
+            current: Call currently being created, communicated or completed.
+            force: Also retain detailed rings and snapshots of active Trace2 writers.
+        """
+        # A failed telemetry write must not replace the production process's own outcome.
+        with self.lock:
+            try:
+                progress = {
+                    "counts": self.counts,
+                    "timings": self.timings,
+                    "context": self.context,
+                    "error_latch": self.error_latch,
+                    "current": current,
+                    "first_failure": self.first_failure,
+                    "telemetry_errors": self.telemetry_errors,
+                }
+                temporary = self.output / "progress.json.tmp"
+                temporary.write_text(json.dumps(progress), encoding="utf-8")
+                temporary.replace(self.output / "progress.json")
+                # Detailed files remain useful after a job timeout without growing with call count.
+                if force or (self.counts["finished"] and self.counts["finished"] % 32 == 0):
+                    for record in self.active.values():
+                        self.copy_trace(record)
+                    details = {
+                        "records": self.retained(),
+                        "active": list(self.active.values()),
+                        "limits": RETENTION_LIMITS,
+                    }
+                    temporary = self.output / "checkpoint.json.tmp"
+                    temporary.write_text(json.dumps(details), encoding="utf-8")
+                    temporary.replace(self.output / "checkpoint.json")
+            except OSError as error:
+                self.error_latch = True
+                self.counts["telemetry_errors"] += 1
+                if len(self.telemetry_errors) < 8:
+                    self.telemetry_errors.append(failure(error))
+
+    def finish(self, record: dict[str, Any], returncode: int | None = None) -> None:
+        """Aggregate a completed call, select bounded details and remove unselected traces.
+
+        Args:
+            record: Call's complete creation/communication/error metadata.
+            returncode: Original process return code, when a process existed.
+        """
+        # Aggregate every call, including those beyond all detailed retention limits.
+        with self.lock:
+            record["returncode"] = returncode
+            if returncode not in (None, 0):
+                self.note_error(record)
+            self.counts["finished"] += 1
+            self.counts["active"] -= 1
+            self.counts["failed"] += int(bool(record.get("failed")))
+            self.counts["timeouts"] += int(bool(record.get("timed_out")))
+            self.counts["nonzero"] += int(returncode not in (None, 0))
+            self.counts["creation_errors"] += int("creation_error" in record)
+            self.counts["communication_errors"] += record.get("communication_errors", 0)
+            self.counts["cleanup_errors"] += int("cleanup_error" in record)
+            self.timings["popen_total"] += record.get("popen_seconds", 0.0)
+            self.timings["popen_max"] = max(
+                self.timings["popen_max"], record.get("popen_seconds", 0.0)
+            )
+            self.timings["communicate_total"] += record["communicate_seconds"]
+            self.timings["communicate_max"] = max(
+                self.timings["communicate_max"], record["communicate_seconds"]
+            )
+            # Rings may evict details, but never the totals or permanent failure latch.
+            self.counts["latest_evicted"] += int(len(self.latest) == LATEST_LIMIT)
+            self.latest.append(record)
+            if record.get("popen_seconds", 0.0) + record["communicate_seconds"] >= SLOW_SECONDS:
+                self.counts["slow_seen"] += 1
+                self.counts["slow_evicted"] += int(len(self.slow) == SLOW_LIMIT)
+                self.slow.append(record)
+            if record.get("failed"):
+                self.counts["errors_evicted"] += int(len(self.errors) == ERROR_LIMIT)
+                self.errors.append(record)
+            # Copy selected bytes before deleting raw completed traces; prune prior ring evictions.
+            self.active.pop(record["id"], None)
+            try:
+                try:
+                    self.copy_trace(record)
+                finally:
+                    if record.get("trace"):
+                        (self.staging / record["trace"]).unlink(missing_ok=True)
+                selected = {row["id"] for row in self.retained()} | set(self.active)
+                for identifier in self.saved_traces - selected:
+                    (self.output / f"git-{identifier:08d}.trace2.jsonl").unlink(missing_ok=True)
+                    self.saved_traces.remove(identifier)
+                    self.counts["trace_deleted"] += 1
+            except OSError as error:
+                self.error_latch = True
+                self.counts["telemetry_errors"] += 1
+                if len(self.telemetry_errors) < 8:
+                    self.telemetry_errors.append(failure(error))
+            self.checkpoint(record, force=bool(record.get("failed")))
+
+    def set_context(self, nodeid: str, phase: str) -> None:
+        """Checkpoint the currently active pytest test and phase.
+
+        Args:
+            nodeid: Current pytest item identity, or empty outside a test.
+            phase: Collection, setup, call, teardown or session completion.
+        """
+        # Serialize phase changes with the active call and bounded checkpoint snapshots.
+        with self.lock:
+            self.context = {"nodeid": nodeid[:512], "phase": phase[:64]}
+            self.checkpoint(force=True)
+
+
 class TimedProcess:
-    """Delegate a real Git process while separating creation and communication timing."""
+    """Delegate the original Git process while collecting bounded parent-side timing."""
 
     def __init__(
         self,
         constructor: Callable[..., Any],
-        record: dict[str, Any],
-        args: Any,
-        *positional: Any,
+        observer: GitObserver,
+        command: Any,
+        *args: Any,
         **kwargs: Any,
     ) -> None:
-        """Construct the original process without changing arguments or exception behavior.
+        """Measure original construction without changing its arguments or exceptions.
 
         Args:
-            constructor: Original subprocess.Popen implementation.
-            record: Bounded telemetry record owned by the observer.
-            args: Original command passed to Popen.
-            *positional: Remaining original process arguments.
-            **kwargs: Original process options plus this process's Trace2 destination.
+            constructor: Original Popen implementation.
+            observer: Permanent aggregate and bounded detail collector.
+            command: Original Git argument vector.
+            *args: Original positional process options.
+            **kwargs: Original keyword process options.
 
         Raises:
-            Exception: The original process construction fails.
+            Exception: Original process construction fails.
         """
-        # Time process construction separately from any later communicate timeout.
-        self.record = record
-        record["popen_start_wall"] = time.time()
+        # Allocate bounded call metadata before starting the original construction clocks.
+        self.observer = observer
+        self.record = observer.begin(command)
+        # Add Trace2 only when a bounded active slot was allocated.
+        if self.record["trace"]:
+            environment = kwargs.get("env")
+            kwargs["env"] = {
+                **(os.environ if environment is None else environment),
+                "GIT_TRACE2_EVENT": str(observer.staging / self.record["trace"]),
+            }
+        # Start both construction clocks after the observer's own pre-launch checkpoint I/O.
+        self.record["popen_start_wall"] = time.time()
         started = time.perf_counter()
+        ended = None
         try:
-            self.process = constructor(args, *positional, **kwargs)
+            self.process = constructor(command, *args, **kwargs)
         except Exception as error:
-            record["creation_error"] = failure(error)
+            ended = time.perf_counter()
+            with observer.lock:
+                self.record["creation_error"] = failure(error)
+                observer.note_error(self.record)
             raise
         finally:
-            record["popen_seconds"] = time.perf_counter() - started
+            elapsed = (time.perf_counter() if ended is None else ended) - started
+            with observer.lock:
+                self.record["popen_seconds"] = elapsed
+                if "creation_error" in self.record:
+                    observer.finish(self.record)
 
     def communicate(self, *args: Any, **kwargs: Any) -> Any:
-        """Measure each original communicate attempt, including timeout cleanup calls.
+        """Preserve communicate results, timeouts and caller-owned kill/reap behavior.
 
         Args:
             *args: Original communicate positional arguments.
-            **kwargs: Original options, including the unchanged timeout.
+            **kwargs: Original communicate options, including the unchanged timeout.
 
         Returns:
-            The original stdout/stderr pair, never copied into telemetry.
+            The original stdout/stderr pair; telemetry never stores output.
 
         Raises:
-            Exception: The original communicate call fails or times out.
+            Exception: The original communicate call fails.
         """
-        # Preserve each attempt and rethrow the original error so subprocess.run owns cleanup.
+        # End timing before formatting errors or acquiring the observer's telemetry lock.
         attempt: dict[str, Any] = {"timeout": kwargs.get("timeout")}
         started = time.perf_counter()
+        ended = None
         try:
-            result = self.process.communicate(*args, **kwargs)
-            attempt["returncode"] = self.process.returncode
-            return result
+            return self.process.communicate(*args, **kwargs)
         except Exception as error:
+            ended = (time.perf_counter(), time.time())
             attempt["error"] = failure(error)
+            if isinstance(error, subprocess.TimeoutExpired):
+                attempt["timed_out"] = True
             raise
         finally:
-            attempt["seconds"] = time.perf_counter() - started
-            attempt["end_wall"] = time.time()
-            self.record.setdefault("communicate", []).append(attempt)
+            end_perf, end_wall = (time.perf_counter(), time.time()) if ended is None else ended
+            elapsed = end_perf - started
+            with self.observer.lock:
+                attempt.update(seconds=elapsed, end_wall=end_wall)
+                if attempt.get("timed_out"):
+                    self.record["timed_out"] = True
+                self.record["communicate_seconds"] += attempt["seconds"]
+                self.record["communicate_attempts"] += 1
+                self.record["communicate"].append(attempt)
+                del self.record["communicate"][:-4]
+                if "error" in attempt:
+                    self.record["communication_errors"] = (
+                        self.record.get("communication_errors", 0) + 1
+                    )
+                    self.observer.note_error(self.record)
 
     def __enter__(self) -> "TimedProcess":
-        """Enter the original process context and retain the timed communicate surface.
+        """Enter the original process context and return the timed communication surface.
 
         Returns:
-            This delegating process wrapper.
+            This delegating wrapper.
         """
         self.process.__enter__()
         return self
 
     def __exit__(self, *args: Any) -> Any:
-        """Delegate process reaping and pipe cleanup to the original context manager.
+        """Preserve original cleanup errors and aggregate the call after reaping.
 
         Args:
             *args: Original exception context.
 
         Returns:
-            The original context manager's result.
+            The original context manager result.
+
+        Raises:
+            Exception: Original pipe cleanup or process reaping fails.
         """
-        return self.process.__exit__(*args)
+        # Let the original context reap the process before committing diagnostics to disk.
+        try:
+            return self.process.__exit__(*args)
+        except Exception as error:
+            with self.observer.lock:
+                self.record["cleanup_error"] = failure(error)
+                self.observer.note_error(self.record)
+            raise
+        finally:
+            self.observer.finish(self.record, self.process.returncode)
 
     def __getattr__(self, name: str) -> Any:
-        """Expose unchanged process attributes such as kill, poll, args and returncode.
+        """Expose original process properties and caller-owned kill/poll/wait methods.
 
         Args:
-            name: Original process attribute requested by subprocess.run.
+            name: Requested original process attribute.
 
         Returns:
-            The original attribute.
+            The original attribute unchanged.
         """
         return getattr(self.process, name)
 
 
 @contextmanager
-def observe_git(output: Path, records: list[dict[str, Any]], phase: list[str]) -> Iterator[None]:
-    """Time Git Popen calls only and restore subprocess construction on every exit.
+def observe_git(output: Path) -> Iterator[GitObserver]:
+    """Observe every parent Git call, restoring Popen and deleting raw staging on exit.
 
     Args:
-        output: Dedicated artifact directory for per-process Trace2 files.
-        records: Bounded process records appended by this observer.
-        phase: One mutable label identifying the current independent sample or test.
+        output: Dedicated uploaded artifact directory.
 
     Yields:
-        Control with the delegating Git process observer active.
+        Aggregate observer and bounded selected process evidence.
     """
     original = subprocess.Popen
+    # Raw files are never uploaded unbounded; only selected prefixes enter output.
+    with tempfile.TemporaryDirectory(prefix="nplet-git-trace-") as directory:
+        observer = GitObserver(output, Path(directory))
 
-    def popen(args: Any, *positional: Any, **kwargs: Any) -> Any:
-        """Wrap bounded Git calls while leaving all other process launches unchanged.
+        def popen(command: Any, *args: Any, **kwargs: Any) -> Any:
+            """Observe all Git calls without changing non-Git process construction.
+
+            Args:
+                command: Original command or shell string.
+                *args: Original positional options.
+                **kwargs: Original keyword options.
+
+            Returns:
+                A timed Git wrapper or unchanged non-Git process.
+            """
+            # Retention limits never bypass timing or error detection for later Git calls.
+            if (
+                isinstance(command, (list, tuple))
+                and command
+                and Path(str(command[0])).name.lower() in {"git", "git.exe"}
+            ):
+                return TimedProcess(original, observer, command, *args, **kwargs)
+            return original(command, *args, **kwargs)
+
+        with mock.patch.object(subprocess, "Popen", popen):
+            try:
+                yield observer
+            finally:
+                observer.checkpoint(force=True)
+
+
+class PhasePlugin:
+    """Tag parent Git calls with the active pytest node and phase without altering outcomes."""
+
+    def __init__(self, observer: GitObserver) -> None:
+        """Bind the experiment's parent-process observer.
 
         Args:
-            args: Original command, normally an argument list.
-            *positional: Original Popen positional options.
-            **kwargs: Original Popen keyword options.
-
-        Returns:
-            A timed Git process or the original non-Git process.
+            observer: Collector whose current test context will be updated.
         """
-        # Bound telemetry and never rewrite non-Git commands or shell strings.
-        if (
-            not isinstance(args, (list, tuple))
-            or not args
-            or Path(str(args[0])).name.lower() not in {"git", "git.exe"}
-            or len(records) >= MAX_RECORDS
-        ):
-            return original(args, *positional, **kwargs)
-        # Assign a unique trace destination without changing other supplied environment values.
-        trace = output / f"git-{len(records):04d}.trace2.jsonl"
-        record = {
-            "phase": phase[0],
-            "command": [str(word)[:512] for word in args],
-            "trace": trace.name,
-        }
-        records.append(record)
-        environment = kwargs.get("env")
-        kwargs["env"] = {
-            **(os.environ if environment is None else environment),
-            "GIT_TRACE2_EVENT": str(trace),
-        }
-        return TimedProcess(original, record, args, *positional, **kwargs)
+        self.observer = observer
 
-    # Patch only during this diagnostic run; original process ownership remains authoritative.
-    with mock.patch.object(subprocess, "Popen", popen):
-        yield
+    @pytest.hookimpl(tryfirst=True)
+    def pytest_runtest_setup(self, item: pytest.Item) -> None:
+        """Checkpoint setup context before fixture setup.
+
+        Args:
+            item: Test whose setup is starting.
+        """
+        self.observer.set_context(item.nodeid, "setup")
+
+    @pytest.hookimpl(tryfirst=True)
+    def pytest_runtest_call(self, item: pytest.Item) -> None:
+        """Checkpoint call context before the test body.
+
+        Args:
+            item: Test whose body is starting.
+        """
+        self.observer.set_context(item.nodeid, "call")
+
+    @pytest.hookimpl(tryfirst=True)
+    def pytest_runtest_teardown(self, item: pytest.Item) -> None:
+        """Checkpoint teardown context before fixture cleanup.
+
+        Args:
+            item: Test whose teardown is starting.
+        """
+        self.observer.set_context(item.nodeid, "teardown")
 
 
 def timing_attribution(record: dict[str, Any], events: list[dict[str, Any]]) -> dict[str, Any]:
@@ -213,7 +552,9 @@ def timing_attribution(record: dict[str, Any], events: list[dict[str, Any]]) -> 
     attempts = record.get("communicate", [])
     result = {
         "popen_seconds": record["popen_seconds"],
-        "communicate_seconds": sum(attempt["seconds"] for attempt in attempts),
+        "communicate_seconds": record.get(
+            "communicate_seconds", sum(attempt["seconds"] for attempt in attempts)
+        ),
     }
     starts = [event for event in events if event.get("event") == "start"]
     exits = [event for event in events if event.get("event") in {"exit", "atexit"}]
@@ -276,42 +617,6 @@ def checkout_identity() -> dict[str, Any]:
     }
 
 
-def run_samples(records: list[dict[str, Any]], phase: list[str]) -> None:
-    """Run bounded repository discoveries, stopping at the first failure without retrying.
-
-    Args:
-        records: Per-sample results, retaining every failure without retries.
-        phase: Mutable instrumentation label.
-    """
-    # Load the checkout's test support when invoked as a script outside pytest's import setup.
-    sys.path.insert(0, str(ROOT))
-    from tests.support import Fixture
-
-    # Register fixture cleanup even if its initial Git or lifecycle setup fails.
-    fixture = Fixture()
-    try:
-        phase[0] = "sample-fixture-setup"
-        fixture.setUp()
-        for index in range(SAMPLE_COUNT):
-            phase[0] = f"repository-sample-{index:02d}"
-            started = time.perf_counter()
-            sample: dict[str, Any] = {"index": index}
-            try:
-                root, common, trees = workspace.repository(fixture.root)
-                sample.update(root=str(root), common=str(common), worktrees=len(trees), ok=True)
-            except Exception as error:
-                sample.update(ok=False, error=failure(error))
-            finally:
-                sample["seconds"] = time.perf_counter() - started
-                records.append(sample)
-            # Preserve the failed sample and leave the independent rollover run eligible.
-            if not sample["ok"]:
-                break
-    # Reap and remove only the fixture's own disposable repositories.
-    finally:
-        fixture.doCleanups()
-
-
 def retain_artifacts(output: Path, records: list[dict[str, Any]], manifest: dict[str, Any]) -> None:
     """Bound raw artifacts, attach Trace2 attribution and write a hashed final manifest.
 
@@ -335,7 +640,7 @@ def retain_artifacts(output: Path, records: list[dict[str, Any]], manifest: dict
             truncated.append(path.name)
     # Retain Git start/exit/atexit facts without inventing absent timing observations.
     for record in records:
-        trace = output / record["trace"]
+        trace = output / (record.get("trace") or "uncollected.trace2.jsonl")
         events = []
         if trace.exists():
             for line in trace.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -372,7 +677,7 @@ def run(output: Path, expected_head: str) -> int:
         expected_head: Exact pull-request head SHA selected by the workflow event.
 
     Returns:
-        Zero only when every sample, the single rollover test and checkout verification succeed.
+        Zero only when the integration suite, every observed Git call and checkout checks succeed.
 
     Raises:
         OSError: The artifact directory cannot be created or written.
@@ -383,16 +688,23 @@ def run(output: Path, expected_head: str) -> int:
     if output.is_relative_to(ROOT):
         raise ValueError("Diagnostic output must be outside the checkout")
     output.mkdir(parents=True, exist_ok=False)
-    processes: list[dict[str, Any]] = []
-    samples: list[dict[str, Any]] = []
-    phase = ["initialization"]
+    observer: GitObserver | None = None
     manifest: dict[str, Any] = {
         "expected_head": expected_head,
         "diagnostic_only": True,
         "python": sys.version,
         "platform": platform.platform(),
-        "sample_count": SAMPLE_COUNT,
-        "rollover": ROLLOVER,
+        "target": INTEGRATION_TARGET,
+        "observed_processes": "parent Git calls only; child-process Git is not instrumented",
+        "exit_semantics": (
+            "Git nonzero statuses include intentional probes; diagnostic exit is not "
+            "acceptance or timeout reproduction"
+        ),
+        "instrumentation_caveat": (
+            "Trace2 and checkpoint work can alter suite scheduling. Constructor and communicate "
+            "segments exclude observer checkpoint I/O; their sum is not total parent elapsed."
+        ),
+        "retention_limits": RETENTION_LIMITS,
         "errors": [],
     }
     collector = coverage.Coverage(
@@ -415,55 +727,50 @@ def run(output: Path, expected_head: str) -> int:
         manifest["tools"] = {
             name: importlib.metadata.version(name) for name in ("coverage", "pytest", "pytest-cov")
         }
-        # Use the repository's real ctrace/subprocess coverage settings for samples and one test.
+        # Use the repository's real ctrace/subprocess coverage settings for the integration suite.
         collector.start()
         manifest["coverage_core"] = collector.get_option("run:core")
         manifest["active_tracer"] = type(sys.gettrace()).__name__
-        with observe_git(output, processes, phase):
-            try:
-                run_samples(samples, phase)
-            except Exception as error:
-                manifest["errors"].append({"phase": phase[0], **failure(error)})
-            phase[0] = "rollover-test"
+        with observe_git(output) as observer:
+            observer.set_context("", "collection")
             with (output / "pytest-output.txt").open("w", encoding="utf-8") as stream:
                 with redirect_stdout(stream), redirect_stderr(stream):
-                    manifest["pytest_exit"] = int(pytest.main([ROLLOVER, "--no-cov", "-q"]))
+                    manifest["pytest_exit"] = int(
+                        pytest.main(
+                            [INTEGRATION_TARGET, "--no-cov", "-q"], plugins=[PhasePlugin(observer)]
+                        )
+                    )
+            observer.set_context("", "session-finished")
         collector.stop()
         collector.save()
         # Verify candidate bytes after measurement; diagnostics are never acceptance receipts.
         after = checkout_identity()
         manifest["after"] = after
         manifest["checkout_unchanged"] = before == after
-        # An expected-failure assertion can mask a Git fault; retain that fault as run failure.
-        manifest["process_failures"] = [
-            index
-            for index, record in enumerate(processes)
-            if record.get("creation_error")
-            or any(
-                "error" in attempt or attempt.get("returncode", 0) != 0
-                for attempt in record.get("communicate", [])
-            )
-        ]
+        # Ring eviction and expected-failure assertions never clear a recorded Git fault.
         status = int(
             not (
                 before == after
-                and len(samples) == SAMPLE_COUNT
-                and all(s["ok"] for s in samples)
                 and manifest["pytest_exit"] == 0
+                and not observer.error_latch
                 and not manifest["errors"]
-                and not manifest["process_failures"]
-                and len(processes) < MAX_RECORDS
             )
         )
     except Exception as error:
-        manifest["errors"].append({"phase": phase[0], **failure(error)})
+        manifest["errors"].append({"phase": "diagnostic-run", **failure(error)})
     # Always restore coverage and retain whatever evidence exists after an experimental failure.
     finally:
         collector.stop()
         collector.save()
+        if observer is not None:
+            observer.checkpoint(force=True)
+            status = int(status != 0 or observer.error_latch)
+            manifest["counts"] = observer.counts
+            manifest["timings"] = observer.timings
+            manifest["error_latch"] = observer.error_latch
+            manifest["telemetry_errors"] = observer.telemetry_errors
         manifest["exit_code"] = status
-        manifest["samples"] = samples
-        retain_artifacts(output, processes, manifest)
+        retain_artifacts(output, observer.retained() if observer is not None else [], manifest)
     return status
 
 
