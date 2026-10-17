@@ -1078,6 +1078,161 @@ def bounded_export(command: list[str], scratch: Path) -> dict[str, Any]:
     return result
 
 
+def event_structure(element: ET.Element) -> dict[str, Any]:
+    """Inventory bounded payload shapes without retaining payload or attribute values.
+
+    Args:
+        element: One private XML event; RenderingInfo and its values are excluded.
+
+    Returns:
+        Container/name/count/depth/binary-length metadata with explicit truncation counters.
+    """
+    # Select payload containers only; arbitrary display strings never enter the inventory.
+    payloads = [
+        child
+        for child in element
+        if child.tag.rsplit("}", 1)[-1] in {"EventData", "UserData", "Binary"}
+    ]
+    names: set[str] = set()
+    attributes: set[str] = set()
+    binary: list[dict[str, Any]] = []
+    nodes = 0
+    depth = 0
+    omitted_names = 0
+    binary_omitted = 0
+    stack = [(payload, 1) for payload in payloads]
+    while stack:
+        node, level = stack.pop()
+        nodes += 1
+        depth = max(depth, level)
+        # Bound names independently from XML size; count every truncated observation.
+        for collection, candidates in (
+            (names, [node.tag.rsplit("}", 1)[-1]]),
+            (attributes, [key.rsplit("}", 1)[-1] for key in node.attrib]),
+        ):
+            for name in candidates:
+                if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", name):
+                    if name in collection or len(collection) < 32:
+                        collection.add(name)
+                    else:
+                        omitted_names += 1
+        if node.tag.rsplit("}", 1)[-1] == "Binary":
+            # Inspect encoding shape/length only; never decode or publish binary bytes.
+            text = node.text or ""
+            length = sum(not char.isspace() for char in text)
+            shape, decoded = "other", None
+            if not length:
+                shape, decoded = "empty", 0
+            elif (
+                all(char in "0123456789abcdefABCDEF" or char.isspace() for char in text)
+                and length % 2 == 0
+            ):
+                shape, decoded = "hex", length // 2
+            elif re.fullmatch(r"[A-Za-z0-9+/\s]*={0,2}\s*", text) and length % 4 == 0:
+                shape = "base64"
+                decoded = length // 4 * 3 - len(text.rstrip()) + len(text.rstrip().rstrip("="))
+            if len(binary) < 8:
+                binary.append(
+                    {"encoding_shape": shape, "encoded_chars": length, "decoded_bytes": decoded}
+                )
+            else:
+                binary_omitted += 1
+        stack.extend((child, level + 1) for child in node)
+    return {
+        "containers": [child.tag.rsplit("}", 1)[-1] for child in payloads][:3] or ["absent"],
+        "container_omitted": max(0, len(payloads) - 3),
+        "elements": sorted(names),
+        "attributes": sorted(attributes),
+        "element_count": nodes,
+        "max_depth": depth,
+        "name_overflow_observations": omitted_names,
+        "binary_present": bool(binary) or binary_omitted > 0,
+        "binary": binary,
+        "binary_omitted": binary_omitted,
+    }
+
+
+def compare_exports(normal: Path, best_effort: Path) -> dict[str, Any]:
+    """Compare bounded class/time/occurrence keys without using best-effort data as proof.
+
+    Args:
+        normal: Private normal tracerpt XML.
+        best_effort: Separate private XML from the same ETL using tracerpt -lr.
+
+    Returns:
+        Bounded field-availability examples, aggregate matching counts and explicit overflow.
+
+    Raises:
+        ValueError: An export exceeds parsing bounds.
+        OSError: An export cannot be read.
+    """
+    # Match only explicit validated classes and numeric timestamps; never guess from payloads.
+    exports = []
+    overflow = []
+    invalid = []
+    for path in (normal, best_effort):
+        keys: dict[tuple[Any, ...], list[str]] = {}
+        occurrences: dict[tuple[Any, ...], int] = {}
+        omitted = missing = 0
+        for record in scheduling_events(path):
+            schema = record["schema"]
+            if schema.get("class_guid", "unknown") == "unknown" or "event_time_ns" not in record:
+                missing += 1
+                continue
+            if len(keys) >= SANITIZED_LIMIT:
+                omitted += 1
+                continue
+            base = (
+                schema["class_guid"],
+                schema["version"],
+                schema["opcode"],
+                record["event_time_ns"],
+            )
+            occurrence = occurrences.get(base, 0)
+            occurrences[base] = occurrence + 1
+            keys[(*base, occurrence)] = schema["fields"]
+        exports.append(keys)
+        overflow.append(omitted)
+        invalid.append(missing)
+    # Keep only class/time/schema differences; unrelated process/thread values never enter keys.
+    left, right = exports
+    shared = left.keys() & right.keys()
+    changed = [key for key in sorted(shared) if left[key] != right[key]]
+    gaps = []
+    if any(overflow):
+        gaps.append("comparison-key-limit")
+    if left.keys() != right.keys():
+        gaps.append("event-key-mismatch")
+    if changed:
+        gaps.append("field-availability-difference")
+    return {
+        "gaps": gaps,
+        "provenance": "normal-versus-best-effort-not-proof",
+        "key_limit": SANITIZED_LIMIT,
+        "normal_keys": len(left),
+        "best_effort_keys": len(right),
+        "matched": len(shared),
+        "normal_only": len(left.keys() - right.keys()),
+        "best_effort_only": len(right.keys() - left.keys()),
+        "field_differences": len(changed),
+        "overflow_events": overflow,
+        "missing_key_events": invalid,
+        "examples": [
+            {
+                "class_guid": key[0],
+                "version": key[1],
+                "opcode": key[2],
+                "time_ns": key[3],
+                "occurrence": key[4],
+                "normal_fields": left[key],
+                "best_effort_fields": right[key],
+            }
+            for key in changed[:32]
+        ],
+        "examples_omitted": max(0, len(changed) - 32),
+    }
+
+
 def scheduling_events(path: Path) -> Iterator[dict[str, Any]]:
     """Stream private XML into strictly typed known schema fields or structural metadata.
 
@@ -1088,7 +1243,7 @@ def scheduling_events(path: Path) -> Iterator[dict[str, Any]]:
         Known numeric fields, structural schemas or fixed decode failure codes/field names.
 
     Raises:
-        ValueError: XML size or event/field bounds are invalid.
+        ValueError: XML size or event-count bounds are invalid.
         OSError: Private export cannot be read.
     """
     # Reject oversized exports and entity declarations before parsing any event payload.
@@ -1115,22 +1270,50 @@ def scheduling_events(path: Path) -> Iterator[dict[str, Any]]:
             children = {child.tag.rsplit("}", 1)[-1]: child for child in element}
             system = children.get("System")
             data = children.get("EventData")
-            # UserData is a different export layout; inventory names but never infer its values.
-            fields = [] if data is None else list(data)
-            if len(fields) > 64:
-                raise ValueError("event-field-limit")
+            # Keep field names and payload shape, never arbitrary user/display values.
+            field_count = 0 if data is None else len(data)
+            fields = [] if data is None else list(data[:64])
             names = [field.get("Name", "") for field in fields]
             structural: dict[str, Any] = {
                 "fields": sorted(
                     {name for name in names if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", name)}
-                )[:32]
+                )[:32],
+                "field_count": field_count,
+                "field_overflow": max(0, field_count - 32),
+                "shape": event_structure(element),
             }
             header = (
                 {} if system is None else {child.tag.rsplit("}", 1)[-1]: child for child in system}
             )
             provider = header.get("Provider")
-            guid = "" if provider is None else provider.get("Guid", "").strip("{}").lower()
-            structural["provider"] = guid if re.fullmatch(r"[0-9a-f-]{36}", guid) else "unknown"
+            provider_guid = "" if provider is None else provider.get("Guid", "").strip("{}").lower()
+            guid_pattern = r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}"
+            structural["provider"] = (
+                provider_guid if re.fullmatch(guid_pattern, provider_guid) else "unknown"
+            )
+            # Classic event class comes only from the namespaced ExtendedTracingInfo.EventGuid.
+            class_nodes = [
+                node
+                for child in element
+                if child.tag
+                in {
+                    "{http://schemas.microsoft.com/win/2004/08/events/trace}ExtendedTracingInfo",
+                    "{https://schemas.microsoft.com/win/2004/08/events/trace}ExtendedTracingInfo",
+                }
+                for node in child
+                if node.tag == child.tag.replace("ExtendedTracingInfo", "EventGuid")
+            ]
+            guid = (
+                (class_nodes[0].text or "").strip().strip("{}").lower()
+                if len(class_nodes) == 1
+                else ""
+            )
+            guid = guid if re.fullmatch(guid_pattern, guid) else "unknown"
+            structural["class_guid"] = guid
+            for name in ("EventID", "Task"):
+                node = header.get(name)
+                value = "" if node is None else node.text or ""
+                structural[name] = int(value) if re.fullmatch(r"\d{1,5}", value) else -1
             version = header.get("Version")
             opcode = header.get("Opcode")
             ver = (
@@ -1164,10 +1347,26 @@ def scheduling_events(path: Path) -> Iterator[dict[str, Any]]:
             # A schema is supported only with every documented field and a unique payload mapping.
             known = (
                 bool(allowed)
+                and field_count <= 64
                 and all(name in values for name in allowed)
                 and len(names) == len(set(names))
             )
             record: dict[str, Any] = {"schema": structural, "known": known}
+            timestamp = header.get("TimeCreated")
+            stamp = "" if timestamp is None else timestamp.get("SystemTime", "")
+            match = re.fullmatch(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d{1,9}))?Z", stamp)
+            if match is not None:
+                try:
+                    seconds = int(
+                        datetime.fromisoformat(match[1]).replace(tzinfo=timezone.utc).timestamp()
+                    )
+                    record["event_time_ns"] = seconds * 1000000000 + int(
+                        (match[2] or "").ljust(9, "0")
+                    )
+                except ValueError:
+                    pass
+            if field_count > 64:
+                record["decode_error"] = {"code": "field-limit", "field": "XML"}
             if known:
                 try:
                     timestamp = header.get("TimeCreated")
@@ -1213,6 +1412,11 @@ def scheduling_events(path: Path) -> Iterator[dict[str, Any]]:
                         "schema": structural,
                         "known": False,
                         "decode_error": {"code": error_code, "field": error_field},
+                        **(
+                            {"event_time_ns": record["event_time_ns"]}
+                            if "event_time_ns" in record
+                            else {}
+                        ),
                     }
             yield record
             root.clear()
@@ -1245,13 +1449,35 @@ def decode_scheduling(path: Path, query: dict[str, Any]) -> dict[str, Any]:
     process_events: dict[int, list[tuple[int, int]]] = {parent: [], git: []}
     thread_events: dict[int, list[tuple[int, int, int]]] = {}
     schemas: list[dict[str, Any]] = []
+    schema_counts: list[int] = []
+    schema_overflow_events = 0
+    schema_priority_evictions = 0
     unknown = 0
     decode_errors: list[dict[str, Any]] = []
     error_count = 0
     for record in scheduling_events(path):
         schema = record["schema"]
-        if schema not in schemas and len(schemas) < 16:
+        if schema in schemas:
+            schema_counts[schemas.index(schema)] += 1
+        elif len(schemas) < 16:
             schemas.append(schema)
+            schema_counts.append(1)
+        else:
+            # Prioritize explicit target classes but account for every omitted schema event.
+            replacement = next(
+                (
+                    index
+                    for index, old in enumerate(schemas)
+                    if old.get("class_guid") not in {PROCESS_GUID, THREAD_GUID}
+                ),
+                None,
+            )
+            if schema.get("class_guid") in {PROCESS_GUID, THREAD_GUID} and replacement is not None:
+                schema_overflow_events += schema_counts[replacement]
+                schemas[replacement], schema_counts[replacement] = schema, 1
+                schema_priority_evictions += 1
+            else:
+                schema_overflow_events += 1
         if "decode_error" in record:
             error_count += 1
             if len(decode_errors) < 32:
@@ -1261,11 +1487,11 @@ def decode_scheduling(path: Path, query: dict[str, Any]) -> dict[str, Any]:
             unknown += 1
             continue
         values, op, stamp = record["values"], schema["opcode"], record["time_ns"]
-        if schema["provider"] == PROCESS_GUID and values["ProcessId"] in process_events:
+        if schema.get("class_guid") == PROCESS_GUID and values["ProcessId"] in process_events:
             process_events[values["ProcessId"]].append((op, stamp))
             if len(process_events[values["ProcessId"]]) > 8:
                 raise ValueError("target-process-lifetime-limit")
-        if schema["provider"] == THREAD_GUID and op in (1, 2, 3, 4):
+        if schema.get("class_guid") == THREAD_GUID and op in (1, 2, 3, 4):
             tid, pid = values["TThreadId"], values["ProcessId"]
             if tid in tids or pid == git:
                 thread_events.setdefault(tid, []).append((op, stamp, pid))
@@ -1308,7 +1534,7 @@ def decode_scheduling(path: Path, query: dict[str, Any]) -> dict[str, Any]:
         if not record["known"] or not start <= record["time_ns"] <= end:
             continue
         schema, values = record["schema"], record["values"]
-        op, provider = schema["opcode"], schema["provider"]
+        op, provider = schema["opcode"], schema.get("class_guid")
         target_tids = {
             tid
             for tid, (born, dead, _) in thread_windows.items()
@@ -1367,6 +1593,9 @@ def decode_scheduling(path: Path, query: dict[str, Any]) -> dict[str, Any]:
         gaps.append("sanitized-record-limit")
     return {
         "schemas": schemas,
+        "schema_counts": schema_counts,
+        "schema_overflow_events": schema_overflow_events,
+        "schema_priority_evictions": schema_priority_evictions,
         "decode_errors": decode_errors,
         "decode_error_count": error_count,
         "unknown_events": unknown,
@@ -1434,6 +1663,25 @@ def wpr_capability(output: Path, expected_head: str, scheduling: bool = False) -
                     or powershell is None
                 ):
                     raise ValueError("Native Windows WPR/tracerpt/version tools unavailable")
+                optional_tools = {}
+                if scheduling:
+                    # Discover existing standard WPT tools; preserve missing paths as null.
+                    for tool in ("xperf", "wpaexporter"):
+                        locations = [
+                            Path(root)
+                            / "Windows Kits"
+                            / "10"
+                            / "Windows Performance Toolkit"
+                            / f"{tool}.exe"
+                            for root in (
+                                os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+                                os.environ.get("ProgramFiles", r"C:\Program Files"),
+                            )
+                        ]
+                        optional_tools[tool] = shutil.which(f"{tool}.exe") or next(
+                            (str(path) for path in locations if path.is_file()), None
+                        )
+                    manifest["optional_tools"] = optional_tools
                 # Query only executable versions and token elevation.
                 quoted_wpr = wpr.replace("'", "''")
                 quoted_tracerpt = tracerpt.replace("'", "''")
@@ -1443,7 +1691,14 @@ def wpr_capability(output: Path, expected_head: str, scheduling: bool = False) -
                     "[Security.Principal.WindowsBuiltInRole]::Administrator);"
                     f"wpr=(Get-Item -LiteralPath '{quoted_wpr}').VersionInfo.FileVersion;"
                     f"tracerpt=(Get-Item -LiteralPath '{quoted_tracerpt}').VersionInfo.FileVersion"
-                    "}|ConvertTo-Json -Compress"
+                    + "".join(
+                        f";{tool}=(Get-Item -LiteralPath '{path.replace(chr(39), chr(39) * 2)}')"
+                        ".VersionInfo.FileVersion"
+                        if path is not None
+                        else f";{tool}=$null"
+                        for tool, path in optional_tools.items()
+                    )
+                    + "}|ConvertTo-Json -Compress"
                 )
                 commands["versions_admin"] = capability_command(
                     [powershell, "-NoProfile", "-NonInteractive", "-Command", version_script], 15
@@ -1471,6 +1726,10 @@ def wpr_capability(output: Path, expected_head: str, scheduling: bool = False) -
                     raise ValueError("Existing or ambiguous WPR recording state; recording skipped")
                 versions = json.loads(commands["versions_admin"]["stdout"])
                 manifest["versions_admin"] = versions
+                if scheduling:
+                    manifest["optional_tool_versions"] = {
+                        name: versions.get(name) for name in optional_tools
+                    }
                 if not versions["admin"]:
                     raise ValueError("Administrative recording capability unavailable")
                 if any(
@@ -1549,6 +1808,42 @@ def wpr_capability(output: Path, expected_head: str, scheduling: bool = False) -
                         # Export payload values and parser exception text are never published.
                         report["decoder_error"] = type(error).__name__
                         report["gaps"].append("private-xml-decode")
+                    manifest["export_provenance"] = {
+                        "mode": "normal",
+                        "etl_sha256": manifest["etl"]["sha256"],
+                    }
+                    lr_xml = scratch / "events-best-effort.xml"
+                    best: dict[str, Any] = {
+                        "provenance": "tracerpt-lr-best-effort-not-proof",
+                        "etl_sha256": manifest["etl"]["sha256"],
+                        "report": {"gaps": []},
+                    }
+                    manifest["best_effort"] = best
+                    best["export"] = bounded_export(
+                        [tracerpt, str(etl), "-o", str(lr_xml), "-of", "XML", "-lr", "-y"], scratch
+                    )
+                    try:
+                        if best["export"].get("returncode") != 0 or "error" in best["export"]:
+                            raise ValueError("private-best-effort-export-failed")
+                        with lr_xml.open("rb") as stream:
+                            best["xml"] = {
+                                "bytes": lr_xml.stat().st_size,
+                                "sha256": hashlib.file_digest(stream, "sha256").hexdigest(),
+                            }
+                        best["report"].update(decode_scheduling(lr_xml, commands["query"]))
+                    except (OSError, ValueError, KeyError) as error:
+                        best["report"].update(decoder_error=type(error).__name__)
+                        best["report"]["gaps"].append("private-best-effort-decode")
+                    # Compare independent exports only after retaining each original outcome.
+                    try:
+                        if "xml" not in manifest or "xml" not in best:
+                            raise ValueError("comparison-unavailable")
+                        manifest["comparison"] = compare_exports(xml, lr_xml)
+                    except (OSError, ValueError) as error:
+                        manifest["comparison"] = {
+                            "gaps": ["comparison-unavailable"],
+                            "error_type": type(error).__name__,
+                        }
                     # Confirm actual collector settings and both recorder loss counters.
                     collector = commands["collectors"].get("stdout", "")
                     profile_text = commands["cpu_profile"].get("stdout", "")
@@ -1597,6 +1892,8 @@ def wpr_capability(output: Path, expected_head: str, scheduling: bool = False) -
                 status = int(
                     before != after
                     or bool(manifest.get("scheduling", {}).get("gaps"))
+                    or bool(manifest.get("best_effort", {}).get("report", {}).get("gaps"))
+                    or bool(manifest.get("comparison", {}).get("gaps"))
                     or any(
                         result.get("returncode") != 0
                         for name, result in commands.items()

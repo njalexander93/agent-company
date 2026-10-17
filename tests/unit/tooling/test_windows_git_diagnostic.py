@@ -1197,7 +1197,15 @@ def scheduling_xml(path: Path, fault: str = "none") -> dict:
     for guid, opcode, stamp, payload in events:
         event = diagnostic.ET.SubElement(root, "Event")
         system = diagnostic.ET.SubElement(event, "System")
-        diagnostic.ET.SubElement(system, "Provider", Guid="{" + guid + "}")
+        diagnostic.ET.SubElement(system, "Provider", Guid="{9e814aad-3204-11d2-9a82-006008a86939}")
+        extended = diagnostic.ET.SubElement(
+            event, "{http://schemas.microsoft.com/win/2004/08/events/trace}ExtendedTracingInfo"
+        )
+        diagnostic.ET.SubElement(
+            extended, "{http://schemas.microsoft.com/win/2004/08/events/trace}EventGuid"
+        ).text = "{" + guid + "}"
+        diagnostic.ET.SubElement(system, "EventID").text = "0"
+        diagnostic.ET.SubElement(system, "Task").text = "0"
         diagnostic.ET.SubElement(system, "Version").text = "99" if fault == "unknown" else "2"
         diagnostic.ET.SubElement(system, "Opcode").text = str(opcode)
         diagnostic.ET.SubElement(
@@ -1385,6 +1393,10 @@ def test_private_export_bounds_and_reaps_owned_process(
         "late-malformed",
         "unknown",
         "export",
+        "normal-export",
+        "lr-export",
+        "lr-malformed",
+        "lr-different",
         "config",
         "keywords",
         "keywords-replaced",
@@ -1420,7 +1432,8 @@ def test_scheduling_roundtrip_publishes_only_sanitized_metadata(
         "end_wall_ns": 9000000000,
         "returncode": int(fault == "query"),
     }
-    monkeypatch.setattr(diagnostic, "scheduling_query", lambda repository: query)
+    observed_query = mock.Mock(return_value=query)
+    monkeypatch.setattr(diagnostic, "scheduling_query", observed_query)
     collectors = (
         "WPR recording is in progress\nDropped event : 0\nLogging mode : Memory\n"
         "Collector Name : owned\nBuffer Size (KB) : 1024\nNumber of Buffers : 64\n"
@@ -1463,6 +1476,8 @@ def test_scheduling_roundtrip_publishes_only_sanitized_metadata(
             Path(arguments[2]).write_bytes(b"PRIVATE_ETL")
         return result
 
+    export_calls = []
+
     def export(arguments: list[str], scratch: Path) -> dict:
         """Create private XML containing values that published artifacts must redact.
 
@@ -1473,8 +1488,17 @@ def test_scheduling_roundtrip_publishes_only_sanitized_metadata(
         Returns:
             Explicit native export status.
         """
+        export_calls.append(arguments)
         path = Path(arguments[arguments.index("-o") + 1])
         scheduling_xml(path, fault)
+        if "-lr" in arguments and fault == "lr-malformed":
+            path.write_text("<Events>SECRET_LR_XML")
+        if "-lr" in arguments and fault == "lr-different":
+            tree = diagnostic.ET.parse(path)
+            diagnostic.ET.SubElement(
+                tree.getroot()[0].find("EventData"), "Data", Name="ExtraField"
+            ).text = "SECRET_LR_PAYLOAD"
+            tree.write(path)
         if fault == "malformed":
             path.write_text("<Events>SECRET_MALFORMED_XML")
         if fault == "enum":
@@ -1483,7 +1507,12 @@ def test_scheduling_roundtrip_publishes_only_sanitized_metadata(
             tree.write(path)
         if fault == "late-malformed":
             path.write_bytes(path.read_bytes().replace(b"</Events>", b"<Event>SECRET_LATE_XML"))
-        return {"returncode": int(fault == "export")}
+        failed = (
+            fault == "export"
+            or (fault == "normal-export" and "-lr" not in arguments)
+            or (fault == "lr-export" and "-lr" in arguments)
+        )
+        return {"returncode": int(failed)}
 
     monkeypatch.setattr(diagnostic, "capability_command", command)
     monkeypatch.setattr(diagnostic, "bounded_export", export)
@@ -1495,6 +1524,16 @@ def test_scheduling_roundtrip_publishes_only_sanitized_metadata(
     report = json.loads(raw)
     assert report["mode"] == "wpr-scheduling" and report["raw_scratch_removed"]
     assert len(list(output.iterdir())) == 2
+    observed_query.assert_called_once()
+    if fault != "raw-limit":
+        assert len(export_calls) == 2 and "-lr" not in export_calls[0] and "-lr" in export_calls[1]
+        assert export_calls[0][1] == export_calls[1][1]
+        assert report["best_effort"]["etl_sha256"] == report["etl"]["sha256"]
+        assert report["export_provenance"]["mode"] == "normal"
+        if fault == "normal-export":
+            assert report["scheduling"]["gaps"] and not report["best_effort"]["report"]["gaps"]
+        if fault == "lr-export":
+            assert report["best_effort"]["report"]["gaps"] and not report["scheduling"]["gaps"]
     if fault in {"numeric", "enum", "time", "late-malformed"}:
         evidence = report["scheduling"]
         assert evidence["schemas"] and evidence["decode_errors"]
@@ -1507,7 +1546,7 @@ def test_scheduling_roundtrip_publishes_only_sanitized_metadata(
         }
         if fault == "late-malformed":
             assert any(
-                schema["provider"] == diagnostic.PROCESS_GUID for schema in evidence["schemas"]
+                schema["class_guid"] == diagnostic.PROCESS_GUID for schema in evidence["schemas"]
             )
     manifest = json.loads((output / "manifest.json").read_text())
     assert manifest["artifacts"]["capability.json"] == hashlib.sha256(raw.encode()).hexdigest()
@@ -1569,7 +1608,9 @@ def test_scheduling_payload_and_lifetime_bounds(
         query["reader_tids"] = [12]
     if fault == "newer":
         for event in root:
-            guid = event.find("System/Provider").get("Guid").strip("{}")
+            guid = event.find(
+                "{http://schemas.microsoft.com/win/2004/08/events/trace}ExtendedTracingInfo/{http://schemas.microsoft.com/win/2004/08/events/trace}EventGuid"
+            ).text.strip("{}")
             op = int(event.find("System/Opcode").text)
             if guid == diagnostic.PROCESS_GUID or op == 36:
                 event.find("System/Version").text = "4"
@@ -1584,7 +1625,6 @@ def test_scheduling_payload_and_lifetime_bounds(
     path.write_bytes(diagnostic.ET.tostring(root))
     # Reject hard bounds, retain gaps for missing mappings, and support verified prefix versions.
     if fault in {
-        "fields",
         "process-limit",
         "thread-limit",
         "many-threads",
@@ -1599,6 +1639,9 @@ def test_scheduling_payload_and_lifetime_bounds(
             assert result["gaps"]
         if fault == "newer":
             assert not result["gaps"]
+        if fault == "fields":
+            assert result["decode_errors"][0]["code"] == "field-limit"
+            assert result["schemas"][0]["field_count"] > 64
         if fault == "range":
             assert result["decode_errors"][0]["code"] == "numeric-range"
             assert "event-decode" in result["gaps"]
@@ -1672,3 +1715,161 @@ def test_invalid_calendar_timestamp_retains_fixed_error(tmp_path: Path) -> None:
     assert report["decode_errors"][0]["field"] == "SystemTime"
     assert "1970-99-99" not in json.dumps(report)
     assert "event-decode" in report["gaps"]
+
+
+@pytest.mark.parametrize("identity", ["class", "missing", "invalid", "namespace", "duplicate"])
+def test_class_identity_comes_only_from_extended_guid(tmp_path: Path, identity: str) -> None:
+    """Separate SystemTrace provider identity from the explicit classic event class.
+
+    Args:
+        tmp_path: Private realistic tracerpt XML destination.
+        identity: Selected valid, absent, invalid or ambiguous class source.
+    """
+    # Keep plausible payload/opcode/Task data even when the class identity is unavailable.
+    path = tmp_path / "raw.xml"
+    query = scheduling_xml(path)
+    tree = diagnostic.ET.parse(path)
+    namespace = "{http://schemas.microsoft.com/win/2004/08/events/trace}"
+    for event in tree.getroot():
+        extended = event.find(namespace + "ExtendedTracingInfo")
+        if identity == "missing":
+            event.remove(extended)
+        elif identity == "invalid":
+            extended[0].text = "SECRET_BAD_GUID"
+        elif identity == "namespace":
+            extended.tag = "ExtendedTracingInfo"
+        elif identity == "duplicate":
+            extended.append(diagnostic.ET.fromstring(diagnostic.ET.tostring(extended[0])))
+    tree.write(path)
+    # No opcode, payload resemblance or System provider fallback can manufacture a class.
+    report = diagnostic.decode_scheduling(path, query)
+    assert "SECRET" not in json.dumps(report)
+    assert all(
+        schema["provider"] == "9e814aad-3204-11d2-9a82-006008a86939" for schema in report["schemas"]
+    )
+    if identity == "class":
+        assert not report["gaps"] and report["counts"]["process"] == 2
+        assert all(schema["EventID"] == schema["Task"] == 0 for schema in report["schemas"])
+    else:
+        assert report["gaps"] and not report["events"]
+        assert all(schema["class_guid"] == "unknown" for schema in report["schemas"])
+
+
+@pytest.mark.parametrize(
+    "payload,shape,length",
+    [
+        ("", "empty", 0),
+        ("de ad be ef", "hex", 4),
+        ("YWJjZA==", "base64", 4),
+        ("SECRET_NON_BINARY!", "other", None),
+    ],
+)
+def test_structural_inventory_has_no_payload_values(
+    payload: str, shape: str, length: int | None
+) -> None:
+    """Retain encoding shapes and possible lengths without exposing bytes or display values.
+
+    Args:
+        payload: Private binary-shaped text, never retained.
+        shape: Expected lexical encoding shape.
+        length: Length implied by that lexical shape, without binary decoding.
+    """
+    # Generate more names/binary elements than the metadata bounds and arbitrary display text.
+    event = diagnostic.ET.Element("Event")
+    display = diagnostic.ET.SubElement(event, "RenderingInfo")
+    diagnostic.ET.SubElement(display, "PrivateDisplay").text = "SECRET_RENDERING"
+    userdata = diagnostic.ET.SubElement(event, "UserData")
+    diagnostic.ET.SubElement(
+        userdata, "private-invalid-name", {"private-invalid-attribute": "SECRET"}
+    )
+    node = userdata
+    for index in range(40):
+        node = diagnostic.ET.SubElement(
+            node, f"Node{index}", {f"Attribute{index}": "SECRET_ATTRIBUTE"}
+        )
+    for _ in range(10):
+        diagnostic.ET.SubElement(node, "Binary").text = payload
+    # Shape/name counts remain useful while every data/attribute/display value stays private.
+    result = diagnostic.event_structure(event)
+    assert result["containers"] == ["UserData"]
+    assert len(result["elements"]) == len(result["attributes"]) == 32
+    assert result["max_depth"] == 42 and result["name_overflow_observations"] > 0
+    assert result["binary_present"] and len(result["binary"]) == 8 and result["binary_omitted"] == 2
+    assert result["binary"][0]["encoding_shape"] == shape
+    assert result["binary"][0]["decoded_bytes"] == length
+    assert "SECRET" not in json.dumps(result)
+    assert "RenderingInfo" not in json.dumps(result)
+    assert diagnostic.event_structure(display)["containers"] == ["absent"]
+
+
+def test_schema_inventory_prioritizes_classes_and_counts_overflow(tmp_path: Path) -> None:
+    """Preserve target class groups and account for every omitted unknown schema event.
+
+    Args:
+        tmp_path: Private export with deliberately crowded schema inventory.
+    """
+    # Prepend many distinct unrelated classes before the target lifecycle/scheduling events.
+    path = tmp_path / "raw.xml"
+    query = scheduling_xml(path)
+    root = diagnostic.ET.parse(path).getroot()
+    namespace = "{http://schemas.microsoft.com/win/2004/08/events/trace}"
+    prototype = diagnostic.ET.tostring(root[0])
+    for index in range(20):
+        node = diagnostic.ET.fromstring(prototype)
+        node.find(
+            namespace + "ExtendedTracingInfo/" + namespace + "EventGuid"
+        ).text = f"{{00000000-0000-0000-0000-{index:012d}}}"
+        root.insert(0, node)
+    path.write_bytes(diagnostic.ET.tostring(root))
+    # Retained group counts plus overflow always equal the total observations.
+    report = diagnostic.decode_scheduling(path, query)
+    assert len(report["schemas"]) == 16 and report["schema_priority_evictions"] > 0
+    assert sum(report["schema_counts"]) + report["schema_overflow_events"] == len(root)
+    assert report["unknown_events"] == 20 and not report["gaps"]
+    assert any(schema["class_guid"] == diagnostic.PROCESS_GUID for schema in report["schemas"])
+
+
+@pytest.mark.parametrize("fault", ["none", "field", "key", "bound", "missing"])
+def test_paired_export_comparison_is_bounded_and_not_a_decoder_proof(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str
+) -> None:
+    """Compare only explicit class/time/occurrence keys and payload-field availability.
+
+    Args:
+        tmp_path: Separate private XML export destinations from one synthetic ETL.
+        monkeypatch: Scoped small key limit.
+        fault: Selected difference or missing comparison identity.
+    """
+    # Create independent exports with a controlled key/schema difference.
+    normal, best = tmp_path / "normal.xml", tmp_path / "lr.xml"
+    scheduling_xml(normal)
+    scheduling_xml(best)
+    tree = diagnostic.ET.parse(best)
+    if fault == "field":
+        diagnostic.ET.SubElement(
+            tree.getroot()[0].find("EventData"), "Data", Name="Extra"
+        ).text = "SECRET_BEST_EFFORT"
+    elif fault == "key":
+        tree.getroot()[0].find("System/TimeCreated").set(
+            "SystemTime", "1970-01-01T00:00:00.1234568Z"
+        )
+    elif fault == "missing":
+        tree.getroot()[0].find("System/TimeCreated").set("SystemTime", "SECRET_TIMESTAMP")
+    if fault == "bound":
+        monkeypatch.setattr(diagnostic, "SANITIZED_LIMIT", 1)
+    tree.write(best)
+    # Differences are metadata only; never promote -lr output to normal schema evidence.
+    result = diagnostic.compare_exports(normal, best)
+    assert result["provenance"] == "normal-versus-best-effort-not-proof"
+    assert "SECRET" not in json.dumps(result)
+    assert result["normal_keys"] <= diagnostic.SANITIZED_LIMIT
+    if fault == "field":
+        assert result["field_differences"] == 1 and len(result["examples"]) == 1
+    elif fault == "key":
+        assert result["normal_only"] == result["best_effort_only"] == 1
+    elif fault == "bound":
+        assert result["overflow_events"][0] > 0
+    elif fault == "missing":
+        assert result["missing_key_events"][1] == 1
+    else:
+        assert not result["gaps"] and result["matched"] == 14
