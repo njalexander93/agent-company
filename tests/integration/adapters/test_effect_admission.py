@@ -909,23 +909,59 @@ def test_claude_shared_linear_contract_has_no_task_state(
 
 
 @pytest.mark.parametrize(
-    "operation", ["get_pr_info", "fetch_pr", "fetch_pr_patch", "get_pr_diff", "fetch_pr_comments"]
+    "operation",
+    [
+        "get_pr_info",
+        "fetch_pr",
+        "fetch_pr_patch",
+        "get_pr_diff",
+        "fetch_pr_comments",
+        "list_pull_request_reviews",
+        "list_pull_request_review_threads",
+    ],
 )
-def test_codex_verified_pr_reads_need_no_task(tmp_path: Path, operation: str) -> None:
+@pytest.mark.parametrize("separator", ["_", "__"])
+def test_codex_verified_pr_reads_need_no_task(
+    tmp_path: Path, operation: str, separator: str
+) -> None:
     """Keep exact PR inspection contracts free without exempting repository mutations.
 
     Args:
         tmp_path: Unbound Git checkout.
         operation: Verified GitHub PR read contract.
+        separator: Supported native provider/operation separator.
     """
     # The qualified native tool identity selects a bounded provider contract.
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
-    pre = event("codex", tmp_path, f"mcp__codex_apps__github_{operation}", {"pr_number": 16})
+    pre = event(
+        "codex", tmp_path, f"mcp__codex_apps__github{separator}{operation}", {"pr_number": 16}
+    )
     assert dispatch("codex", pre) == {}
     assert dispatch("codex", {**pre, "hook_event_name": "PostToolUse"}) == {}
     # Another provider with the same operation name does not inherit GitHub authority.
-    foreign = {**pre, "tool_name": f"mcp__codex_apps__foreign_{operation}"}
+    foreign = {**pre, "tool_name": f"mcp__codex_apps__foreign{separator}{operation}"}
     assert denied(dispatch("codex", foreign))
+    assert not (tmp_path / ".task").exists()
+
+
+@pytest.mark.parametrize("operation", ["create_file", "merge_pull_request"])
+@pytest.mark.parametrize("separator", ["_", "__"])
+def test_codex_github_mutations_still_need_task(
+    tmp_path: Path, operation: str, separator: str
+) -> None:
+    """Keep repository mutation contracts gated beside the admitted PR reads.
+
+    Args:
+        tmp_path: Unbound Git checkout.
+        operation: Repository mutation without a task-free provider contract.
+        separator: Supported native provider/operation separator.
+    """
+    # Neither provider spelling may turn a repository mutation into a read.
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    pre = event(
+        "codex", tmp_path, f"mcp__codex_apps__github{separator}{operation}", {"pr_number": 16}
+    )
+    assert denied(dispatch("codex", pre))
     assert not (tmp_path / ".task").exists()
 
 

@@ -1467,6 +1467,8 @@ _GITHUB_READS = {
     "fetch_pr_patch",
     "get_pr_diff",
     "fetch_pr_comments",
+    "list_pull_request_reviews",
+    "list_pull_request_review_threads",
     "fetch_file",
     "fetch_issue",
     "fetch_issue_comments",
