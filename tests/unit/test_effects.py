@@ -563,3 +563,62 @@ def test_recovery_guidance_contract() -> None:
     ):
         assert fragment in message
     assert shell_effect("unknown-command").guidance == message
+
+
+def test_checkout_alias_role_boundary(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Outermost proven checkout aliases preserve internal roles and external protection.
+
+    Args:
+        monkeypatch: Fixture restoring deterministic filesystem alias resolution.
+    """
+    from nplet.adapters.effects import _role_path
+
+    # Model a native filesystem alias without conflating canonical root and lexical cwd.
+    root = ROOT / "canonical"
+    alias = ROOT / "src" / "checkout"
+    inner = alias / "src"
+
+    def resolve_alias(self: Path, strict: bool = False) -> Path:
+        """Resolve both outer checkout and inner back-to-root aliases to one root.
+
+        Args:
+            self: Lexical ancestor under inspection.
+            strict: Native resolution option, unused by this bounded alias snapshot.
+
+        Returns:
+            The checkout identity for known aliases and the original path otherwise.
+        """
+        return root if self in {alias, inner} else self
+
+    monkeypatch.setattr(Path, "resolve", resolve_alias)
+    assert _role_path(alias / "notes" / "plan.md", root, root) == Path("notes/plan.md")
+    assert _role_path(inner / "plan.md", root, root) == Path("src/plan.md")
+    assert _role_path(root / "src" / "plan.md", root, root) == Path("src/plan.md")
+    external = ROOT / "outside" / "src" / "plan.md"
+    assert _role_path(external, root, root) == external
+
+
+def test_alias_resolution_failure_requires_task(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed alias-boundary inspection cannot establish a task-free note.
+
+    Args:
+        monkeypatch: Fixture restoring the simulated native boundary failure.
+    """
+    from nplet.adapters import effects
+
+    # A metadata fault during alias discovery remains unknown before any edit executes.
+    def failed_boundary(candidate: Path, root: Path, resolved_root: Path) -> Path:
+        """Raise the alias inspection error the caller must classify.
+
+        Args:
+            candidate: Native target under inspection.
+            root: Trusted checkout path.
+            resolved_root: Canonical checkout identity.
+
+        Raises:
+            OSError: Simulated ancestor-resolution failure.
+        """
+        raise OSError("alias inspection unavailable")
+
+    monkeypatch.setattr(effects, "_role_path", failed_boundary)
+    assert target_effect("notes/plan.md", ROOT, POLICY) == "unknown"

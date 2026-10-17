@@ -147,3 +147,71 @@ def test_checkout_symlink_boundary_and_escape(tmp_path: Path) -> None:
     assert plan.read_text(encoding="utf-8") == "ordinary prose"
     assert source.read_text(encoding="utf-8") == "source input"
     assert not (notes / "new.md").exists()
+
+
+@pytest.mark.parametrize("ancestor", ["src", "build"])
+@pytest.mark.parametrize("absolute_target", [False, True])
+def test_git_root_with_lexical_checkout_alias(
+    tmp_path: Path, ancestor: str, absolute_target: bool
+) -> None:
+    """Real Git root discovery must preserve note admission from a lexical checkout alias.
+
+    Args:
+        tmp_path: Disposable checkout and alias parent directories.
+        ancestor: Source/build-like lexical ancestor of the native working directory.
+        absolute_target: Whether the native tool provides an absolute aliased target.
+    """
+    # Initialize real Git, then give the native adapter an aliased cwd unlike its trusted root.
+    import subprocess
+
+    from nplet.adapters import common
+    from nplet.lifecycle import task_workspace as core
+
+    real = tmp_path / "real" / "checkout"
+    notes = real / "notes"
+    notes.mkdir(parents=True)
+    (notes / "plan.md").write_text("ordinary note", encoding="utf-8")
+    subprocess.run(["git", "init", "--quiet", str(real)], capture_output=True, check=True)
+    alias_parent = tmp_path / ancestor
+    alias_parent.symlink_to(real.parent, target_is_directory=True)
+    cwd = alias_parent / "checkout"
+    root, _, _ = core.repository(cwd)
+    assert root == real.resolve()
+    assert root != cwd
+    target = str(cwd / "notes" / "plan.md") if absolute_target else "notes/plan.md"
+    event = {
+        "cwd": str(cwd),
+        "session_id": "alias-note-session",
+        "tool_use_id": "alias-note-call",
+        "tool_name": "Write",
+        "tool_input": {"file_path": target, "content": "planning"},
+    }
+    # This is the adapter-shaped admission path, not two identical alias roots in Policy.
+    decision = common.effect_decision(event, "codex")
+    assert decision.effect == "note"
+    assert not decision.requires_task
+    # A nested source alias back to the checkout must not become a nearer root boundary.
+    (real / "src").symlink_to(real, target_is_directory=True)
+    (real / "scripts").symlink_to(notes, target_is_directory=True)
+    for protected_target in (
+        "src/notes/plan.md",
+        "scripts/plan.md",
+        ".codex/plan.md",
+        "notes/AGENTS.md",
+        "docs/runtime/development.md",
+    ):
+        event["tool_input"] = {"file_path": str(cwd / protected_target), "content": "change"}
+        assert common.effect_decision(event, "codex").requires_task
+    # An innocent lexical note alias cannot erase resolved roles in an unrelated source tree.
+    external = tmp_path / "external" / "src"
+    external.mkdir(parents=True)
+    outside_source = external / "plan.md"
+    outside_source.write_text("outside input", encoding="utf-8")
+    (notes / "outside.md").symlink_to(outside_source)
+    for protected_target in (str(cwd / "notes" / "outside.md"), str(outside_source)):
+        event["tool_input"] = {"file_path": protected_target, "content": "change"}
+        assert common.effect_decision(event, "codex").requires_task
+    # Classification never executes either the note edit or protected writes.
+    assert outside_source.read_text(encoding="utf-8") == "outside input"
+    assert (notes / "plan.md").read_text(encoding="utf-8") == "ordinary note"
+    assert not (real / ".task").exists()

@@ -160,6 +160,37 @@ def _decision(effect: Effect, code: str) -> Decision:
     return Decision(effect, code, guidance() if effect in {"unknown", "protected"} else "")
 
 
+def _role_path(candidate: Path, root: Path, resolved_root: Path) -> Path:
+    """Retain lexical roles below a known or independently resolved checkout alias.
+
+    Args:
+        candidate: Absolute lexical or resolved target whose role is being inspected.
+        root: Corresponding trusted checkout root, possibly already canonicalized by Git.
+        resolved_root: Canonical checkout identity used to verify an alternate lexical prefix.
+
+    Returns:
+        A checkout-relative path when containment or an ancestor alias is established;
+        otherwise the full external path. The outermost matching alias wins so an
+        internal source symlink back to the checkout cannot erase its source role.
+
+    Raises:
+        OSError: An ancestor cannot be resolved for filesystem inspection.
+        RuntimeError: A symlink loop prevents ancestor resolution on an older interpreter.
+        ValueError: A filesystem path cannot be interpreted during resolution.
+    """
+    # Prefer known lexical containment so internal symlinks cannot redefine the boundary.
+    try:
+        return candidate.relative_to(root)
+    except ValueError:
+        pass
+    # Git may canonicalize root while cwd retains an alias. Prove the outermost prefix,
+    # rather than removing untrusted external roles or selecting a nearer internal alias.
+    for ancestor in reversed(candidate.parents):
+        if ancestor.resolve() == resolved_root:
+            return candidate.relative_to(ancestor)
+    return candidate
+
+
 def target_effect(target: object, cwd: Path, policy: Policy) -> Effect:
     """Classify both lexical and resolved destinations, retaining symlink aliases.
 
@@ -205,9 +236,9 @@ def target_effect(target: object, cwd: Path, policy: Policy) -> Effect:
     # retain full external roles; dot-control ancestors and instruction names stay global.
     for candidate, root in zip(candidates, roots, strict=True):
         try:
-            role_path = candidate.relative_to(root)
-        except ValueError:
-            role_path = candidate
+            role_path = _role_path(candidate, root, roots[1])
+        except (OSError, RuntimeError, ValueError):
+            return "unknown"
         parts = {part.casefold() for part in role_path.parts}
         control_parts = {part.casefold() for part in candidate.parts if part.startswith(".")}
         name = candidate.name.casefold()
