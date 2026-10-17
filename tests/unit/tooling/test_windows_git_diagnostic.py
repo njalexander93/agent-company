@@ -1240,7 +1240,12 @@ def test_scheduling_cli_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
         "duplicate",
         "empty",
         "bad-order",
-        "row-in-header",
+        "unknown-secret",
+        "punctuation",
+        "no-known",
+        "control",
+        "non-ascii",
+        "padded-name",
         "csv",
         "line",
         "records",
@@ -1286,8 +1291,24 @@ def test_xperf_header_boundaries_counts_and_privacy(
         content = "BeginHeader\nEndHeader\n"
     elif fault == "bad-order":
         content += "EndHeader\n"
-    elif fault == "row-in-header":
-        content = "BeginHeader\nCSwitch,123,SECRET_PROCESS\nEndHeader\n"
+    elif fault == "unknown-secret":
+        content = (
+            "BeginHeader\nSECRET_EVENT,SECRET_PROCESS,SECRET_COMMAND\n"
+            "CSwitch,TimeStamp,\nEndHeader\nCSwitch,123,SECRET_CONTENT\n"
+        )
+    elif fault == "punctuation":
+        content = (
+            "BeginHeader\nCSwitch, TimeStamp (us):,New TID [#],,% CPU; \n"
+            "EndHeader\nCSwitch,1,SECRET_CONTENT\n"
+        )
+    elif fault == "no-known":
+        content = "BeginHeader\nSECRET_EVENT,PRIVATE_VALUE\nEndHeader\n"
+    elif fault == "control":
+        content = "BeginHeader\nCSwitch,\tTimeStamp\t\nEndHeader\n"
+    elif fault == "non-ascii":
+        content = "BeginHeader\nCSwitch,Timeµs\nEndHeader\n"
+    elif fault == "padded-name":
+        content = "BeginHeader\nCSwitch," + " " * 100 + "Label\nEndHeader\n"
     elif fault == "csv":
         content = 'BeginHeader\nCSwitch,"SECRET_UNCLOSED\n'
     elif fault == "line":
@@ -1310,14 +1331,36 @@ def test_xperf_header_boundaries_counts_and_privacy(
     # Only marker-delimited schemas and literal event counters enter published metadata.
     report = diagnostic.xperf_schema(path)
     assert "SECRET" not in json.dumps(report)
-    assert bool(report["errors"]) == (fault not in {"none", "utf16"})
+    assert bool(report["errors"]) == (
+        fault not in {"none", "utf16", "malformed-secret", "unknown-secret", "punctuation"}
+    )
     assert len(report["headers"]) <= diagnostic.HEADER_LIMIT
     if fault in {"none", "utf16"}:
         assert report["header_sections"] == 1 and len(report["headers"]) == 2
         assert report["event_counts"]["CSwitch"] == report["event_counts"]["ReadyThread"] == 1
         assert report["unknown_rows"] == 1
-    if fault in {"incomplete-secret", "malformed-secret"}:
+    if fault in {"incomplete-secret", "no-known", "control", "non-ascii", "padded-name"}:
         assert not report["headers"] and report["header_sections"] == 0
+    if fault == "malformed-secret":
+        assert report["headers"] == [["CSwitch", "TimeStamp"]]
+        assert report["unknown_header_rows"] == 1
+    if fault == "unknown-secret":
+        assert report["headers"] == [["CSwitch", "TimeStamp", ""]]
+        assert report["unknown_header_rows"] == 1
+    if fault == "punctuation":
+        assert report["headers"][0] == ["CSwitch", "TimeStamp (us):", "New TID [#]", "", "% CPU;"]
+    if fault == "control":
+        assert report["rejection"] == {
+            "row": 2,
+            "column": 2,
+            "length": 11,
+            "control_count": 2,
+            "non_ascii_count": 0,
+        }
+    if fault == "non-ascii":
+        assert report["rejection"]["non_ascii_count"] == 1
+    if fault == "padded-name":
+        assert report["rejection"]["length"] == 105
     if fault == "data-error":
         assert report["headers"] and report["header_sections"] == 1
     if fault == "missing":
@@ -1484,6 +1527,7 @@ def test_xperf_roundtrip_preserves_private_exports_and_cleanup(
         assert exports[0][-2:] == ["-a", "dumper"]
         assert exports[1][-3:] == ["-a", "cswitch", "-thread"]
         assert report["schema_only"]
+        assert ["xperf.exe", "-help", "format"] in calls
         assert report["xperf_exports"]["dumper"]["etl_sha256"] == report["etl"]["sha256"]
         assert report["xperf_exports"]["cswitch"]["etl_sha256"] == report["etl"]["sha256"]
     else:

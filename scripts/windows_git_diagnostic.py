@@ -1114,8 +1114,11 @@ def xperf_schema(path: Path) -> dict[str, Any]:
         "errors": [],
         "header_sections": 0,
         "unknown_rows": 0,
+        "unknown_header_rows": 0,
         "purpose": "Schema discovery only; not scheduling evidence",
     }
+    records = 0
+    rejection = {"row": 0, "column": 0, "length": 0, "control_count": 0, "non_ascii_count": 0}
     try:
         if path.stat().st_size > EXPORT_LIMIT_BYTES:
             raise ValueError("export-size-limit")
@@ -1126,51 +1129,72 @@ def xperf_schema(path: Path) -> dict[str, Any]:
         inside = False
         finished = False
         seen = False
-        records = 0
         pending_headers: list[list[str]] = []
         with path.open(encoding=encoding, newline="") as stream:
             while line := stream.readline(CSV_LINE_LIMIT + 1):
+                records += 1
+                rejection.update(
+                    row=records,
+                    column=0,
+                    length=len(line),
+                    control_count=sum(ord(char) < 32 or ord(char) == 127 for char in line),
+                    non_ascii_count=sum(ord(char) > 127 for char in line),
+                )
                 if len(line) > CSV_LINE_LIMIT:
                     raise ValueError("csv-line-limit")
-                records += 1
                 if records > CSV_RECORD_LIMIT:
                     raise ValueError("csv-record-limit")
                 try:
                     row = next(csv.reader([line], strict=True))
                 except csv.Error:
                     raise ValueError("csv-record-format") from None
-                if not row or not any(field.strip() for field in row):
+                if not row or not any(field.strip(" ") for field in row):
                     continue
-                row = [field.strip() for field in row]
-                if row == ["BeginHeader"]:
+                event_type = row[0].strip(" ")
+                if len(row) == 1 and event_type == "BeginHeader":
                     if inside or seen:
                         raise ValueError("header-marker-order")
                     inside, seen = True, True
                     continue
                 if not seen:
                     raise ValueError("header-marker-missing")
-                if row == ["EndHeader"]:
-                    if not inside or not pending_headers:
+                if len(row) == 1 and event_type == "EndHeader":
+                    if not inside:
                         raise ValueError("header-marker-order")
+                    if not pending_headers:
+                        raise ValueError("known-header-missing")
                     # Publish schema strings only after the entire bounded section is complete.
                     report["headers"] = pending_headers
                     report["header_sections"] += 1
                     inside, finished = False, True
                     continue
                 if inside:
-                    # Header names require identifiers, not numeric data or arbitrary report text.
+                    # Unknown event rows contribute counts only, never tentative header strings.
+                    if event_type not in XPERF_EVENT_TYPES:
+                        report["unknown_rows"] += 1
+                        report["unknown_header_rows"] += 1
+                        continue
                     if len(pending_headers) >= HEADER_LIMIT:
                         raise ValueError("header-count-limit")
                     if not 2 <= len(row) <= HEADER_FIELD_LIMIT:
                         raise ValueError("header-field-limit")
-                    if any(len(name) > HEADER_NAME_LIMIT for name in row):
-                        raise ValueError("header-name-limit")
-                    if any(not re.fullmatch(r"[A-Za-z][A-Za-z0-9 _()/.-]*", name) for name in row):
-                        raise ValueError("header-name-format")
-                    pending_headers.append(row)
+                    # Validate raw labels before trimming ASCII spaces; retain numeric locations.
+                    for column, label in enumerate(row, 1):
+                        controls = sum(ord(char) < 32 or ord(char) == 127 for char in label)
+                        non_ascii = sum(ord(char) > 127 for char in label)
+                        rejection.update(
+                            column=column,
+                            length=len(label),
+                            control_count=controls,
+                            non_ascii_count=non_ascii,
+                        )
+                        if controls or non_ascii:
+                            raise ValueError("header-label-format")
+                        if len(label) > HEADER_NAME_LIMIT:
+                            raise ValueError("header-name-limit")
+                    pending_headers.append([label.strip(" ") for label in row])
                 else:
                     # Count only the first literal event type; discard every other row value.
-                    event_type = row[0]
                     if event_type in XPERF_EVENT_TYPES:
                         report["event_counts"][event_type] += 1
                     else:
@@ -1184,6 +1208,8 @@ def xperf_schema(path: Path) -> dict[str, Any]:
         report["errors"].append(str(error))
     except OSError:
         report["errors"].append("csv-read-failed")
+    if report["errors"]:
+        report["rejection"] = rejection
     return report
 
 
@@ -1274,6 +1300,9 @@ def wpr_capability(output: Path, expected_head: str, scheduling: bool = False) -
                     )
                     commands["xperf_help_cswitch"] = capability_command(
                         [xperf, "-help", "cswitch"], 15
+                    )
+                    commands["xperf_help_format"] = capability_command(
+                        [xperf, "-help", "format"], 15
                     )
                 # Query only executable versions and token elevation.
                 quoted_wpr = wpr.replace("'", "''")
